@@ -24,6 +24,7 @@ Thumbs.db
 .env
 *.local
 application-local.yml
+test_key.txt
 
 # ===== 日志 =====
 *.log

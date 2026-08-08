@@ -9,8 +9,18 @@ spring:
         options:
           model: deepseek-chat
           temperature: 0.7
-    # 备用模型切换（代码零改动，改这里即可）：
-    #   通义千问: base-url=https://dashscope.aliyuncs.com/compatible-mode/v1, model=qwen-plus, api-key 换成 QWEN_API_KEY
+    # ═══ 多模型切换（只改配置，不动代码）═══
+    # DeepSeek 与通义千问都兼容 OpenAI 协议：换模型 = 换 base-url + model + api-key
+    #
+    # 切到通义千问时，把上方 openai 块的 api-key/base-url/chat 整块替换为：
+    #   api-key: ${QWEN_API_KEY:}
+    #   base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    #   chat:
+    #     options:
+    #       model: qwen-plus
+    #       temperature: 0.7
+    #
+    # 说明：第 7 周前端"模型选择器"(W7-5) 上线后，升级为运行时双模型 Bean 方案
 
 server:
   port: 8080
