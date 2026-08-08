@@ -1,6 +1,6 @@
 spring:
   application:
-    name: office-agent
+    name: vatica
   ai:
     openai:
       api-key: ${DEEPSEEK_API_KEY:}

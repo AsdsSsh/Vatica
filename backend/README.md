@@ -1,4 +1,4 @@
-# backend — AI 办公 Agent 后端
+# backend — Vatica 后端
 
 **技术栈**：Spring Boot 4.1 + Spring AI 2.0 + MCP Java SDK + Java 21
 
@@ -13,7 +13,7 @@
 ## 包结构（按最终架构分层）
 
 ```
-com.example.officeagent
+com.example.vatica
 ├── controller/   REST/SSE 接口（第 1 周：ChatController）
 ├── service/      业务逻辑（后续填充）
 ├── config/       配置（后续填充）

@@ -9,10 +9,10 @@
 		<relativePath/> <!-- lookup parent from repository -->
 	</parent>
 	<groupId>com.example</groupId>
-	<artifactId>office-agent</artifactId>
+	<artifactId>vatica</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
-	<name>office-agent</name>
-	<description>AI Office Agent Platform</description>
+	<name>vatica</name>
+	<description>Vatica - AI Office Agent Platform</description>
 	<url/>
 	<licenses>
 		<license/>

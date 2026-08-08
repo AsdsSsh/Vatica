@@ -1,13 +1,13 @@
-package com.example.officeagent;
+package com.example.vatica;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-public class OfficeAgentApplication {
+public class VaticaApplication {
 
 	public static void main(String[] args) {
-		SpringApplication.run(OfficeAgentApplication.class, args);
+		SpringApplication.run(VaticaApplication.class, args);
 	}
 
 }

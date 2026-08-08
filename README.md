@@ -1,4 +1,4 @@
-# AI 办公 Agent 平台
+# Vatica — AI 办公 Agent 平台
 
 对标腾讯 WorkBuddy / 字节 TRAE Work / 阿里千问办公的 AI 办公执行桌面应用（简历项目）。
 
