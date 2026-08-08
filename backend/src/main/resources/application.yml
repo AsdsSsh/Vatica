@@ -6,9 +6,8 @@ spring:
       api-key: ${DEEPSEEK_API_KEY:}
       base-url: https://api.deepseek.com
       chat:
-        options:
-          model: deepseek-chat
-          temperature: 0.7
+        model: deepseek-chat
+        temperature: 0.7
     # ═══ 多模型切换（只改配置，不动代码）═══
     # DeepSeek 与通义千问都兼容 OpenAI 协议：换模型 = 换 base-url + model + api-key
     #
@@ -16,11 +15,12 @@ spring:
     #   api-key: ${QWEN_API_KEY:}
     #   base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
     #   chat:
-    #     options:
-    #       model: qwen-plus
-    #       temperature: 0.7
+    #     model: qwen-plus
+    #     temperature: 0.7
     #
-    # 说明：第 7 周前端"模型选择器"(W7-5) 上线后，升级为运行时双模型 Bean 方案
+    # 注意：Spring AI 2.0 已弃用 chat.options.* 写法（官方元数据 deprecated 标记），
+    # 直接平铺到 chat.* 层（model / temperature 等）。勿再写 options 嵌套块。
+    # 第 7 周前端"模型选择器"(W7-5) 上线后，升级为运行时双模型 Bean 方案
 
 server:
   port: 8080
