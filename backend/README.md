@@ -14,18 +14,18 @@
 
 ```
 com.example.vatica
-├── controller/   REST/SSE 接口（第 1 周：ChatController）
+├── controller/   REST/SSE 接口（迭代 1：ChatController）
 ├── service/      业务逻辑（后续填充）
 ├── config/       配置（后续填充）
-├── tool/         工具层（第 2 周：文件/文档工具）
-├── agent/        Agent 编排（第 5 周：Planner/多 Agent）
-└── task/         任务状态机（第 5 周：HITL 审批）
+├── tool/         工具层（迭代 2：文件/文档工具）
+├── agent/        Agent 编排（迭代 5：Planner/多 Agent）
+└── task/         任务状态机（迭代 5：HITL 审批）
 ```
 
 ## 里程碑
 
-- 第 1 周：能聊天的后端（SSE 流式）— 进行中
-- 第 2 周：工具调用（ToolCallingAdvisor）
-- 第 3 周：POI 文档生成（Word/Excel）
-- 第 4 周：MCP Server + Client
-- 第 5 周：Planner 拆解 + HITL 审批 + 持久化
+- 迭代 1：能聊天的后端（SSE 流式）— 已完成
+- 迭代 2：工具调用（ToolCallingAdvisor）
+- 迭代 3：POI 文档生成（Word/Excel）
+- 迭代 4：MCP Server + Client
+- 迭代 5：Planner 拆解 + HITL 审批 + 持久化

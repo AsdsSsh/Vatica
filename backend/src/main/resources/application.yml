@@ -6,10 +6,13 @@ spring:
       api-key: ${DEEPSEEK_API_KEY:}
       base-url: https://api.deepseek.com
       chat:
-        model: deepseek-chat
+        model: deepseek-v4-flash
+        # 注意：v4 系列默认开启思考模式，思考模式下 temperature 等采样参数被服务端忽略（不报错）
+        # 关闭思考需传 {"thinking": {"type": "disabled"}}；工具调用时须回传 reasoning_content（见官方思考模式文档）
         temperature: 0.7
     # ═══ 多模型切换（只改配置，不动代码）═══
     # DeepSeek 与通义千问都兼容 OpenAI 协议：换模型 = 换 base-url + model + api-key
+    # 旧别名 deepseek-chat/deepseek-reasoner 已于 2026-07-24 弃用，改用 v4 系列 ID：deepseek-v4-flash / deepseek-v4-pro
     #
     # 切到通义千问时，把上方 openai 块的 api-key/base-url/chat 整块替换为：
     #   api-key: ${QWEN_API_KEY:}
