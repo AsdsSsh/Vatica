@@ -1,0 +1,29 @@
+# ===== Java / Maven (backend) =====
+backend/target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# ===== Node / Tauri (frontend) =====
+frontend/node_modules/
+frontend/dist/
+frontend/src-tauri/target/
+frontend/src-tauri/gen/
+
+# ===== IDE =====
+.idea/
+*.iml
+.vscode/
+*.code-workspace
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== 环境与密钥 =====
+.env
+*.local
+application-local.yml
+
+# ===== 日志 =====
+*.log
