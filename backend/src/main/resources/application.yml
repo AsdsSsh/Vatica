@@ -25,5 +25,19 @@ spring:
     # 直接平铺到 chat.* 层（model / temperature 等）。勿再写 options 嵌套块。
     # 第 7 周前端"模型选择器"(W7-5) 上线后，升级为运行时双模型 Bean 方案
 
+# ===== 工具层配置（迭代 2）=====
+# 文件工具白名单：workspace-dir 为已授权工作目录（相对路径以进程工作目录为基准，mvn spring-boot:run 时即 backend/）
+# 白名单外路径由工具拒绝并返回引导文案；完整"询问-授权"审批流在迭代 5（HITL）接入
+vatica:
+  tool:
+    file:
+      workspace-dir: ./data
+      max-read-size-bytes: 524288   # 512KB，防止大文件烧 token
+
+# 调试工具调用轮次（需要时取消注释，默认关闭）
+# logging:
+#   level:
+#     org.springframework.ai.chat.client.advisor: DEBUG
+
 server:
   port: 8080

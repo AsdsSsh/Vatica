@@ -3,6 +3,7 @@ package com.example.vatica.controller;
 import java.io.IOException;
 
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -21,8 +22,12 @@ public class ChatController {
 
     private final ChatClient chatClient;
 
-    public ChatController(ChatClient.Builder builder) {
-        this.chatClient = builder.build();
+    /**
+     * 迭代 2：defaultTools 把工具定义喂给模型（模型侧定义来自请求选项）；
+     * ToolCallingAdvisor 由 Spring AI 自动配置注册（autoRegisterToolCallingAdvisor），零额外代码。
+     */
+    public ChatController(ChatClient.Builder builder, ToolCallbackProvider vaticaTools) {
+        this.chatClient = builder.defaultTools(vaticaTools).build();
     }
 
     /** 非流式对话 */
