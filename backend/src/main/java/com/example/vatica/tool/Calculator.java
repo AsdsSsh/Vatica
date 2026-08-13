@@ -9,6 +9,16 @@ import java.math.RoundingMode;
  * <p>JDK 21 无内置 JS 引擎（Nashorn 已移除），手写解析器本身也是"有逻辑、可单测、面试可讲"的点。
  * 支持：+ - * / 四则运算、括号、小数、百分号（如 50%*200）、一元负号。
  *
+ * <p>误差边界（迭代 2.5 I2.5-4 评审结论：保留 double + 文档化边界）：
+ * <ul>
+ *   <li>内部用 double 运算（约 15-16 位有效数字），结果四舍五入保留 10 位小数；
+ *       0.1+0.2 这类浮点尾巴由格式化消除，适用于办公统计量级（金额/百分比/计数）</li>
+ *   <li>金融高精度 / 超大数科学计算不在支持范围，应换 BigDecimal 全链路或专用库</li>
+ *   <li>{@link #MAX_LENGTH} 200 字符上限使纯字面量四则运算最大约 1e198，无法溢出 double；
+ *       格式化的 NaN/Infinity 检查是防御性兜底</li>
+ *   <li>不支持科学计数法（e/E 按非法内容报错，绝不静默截断）；百分号为"字面量 ÷100"语义</li>
+ * </ul>
+ *
  * <p>错误约定：非法表达式/除零抛 {@link IllegalArgumentException}，message 回传模型继续循环。
  */
 public final class Calculator {

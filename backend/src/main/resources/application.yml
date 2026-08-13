@@ -30,9 +30,22 @@ spring:
 # 白名单外路径由工具拒绝并返回引导文案；完整"询问-授权"审批流在迭代 5（HITL）接入
 vatica:
   tool:
+    # 迭代 2.5：单次请求工具调用次数上限（ToolCallLimitProvider 护栏），防模型死循环烧 token
+    max-calls-per-request: 20
     file:
       workspace-dir: ./data
       max-read-size-bytes: 524288   # 512KB，防止大文件烧 token
+
+# ===== 对话层配置（迭代 2.5）=====
+# SSE 超时保护：上游挂起/客户端假死时主动收尾，避免连接无限期挂起（默认 5 分钟）
+# 会话短期记忆（内存版）：单会话消息数滑动窗口 + 会话总数 LRU 淘汰；持久化留迭代 5
+  chat:
+    sse:
+      timeout: 5m
+    memory:
+      max-messages: 20
+      max-sessions: 64
+      max-chars: 16000     # 单会话历史字符数上限（token 的工程近似）
 
 # 调试工具调用轮次（需要时取消注释，默认关闭）
 # logging:

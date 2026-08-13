@@ -7,7 +7,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * 工具层装配：显式注册 {@link ToolCallbackProvider} Bean。
+ * 工具层装配：显式注册 {@link ToolCallbackProvider} Bean（迭代 2.5 加工具调用次数护栏）。
  *
  * <p>两层机制（面试可讲）：
  * <ol>
@@ -19,7 +19,7 @@ import org.springframework.context.annotation.Configuration;
  * 两者缺一不可：defaultTools 喂定义，Bean 收集留兜底。
  */
 @Configuration
-@EnableConfigurationProperties(FileToolProperties.class)
+@EnableConfigurationProperties({FileToolProperties.class, ToolProperties.class})
 public class ToolConfig {
 
     @Bean
@@ -34,7 +34,10 @@ public class ToolConfig {
 
     /** 把 @Tool 注解方法自动生成为 ToolCallback（任务清单 I2-2 的"ToolCallback Bean 显式注册"）。 */
     @Bean
-    ToolCallbackProvider vaticaTools(FileTools fileTools, TextTools textTools) {
-        return MethodToolCallbackProvider.builder().toolObjects(fileTools, textTools).build();
+    ToolCallbackProvider vaticaTools(FileTools fileTools, TextTools textTools, ToolProperties props) {
+        ToolCallbackProvider provider = MethodToolCallbackProvider.builder()
+                .toolObjects(fileTools, textTools)
+                .build();
+        return new ToolCallLimitProvider(provider, props.maxCallsPerRequest());
     }
 }

@@ -72,4 +72,57 @@ class CalculatorTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("上限");
     }
+
+    // ===== 迭代 2.5 精度加固（I2.5-4）补充边界用例 =====
+
+    /** 长小数：1/3 四舍五入保留 10 位小数 */
+    @Test
+    void longDecimal_roundsToTenPlaces() {
+        assertThat(Calculator.calculate("1/3")).isEqualTo("0.3333333333");
+        assertThat(Calculator.calculate("2/3")).isEqualTo("0.6666666667");
+    }
+
+    /** 畸形小数（多个小数点）报"数字格式错误"而非静默截断 */
+    @Test
+    void malformedDecimals_rejected() {
+        assertThatThrownBy(() -> Calculator.calculate("1.2.3"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("数字格式错误");
+        assertThatThrownBy(() -> Calculator.calculate("2..5"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("数字格式错误");
+    }
+
+    /** 科学计数法不支持：明确报错（而非把 1e5 静默算成 1），误差边界见 Calculator 类注释 */
+    @Test
+    void scientificNotation_rejectedExplicitly() {
+        assertThatThrownBy(() -> Calculator.calculate("1e5"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("无法解析");
+    }
+
+    /** 相邻两个数字（缺少运算符）被拒绝 */
+    @Test
+    void adjacentNumbers_rejected() {
+        assertThatThrownBy(() -> Calculator.calculate("3 4"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("无法解析");
+    }
+
+    /** 连续一元负号：--5 等于 5 */
+    @Test
+    void doubleUnaryMinus() {
+        assertThat(Calculator.calculate("--5")).isEqualTo("5");
+        assertThat(Calculator.calculate("- -3")).isEqualTo("3");
+    }
+
+    /** 极限长度合法表达式仍返回有限结果：200 字符上限使字面量/四则运算无法溢出 double，
+     *  format() 的 Infinity 检查是防御性兜底（见 Calculator 类注释的误差边界说明） */
+    @Test
+    void maxLengthProductStaysFinite() {
+        String big = "9".repeat(99); // 99 位整数
+        String result = Calculator.calculate(big + "*" + big);
+        assertThat(result).doesNotContain("E").doesNotContain("Infinity");
+        assertThat(result).hasSize(198); // 99+99 位乘积
+    }
 }
