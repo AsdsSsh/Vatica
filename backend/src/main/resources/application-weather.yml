@@ -1,0 +1,19 @@
+# ═══ 第三方模拟天气 MCP 服务（迭代 4，独立进程 8081）═══
+# 启动：mvn spring-boot:run -Dspring-boot.run.main-class=com.example.vatica.weather.WeatherMcpApplication -Dspring-boot.run.profiles=weather
+server:
+  port: 8081
+
+spring:
+  application:
+    name: vatica-weather-mcp
+  ai:
+    mcp:
+      # 天气服务是纯 MCP Server：禁用客户端（不继承主 yml 的 weather 连接，避免自连失败）
+      client:
+        enabled: false
+      server:
+        name: vatica-weather-service
+        version: 1.0.0
+        # 显式声明 STREAMABLE（同主应用，缺省会退回 SSE、/mcp 返回 404）
+        protocol: STREAMABLE
+        instructions: 第三方模拟天气服务：提供指定城市当天天气与 1-7 日预报。数据为确定性模拟值（演示用，非真实天气）。

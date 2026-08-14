@@ -98,6 +98,37 @@ curl -N -X POST localhost:8080/api/chat/stream -H "Content-Type: application/jso
   ```
 - 邮件发送是副作用操作：模型必须先征得你确认，确认后才会发（完整审批流在迭代 5 HITL）
 
+### 迭代 4：MCP 协议能力（Server + Client）
+
+Vatica 同时是 MCP Server 与 MCP Client：
+
+- **Server**：16 个本地工具零改动经 Streamable HTTP 暴露在 `POST /mcp`（加 starter 自动转换 ToolCallback，任何 MCP 客户端可接入）
+- **Client**：接入第三方 MCP 服务（演示为独立进程的模拟天气服务，端口 8081）
+
+双进程启动（**先天气服务、后主应用**）：
+
+```powershell
+# 终端 1：第三方模拟天气 MCP 服务（8081，与主应用同代码、profile 隔离）
+cd backend
+mvn spring-boot:run -Pweather -Dspring-boot.run.profiles=weather
+
+# 终端 2：主应用（8080，启动时经 MCP 客户端与天气服务握手）
+$env:DEEPSEEK_API_KEY = ((Get-Content ..\test_key.txt -Raw) -replace '(?s)^deepseek:\s*','' -replace '\s','')
+mvn spring-boot:run
+```
+
+验证（Agent 经 MCP 调用远程工具）：
+
+```bash
+curl -N -X POST localhost:8080/api/chat/stream -H "Content-Type: application/json" \
+  --data-binary @payload.json    # {"message":"杭州今天天气怎么样？未来3天呢？"}
+```
+
+- 天气数据为确定性模拟值（协议互操作真实、外部依赖为零），工具结果标注数据来源，模型如实转述
+- 接真实第三方 MCP 服务 = 改 yml 一个 url（`spring.ai.mcp.client.streamable-http.connections.*`）
+- 注意：`spring.ai.mcp.server.protocol: STREAMABLE` 必须显式声明（缺失退回 SSE、/mcp 返回 404）；
+  主应用启动依赖天气服务在线，暂不演示时注释掉 yml 里 connections.weather 块
+
 ### 迭代 2.5 新增配置（application.yml，均可调）
 
 | 配置 | 默认 | 说明 |

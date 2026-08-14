@@ -57,6 +57,18 @@
 			<artifactId>spring-ai-starter-model-openai</artifactId>
 		</dependency>
 
+		<!-- 迭代 4：MCP 协议能力。
+		     server-webmvc：以 Streamable HTTP 把本地工具暴露为 MCP Server（WebMVC 栈）；
+		     client：连接第三方 MCP Server，其远程工具与本地工具混合供 Agent 调用 -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-mcp-client</artifactId>
+		</dependency>
+
 		<!-- 迭代 3：Apache POI 文档生成（Word 周报 + Excel 统计）。
 		     poi-ooxml 含 poi 核心；POI 5.5 默认绑定精简版 poi-ooxml-lite（仅含 POI 自身用到的 schema 子集），
 		     本项目需直接操作 CT 层（设置中文字体 eastAsia），故排除 lite、改用完整 ooxml-schemas；
@@ -101,8 +113,32 @@
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
+				<configuration>
+					<!-- 迭代 4：存在两个主类（VaticaApplication / 天气 MCP 服务），默认 run 主应用；
+					     天气服务用 mvn spring-boot:run -Pweather 启动（见下方 profile，
+					     -Dspring-boot.run.main-class 实测被本配置覆盖，故用 profile 切换） -->
+					<mainClass>com.example.vatica.VaticaApplication</mainClass>
+				</configuration>
 			</plugin>
 		</plugins>
 	</build>
+
+	<!-- 迭代 4：weather profile 把 spring-boot:run 的主类切换为天气 MCP 服务 -->
+	<profiles>
+		<profile>
+			<id>weather</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.springframework.boot</groupId>
+						<artifactId>spring-boot-maven-plugin</artifactId>
+						<configuration>
+							<mainClass>com.example.vatica.weather.WeatherMcpApplication</mainClass>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
 
 </project>

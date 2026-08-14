@@ -10,7 +10,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
 import org.springframework.ai.tool.ToolCallbackProvider;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -47,8 +49,15 @@ public class ChatController {
     private final Set<SseEmitter> activeEmitters = ConcurrentHashMap.newKeySet();
 
     public ChatController(ChatClient.Builder builder, ToolCallbackProvider vaticaTools,
+            ObjectProvider<SyncMcpToolCallbackProvider> mcpToolProvider,
             ChatProperties chatProperties, SessionMemory sessionMemory) {
-        this.chatClient = builder.defaultTools(vaticaTools).build();
+        // 迭代 4：MCP 远程工具与本地工具合并进 defaultTools（模型侧可见）。
+        // 两层机制不变：defaultTools 喂模型定义，Bean 收集的执行期 resolver 兜底——
+        // MCP 客户端工具由 SyncMcpToolCallbackProvider（自动配置 Bean）提供。
+        SyncMcpToolCallbackProvider mcpTools = mcpToolProvider.getIfAvailable();
+        this.chatClient = mcpTools == null
+                ? builder.defaultTools(vaticaTools).build()
+                : builder.defaultTools(vaticaTools, mcpTools).build();
         this.chatProperties = chatProperties;
         this.sessionMemory = sessionMemory;
     }

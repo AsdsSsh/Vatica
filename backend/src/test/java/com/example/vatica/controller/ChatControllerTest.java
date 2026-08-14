@@ -28,7 +28,9 @@ import org.mockito.quality.Strictness;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
 import org.springframework.ai.tool.ToolCallbackProvider;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -60,6 +62,8 @@ class ChatControllerTest {
     ChatClient.CallResponseSpec callSpec;
     @Mock
     ToolCallbackProvider tools;
+    @Mock
+    ObjectProvider<SyncMcpToolCallbackProvider> mcpToolProvider;
 
     @BeforeEach
     void stubCommonChain() {
@@ -77,7 +81,8 @@ class ChatControllerTest {
     }
 
     private ChatController newController(ChatProperties props, SessionMemory memory) {
-        return new ChatController(builder, tools, props, memory);
+        // MCP 工具 Provider 不存在（未启用 MCP 客户端）→ 只注册本地工具
+        return new ChatController(builder, tools, mcpToolProvider, props, memory);
     }
 
     private MockMvc mockMvcFor(ChatController controller) {
