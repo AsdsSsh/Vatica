@@ -129,6 +129,36 @@ curl -N -X POST localhost:8080/api/chat/stream -H "Content-Type: application/jso
 - 注意：`spring.ai.mcp.server.protocol: STREAMABLE` 必须显式声明（缺失退回 SSE、/mcp 返回 404）；
   主应用启动依赖天气服务在线，暂不演示时注释掉 yml 里 connections.weather 块
 
+### 迭代 5：核心闭环（任务拆解 + 人工审批 + 状态机 + MySQL 持久化）
+
+一句话创建任务 → Planner 拆解 → **人工审批计划** → 逐步执行 → 敏感步骤（发邮件/覆盖文件）**审批点挂起** → 批准后继续 → 交付。全链路状态落 MySQL：
+
+```bash
+# 1. 创建任务（返回任务 id + 拆解计划，状态 PENDING 待审批）
+curl -X POST localhost:8080/api/task -H "Content-Type: application/json" -d "{\"goal\":\"读取 data/本周工作记录.md 生成周报 Word，并发送邮件通知张总\"}"
+
+# 2. 审批计划并开始执行（同步推进到下一个审批点或终态）
+curl -X POST localhost:8080/api/task/<任务id>/approve
+
+# 3. 若命中敏感步骤审批点（status=PENDING_APPROVAL），再次 approve 继续
+# 4. 查询进度 / 最近任务列表
+curl localhost:8080/api/task/<任务id>
+curl localhost:8080/api/task
+```
+
+- 状态机：PENDING → RUNNING → PENDING_APPROVAL → REVIEW → DONE / FAILED（RETRY/NEEDS_REVISION 为 5.5 质量闭环预留）
+- **MySQL 配置**（迭代 5 起后端启动依赖 MySQL）：
+  ```powershell
+  # 建库建用户（mysql -u root -p 里执行）：
+  #   CREATE DATABASE vatica CHARACTER SET utf8mb4;
+  #   CREATE USER 'vatica'@'localhost' IDENTIFIED BY '<密码>';
+  #   GRANT ALL PRIVILEGES ON vatica.* TO 'vatica'@'localhost';
+  setx MYSQL_USERNAME vatica
+  setx MYSQL_PASSWORD <密码>    # 设置后重开终端
+  ```
+  表结构由 JPA 自动创建（ddl-auto: update）；测试环境用 H2（MySQL 兼容模式），单测零外部依赖
+- 会话记忆已持久化：多轮对话重启后仍可引用前文（内存滑窗热缓存 + MySQL 落库）
+
 ### 迭代 2.5 新增配置（application.yml，均可调）
 
 | 配置 | 默认 | 说明 |

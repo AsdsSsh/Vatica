@@ -28,9 +28,6 @@ import org.mockito.quality.Strictness;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
-import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
-import org.springframework.ai.tool.ToolCallbackProvider;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -51,8 +48,6 @@ import reactor.core.publisher.Flux;
 class ChatControllerTest {
 
     @Mock
-    ChatClient.Builder builder;
-    @Mock
     ChatClient chatClient;
     @Mock
     ChatClient.ChatClientRequestSpec spec;
@@ -60,15 +55,9 @@ class ChatControllerTest {
     ChatClient.StreamResponseSpec streamSpec;
     @Mock
     ChatClient.CallResponseSpec callSpec;
-    @Mock
-    ToolCallbackProvider tools;
-    @Mock
-    ObjectProvider<SyncMcpToolCallbackProvider> mcpToolProvider;
 
     @BeforeEach
     void stubCommonChain() {
-        when(builder.defaultTools(any(ToolCallbackProvider.class))).thenReturn(builder);
-        when(builder.build()).thenReturn(chatClient);
         when(chatClient.prompt()).thenReturn(spec);
         when(spec.messages(anyList())).thenReturn(spec);
         when(spec.user(anyString())).thenReturn(spec);
@@ -81,8 +70,8 @@ class ChatControllerTest {
     }
 
     private ChatController newController(ChatProperties props, SessionMemory memory) {
-        // MCP 工具 Provider 不存在（未启用 MCP 客户端）→ 只注册本地工具
-        return new ChatController(builder, tools, mcpToolProvider, props, memory);
+        // 迭代 5：控制器直接注入 ChatClient（工具合并在 ChatConfig 完成）+ 会话记忆接口
+        return new ChatController(chatClient, props, memory);
     }
 
     private MockMvc mockMvcFor(ChatController controller) {
@@ -99,7 +88,7 @@ class ChatControllerTest {
     void streamDeliversChunksAndCleansUp() throws Exception {
         when(spec.stream()).thenReturn(streamSpec);
         when(streamSpec.content()).thenReturn(Flux.just("你", "好", "！"));
-        SessionMemory memory = new SessionMemory(20, 64, 16000);
+        SessionMemory memory = new InMemorySessionMemory(20, 64, 16000);
         ChatController controller = newController(defaultProps(), memory);
         MockMvc mockMvc = mockMvcFor(controller);
 
@@ -133,7 +122,7 @@ class ChatControllerTest {
         when(streamSpec.content()).thenReturn(
                 Flux.<String>error(new RuntimeException("上游 API 超时"))
                         .delaySubscription(Duration.ofMillis(100)));
-        ChatController controller = newController(defaultProps(), new SessionMemory(20, 64, 16000));
+        ChatController controller = newController(defaultProps(), new InMemorySessionMemory(20, 64, 16000));
         MockMvc mockMvc = mockMvcFor(controller);
 
         MvcResult result = mockMvc.perform(post("/api/chat/stream")
@@ -158,7 +147,7 @@ class ChatControllerTest {
         ChatProperties props = new ChatProperties(
                 new ChatProperties.Sse(Duration.ofSeconds(30)),
                 new ChatProperties.Memory(20, 64, 16000));
-        ChatController controller = newController(props, new SessionMemory(20, 64, 16000));
+        ChatController controller = newController(props, new InMemorySessionMemory(20, 64, 16000));
 
         SseEmitter emitter = controller.stream(new ChatRequest("你好", null));
 
@@ -171,7 +160,7 @@ class ChatControllerTest {
     void chatAppendsAndReplaysHistory() throws Exception {
         when(callSpec.content()).thenReturn("好的，已记录");
         when(spec.call()).thenReturn(callSpec);
-        SessionMemory memory = new SessionMemory(20, 64, 16000);
+        SessionMemory memory = new InMemorySessionMemory(20, 64, 16000);
         ChatController controller = newController(defaultProps(), memory);
         MockMvc mockMvc = mockMvcFor(controller);
 

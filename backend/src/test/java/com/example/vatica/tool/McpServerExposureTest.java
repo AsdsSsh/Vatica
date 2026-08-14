@@ -16,7 +16,13 @@ import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
  * 断言本地 16 个工具全部注册进 MCP Server 的 SyncToolSpecification 列表
  * （即经 Streamable HTTP /mcp 暴露给任何 MCP 客户端）。
  */
-@SpringBootTest(properties = "spring.ai.mcp.client.enabled=false")
+@SpringBootTest(properties = {
+        "spring.ai.mcp.client.enabled=false",
+        "spring.datasource.url=jdbc:h2:mem:vatica;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
+        "spring.datasource.driver-class-name=org.h2.Driver",
+        "spring.datasource.username=sa",
+        "spring.datasource.password=",
+        "spring.jpa.hibernate.ddl-auto=create-drop" })
 class McpServerExposureTest {
 
     @Autowired

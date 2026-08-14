@@ -10,9 +10,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
-import org.springframework.ai.tool.ToolCallbackProvider;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -48,16 +45,11 @@ public class ChatController {
     /** 活跃流式连接注册表：可观测 + 断连清理（迭代 5 任务终止/迭代 7 前端联调可复用）。 */
     private final Set<SseEmitter> activeEmitters = ConcurrentHashMap.newKeySet();
 
-    public ChatController(ChatClient.Builder builder, ToolCallbackProvider vaticaTools,
-            ObjectProvider<SyncMcpToolCallbackProvider> mcpToolProvider,
+    public ChatController(@org.springframework.beans.factory.annotation.Qualifier("vaticaChatClient") ChatClient chatClient,
             ChatProperties chatProperties, SessionMemory sessionMemory) {
-        // 迭代 4：MCP 远程工具与本地工具合并进 defaultTools（模型侧可见）。
-        // 两层机制不变：defaultTools 喂模型定义，Bean 收集的执行期 resolver 兜底——
-        // MCP 客户端工具由 SyncMcpToolCallbackProvider（自动配置 Bean）提供。
-        SyncMcpToolCallbackProvider mcpTools = mcpToolProvider.getIfAvailable();
-        this.chatClient = mcpTools == null
-                ? builder.defaultTools(vaticaTools).build()
-                : builder.defaultTools(vaticaTools, mcpTools).build();
+        // 迭代 4：MCP 远程工具与本地工具的合并已上移到 ChatConfig（vaticaChatClient Bean）；
+        // 迭代 5：会话记忆注入接口（内存实现用于单测，JPA 实现用于生产）
+        this.chatClient = chatClient;
         this.chatProperties = chatProperties;
         this.sessionMemory = sessionMemory;
     }

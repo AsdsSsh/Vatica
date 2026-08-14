@@ -6,6 +6,14 @@ server:
 spring:
   application:
     name: vatica-weather-mcp
+  # 迭代 5：天气服务是纯 MCP 工具进程，不需要数据库——排除 JDBC/JPA 自动配置
+  # （否则会继承主 yml 的 MySQL 数据源并在启动时要求数据库凭据）
+  # 注意：Boot 4.1 已改包名（jdbc/hibernate/data.jpa 分包），与 Boot 3 的旧类名不同
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+      - org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration
   ai:
     mcp:
       # 天气服务是纯 MCP Server：禁用客户端（不继承主 yml 的 weather 连接，避免自连失败）
