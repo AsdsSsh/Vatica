@@ -56,6 +56,31 @@
 			<groupId>org.springframework.ai</groupId>
 			<artifactId>spring-ai-starter-model-openai</artifactId>
 		</dependency>
+
+		<!-- 迭代 3：Apache POI 文档生成（Word 周报 + Excel 统计）。
+		     poi-ooxml 含 poi 核心；POI 5.5 默认绑定精简版 poi-ooxml-lite（仅含 POI 自身用到的 schema 子集），
+		     本项目需直接操作 CT 层（设置中文字体 eastAsia），故排除 lite、改用完整 ooxml-schemas；
+		     POI 5.x 走 Log4j2 API 记日志，log4j-to-slf4j（版本由 Boot 管理）把日志桥接到 SLF4J，避免 stderr 噪音 -->
+		<dependency>
+			<groupId>org.apache.poi</groupId>
+			<artifactId>poi-ooxml</artifactId>
+			<version>5.5.1</version>
+			<exclusions>
+				<exclusion>
+					<groupId>org.apache.poi</groupId>
+					<artifactId>poi-ooxml-lite</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.poi</groupId>
+			<artifactId>poi-ooxml-full</artifactId>
+			<version>5.5.1</version>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.logging.log4j</groupId>
+			<artifactId>log4j-to-slf4j</artifactId>
+		</dependency>
 	</dependencies>
 
 	<build>

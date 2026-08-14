@@ -55,6 +55,21 @@
   {"message": "我叫什么名字？", "sessionId": "s1"}
   ```
 
+### 迭代 3：一句话生成文档（演示场景）
+
+Agent 共 7 个工具：`read_file` / `write_file` / `list_files` / `calculator` / `text_stats` / `create_word_report` / `create_excel_stats`。
+一条 prompt 走全链路"列目录 → 读文件 → 生成 Word 周报 + Excel 统计"：
+
+```bash
+curl -N -X POST localhost:8080/api/chat/stream \
+  -H "Content-Type: application/json" \
+  --data-binary @payload.json    # {"message":"读取 data/本周工作记录.md，生成一份周报 Word 和一张统计 Excel"}
+```
+
+- Word 内容约定（`create_word_report` 的 sections 参数）：`# ` 开头=一级标题、`## ` 开头=二级标题、其余行=正文段落
+- Excel 数字规则（`create_excel_stats`）：仅严格数字（无前导零/无科学计数法）写为数值单元格，其余一律文本——"001"编号不会变 1
+- 产物落盘在 `backend/data/`（文件工具白名单目录，文档工具复用同一安全边界）
+
 ### 迭代 2.5 新增配置（application.yml，均可调）
 
 | 配置 | 默认 | 说明 |

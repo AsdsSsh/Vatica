@@ -32,11 +32,18 @@ public class ToolConfig {
         return new TextTools();
     }
 
+    /** 迭代 3：文档生成工具（POI），落盘目录复用文件工具白名单。 */
+    @Bean
+    DocumentTools documentTools(FileToolProperties props) {
+        return new DocumentTools(props);
+    }
+
     /** 把 @Tool 注解方法自动生成为 ToolCallback（任务清单 I2-2 的"ToolCallback Bean 显式注册"）。 */
     @Bean
-    ToolCallbackProvider vaticaTools(FileTools fileTools, TextTools textTools, ToolProperties props) {
+    ToolCallbackProvider vaticaTools(FileTools fileTools, TextTools textTools, DocumentTools documentTools,
+            ToolProperties props) {
         ToolCallbackProvider provider = MethodToolCallbackProvider.builder()
-                .toolObjects(fileTools, textTools)
+                .toolObjects(fileTools, textTools, documentTools)
                 .build();
         return new ToolCallLimitProvider(provider, props.maxCallsPerRequest());
     }
