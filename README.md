@@ -70,6 +70,34 @@ curl -N -X POST localhost:8080/api/chat/stream \
 - Excel 数字规则（`create_excel_stats`）：仅严格数字（无前导零/无科学计数法）写为数值单元格，其余一律文本——"001"编号不会变 1
 - 产物落盘在 `backend/data/`（文件工具白名单目录，文档工具复用同一安全边界）
 
+### 迭代 3.5：PIM 私人数据（日历 / 待办 / 邮件）
+
+Agent 现有 **16 个工具**，新增 PIM 三件套：
+
+| 工具 | 功能 | 存储/说明 |
+|---|---|---|
+| `calendar_query` / `calendar_create` / `calendar_import` | 查日程（重复自动展开）/ 建日程 / 导入 ICS | 手写 RFC5545 子集，本地 `data/calendar.ics` |
+| `todo_add` / `todo_list` / `todo_complete` / `todo_remind` | 待办增查改 + 到期提醒 | 本地 `data/todos.json`（运行时数据，已 gitignore） |
+| `mail_query` / `mail_send` | IMAP 收件箱查询/搜索 + SMTP 发送 | 环境变量配置；发送需用户确认（confirm="yes"） |
+
+主演示场景（一句话）：
+
+```bash
+# payload：{"message":"今天是2026-08-14。先用 calendar_query 整理下周（2026-08-17 至 2026-08-21）日程，为每条日程创建准备材料的待办，最后用 todo_list 列出。"}
+curl -N -X POST localhost:8080/api/chat/stream -H "Content-Type: application/json" --data-binary @payload.json
+```
+
+- 数据约束：涉及具体时间/日期的内容模型必须从工具返回值引用（幻觉控制约定，写在工具描述里）
+- `data/calendar.ics` 已内置下周 4 条演示日程（含每周重复的"项目周会"）
+- **邮件配置**（可选，不配也能用其他工具）：
+  ```powershell
+  setx MAIL_IMAP_HOST imap.qq.com
+  setx MAIL_SMTP_HOST smtp.qq.com
+  setx MAIL_USERNAME 你的邮箱
+  setx MAIL_PASSWORD 你的授权码     # 设置后重开终端再启动
+  ```
+- 邮件发送是副作用操作：模型必须先征得你确认，确认后才会发（完整审批流在迭代 5 HITL）
+
 ### 迭代 2.5 新增配置（application.yml，均可调）
 
 | 配置 | 默认 | 说明 |

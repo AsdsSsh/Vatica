@@ -31,3 +31,6 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# 迭代 3.5：data/todos.json 为运行时用户待办数据，不纳入版本控制
+data/todos.json

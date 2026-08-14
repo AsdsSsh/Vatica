@@ -35,6 +35,20 @@ vatica:
     file:
       workspace-dir: ./data
       max-read-size-bytes: 524288   # 512KB，防止大文件烧 token
+  # ===== 邮件配置（迭代 3.5，环境变量注入，仿 DEEPSEEK_API_KEY 模式）=====
+  # 未配置时 mail_query / mail_send 返回"未配置"指引，不影响其他工具
+  # 示例（QQ 邮箱，授权码在邮箱设置中生成）：
+  #   setx MAIL_IMAP_HOST imap.qq.com
+  #   setx MAIL_SMTP_HOST smtp.qq.com
+  #   setx MAIL_USERNAME yourname@qq.com
+  #   setx MAIL_PASSWORD 你的授权码
+  mail:
+    imap-host: ${MAIL_IMAP_HOST:}
+    imap-port: ${MAIL_IMAP_PORT:993}    # 993=IMAP SSL；其他端口按明文处理（GreenMail 测试用）
+    smtp-host: ${MAIL_SMTP_HOST:}
+    smtp-port: ${MAIL_SMTP_PORT:465}    # 465=SMTP SSL；587=STARTTLS；其他端口按明文处理
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
 
 # ===== 对话层配置（迭代 2.5）=====
 # SSE 超时保护：上游挂起/客户端假死时主动收尾，避免连接无限期挂起（默认 5 分钟）
