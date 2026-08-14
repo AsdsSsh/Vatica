@@ -147,14 +147,13 @@ curl localhost:8080/api/task
 ```
 
 - 状态机：PENDING → RUNNING → PENDING_APPROVAL → REVIEW → DONE / FAILED（RETRY/NEEDS_REVISION 为 5.5 质量闭环预留）
-- **MySQL 配置**（迭代 5 起后端启动依赖 MySQL）：
+- **MySQL 配置**（迭代 5 起后端启动依赖 MySQL，凭据走环境变量、不进 git）：
   ```powershell
-  # 建库建用户（mysql -u root -p 里执行）：
-  #   CREATE DATABASE vatica CHARACTER SET utf8mb4;
-  #   CREATE USER 'vatica'@'localhost' IDENTIFIED BY '<密码>';
-  #   GRANT ALL PRIVILEGES ON vatica.* TO 'vatica'@'localhost';
+  # 本机 MySQL（默认）：建库建用户后设置
   setx MYSQL_USERNAME vatica
-  setx MYSQL_PASSWORD <密码>    # 设置后重开终端
+  setx MYSQL_PASSWORD <密码>
+  # 云 MySQL（演示环境）：额外设置主机，重启终端后生效
+  setx MYSQL_HOST REDACTED_DB_HOST
   ```
   表结构由 JPA 自动创建（ddl-auto: update）；测试环境用 H2（MySQL 兼容模式），单测零外部依赖
 - 会话记忆已持久化：多轮对话重启后仍可引用前文（内存滑窗热缓存 + MySQL 落库）
