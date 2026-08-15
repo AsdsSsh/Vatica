@@ -322,7 +322,8 @@ curl localhost:8080/api/task/不存在   # {"message":"操作失败：任务不�
 - **CORS 放行 PUT**：模型配置保存（`PUT /api/models`）在 Tauri Windows origin / Vite 开发 origin 下预检 200
 - **配置校验归一化**：`models.json` 保存/读取统一归一化（id 小写唯一、协议 lowercase、启用槽位 baseUrl/model/temperature 必填）
 - **数据与契约加固**：PIM 工具首次写入自动建 `data/` 目录；`/api/files` 错误响应统一 `{message}`；流式生成中禁用切换会话防串流
-- 回归：mvn test **230** 全绿（214 → 230）+ npm run build 通过
+- **开发模式环境变量兜底**：`setx` 只写注册表、运行中的终端/IDE 拿不到新值——后端启动时自动从 `HKCU\Environment` 回填缺失的 `MYSQL_*` / `*_API_KEY` 等变量（与打包版启动器同策略），避免 `Access denied ... using password: NO` 启动失败
+- 回归：mvn test **233** 全绿（214 → 230 迭代修复 + 3 热修复解析用例）+ npm run build 通过
 
 ### 迭代 2.5 新增配置（application.yml，均可调）
 
