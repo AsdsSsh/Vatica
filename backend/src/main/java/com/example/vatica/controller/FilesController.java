@@ -6,7 +6,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
@@ -37,21 +36,21 @@ public class FilesController {
 
     /** 工作目录内文件列表（按修改时间倒序，前端产物面板用）。 */
     @GetMapping
-    public List<Map<String, Object>> list() throws IOException {
+    public List<FileArtifactDto> list() throws IOException {
         if (!Files.isDirectory(workspaceDir)) {
             return List.of();
         }
-        List<Map<String, Object>> files = new ArrayList<>();
+        List<FileArtifactDto> files = new ArrayList<>();
         try (var stream = Files.list(workspaceDir)) {
             for (Path p : stream.filter(Files::isRegularFile).toList()) {
-                files.add(Map.of(
-                        "name", p.getFileName().toString(),
-                        "size", Files.size(p),
-                        "modifiedAt", Files.getLastModifiedTime(p).toInstant().toString(),
-                        "absolutePath", p.toString()));
+                files.add(new FileArtifactDto(
+                        p.getFileName().toString(),
+                        Files.size(p),
+                        Files.getLastModifiedTime(p).toInstant().toString(),
+                        p.toString()));
             }
         }
-        files.sort(Comparator.comparing((Map<String, Object> f) -> (String) f.get("modifiedAt")).reversed());
+        files.sort(Comparator.comparing(FileArtifactDto::modifiedAt).reversed());
         return files;
     }
 

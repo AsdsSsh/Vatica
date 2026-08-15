@@ -79,6 +79,8 @@ public class TaskEventPublisher {
         snap.put("id", r.getId());
         snap.put("goal", r.getGoal());
         snap.put("status", r.getStatus().name());
+        // 迭代 9 I9-3：补 createdAt——事件负载与任务详情接口完全同构（前端一个类型两处复用）
+        snap.put("createdAt", r.getCreatedAt() == null ? null : r.getCreatedAt().toString());
         snap.put("currentStep", r.getCurrentStep());
         snap.put("pendingStepId", r.getPendingStepId());
         snap.put("score", r.getScore());

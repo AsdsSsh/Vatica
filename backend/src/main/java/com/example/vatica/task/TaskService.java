@@ -90,7 +90,7 @@ public class TaskService {
     /** 查询单任务。 */
     public TaskRecord get(String id) {
         return repository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("操作失败：任务不存在（id=" + id + "）。"));
+                .orElseThrow(() -> new TaskNotFoundException(id));
     }
 
     /** 最近任务（前端任务列表用）。 */

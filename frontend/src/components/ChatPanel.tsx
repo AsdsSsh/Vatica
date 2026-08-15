@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, Flex, Input, Select, Spin, Tag, Tooltip, Typography } from "antd";
-import { SendOutlined, SettingOutlined, StopOutlined } from "@ant-design/icons";
+import { ApiOutlined, SendOutlined, SettingOutlined, StopOutlined } from "@ant-design/icons";
 import type { ChatMessage, ChatSession } from "../types";
 import { fetchModels, streamChat, type ModelInfo } from "../api";
 import Markdown from "./Markdown";
 import ModelSettings from "./ModelSettings";
+import ServerSettings from "./ServerSettings";
 
 /**
  * 中栏：对话区（迭代 6 I6-4/I6-5；迭代 7 I7-5 模型选择器；
@@ -32,6 +33,7 @@ export default function ChatPanel({
   const [model, setModel] = useState("deepseek");
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -117,6 +119,13 @@ export default function ChatPanel({
               onClick={() => setSettingsOpen(true)}
             />
           </Tooltip>
+          <Tooltip title="服务设置（后端接口地址）">
+            <Button
+              size="small"
+              icon={<ApiOutlined />}
+              onClick={() => setServerSettingsOpen(true)}
+            />
+          </Tooltip>
         </Flex>
       </Flex>
 
@@ -124,6 +133,10 @@ export default function ChatPanel({
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         onSaved={loadModels}
+      />
+      <ServerSettings
+        open={serverSettingsOpen}
+        onClose={() => setServerSettingsOpen(false)}
       />
 
       {/* 消息区 */}

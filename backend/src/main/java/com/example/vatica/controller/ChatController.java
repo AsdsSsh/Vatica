@@ -2,7 +2,6 @@ package com.example.vatica.controller;
 
 import java.io.IOException;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -57,14 +56,11 @@ public class ChatController {
         this.sessionMemory = sessionMemory;
     }
 
-    /** 可用模型清单（迭代 7 模型选择器；迭代 8.5 起来自动态注册表，配置中心保存后即时刷新）。 */
+    /** 可用模型清单（迭代 7 模型选择器；迭代 8.5 起来自动态注册表；迭代 9 类型化 DTO）。 */
     @GetMapping("/models")
-    public List<Map<String, Object>> models() {
+    public List<ModelInfoDto> models() {
         return registry.slots().stream()
-                .map(s -> Map.<String, Object>of(
-                        "id", s.id(),
-                        "name", s.name(),
-                        "configured", s.enabled()))
+                .map(s -> new ModelInfoDto(s.id(), s.name(), s.enabled()))
                 .toList();
     }
 

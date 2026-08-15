@@ -24,11 +24,11 @@ import {
   UndoOutlined,
 } from "@ant-design/icons";
 import {
-  API_BASE,
   createTask,
   fetchFiles,
   fetchRecentTasks,
   fetchTaskDetail,
+  getApiBase,
   subscribeTaskEvents,
   taskAction,
   type Artifact,
@@ -174,7 +174,7 @@ export default function StepPanel() {
       await openPath(f.absolutePath);
     } catch {
       // 浏览器开发模式降级：走后端下载接口
-      window.open(`${API_BASE}/api/files/${encodeURIComponent(f.name)}`, "_blank");
+      window.open(`${getApiBase()}/api/files/${encodeURIComponent(f.name)}`, "_blank");
     }
   }
 

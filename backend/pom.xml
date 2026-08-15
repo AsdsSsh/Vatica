@@ -76,6 +76,15 @@
 			<artifactId>spring-ai-starter-mcp-client</artifactId>
 		</dependency>
 
+		<!-- 迭代 9 I9-2：前后端分离——OpenAPI 契约（springdoc）。
+		     3.1.0 面向 Spring Boot 4（模块化 starter 命名：spring-boot-tomcat / spring-boot-health）；
+		     Swagger UI 开发期可视化契约，/v3/api-docs 为前后端唯一事实来源 -->
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+			<version>3.1.0</version>
+		</dependency>
+
 		<!-- 迭代 5：任务/会话持久化。生产 MySQL；测试用 H2（MySQL 兼容模式）保持单测零外部依赖 -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>

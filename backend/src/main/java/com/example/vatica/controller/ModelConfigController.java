@@ -7,9 +7,6 @@ import com.example.vatica.config.ModelConfigService;
 import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.config.ModelSlot;
 
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -55,28 +52,7 @@ public class ModelConfigController {
             return Map.of("ok", true, "reply", reply);
         }
         catch (Exception e) {
-            return Map.of("ok", false, "error", rootMessage(e));
+            return Map.of("ok", false, "error", ApiErrors.rootMessage(e));
         }
-    }
-
-    private static String rootMessage(Throwable e) {
-        Throwable t = e;
-        while (t.getCause() != null && t.getCause() != t) {
-            t = t.getCause();
-        }
-        String message = t.getMessage();
-        return message == null || message.isBlank() ? t.getClass().getSimpleName() : message;
-    }
-
-    /** 校验失败（IllegalArgumentException）→ 400 + 用户可读消息（界面直接展示）。 */
-    @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<Map<String, String>> handleValidation(IllegalArgumentException e) {
-        return ResponseEntity.badRequest().body(Map.of("error", e.getMessage() == null ? "参数不合法" : e.getMessage()));
-    }
-
-    /** 存储失败等运行时错误 → 500 + 根因消息。 */
-    @ExceptionHandler(IllegalStateException.class)
-    public ResponseEntity<Map<String, String>> handleStorage(IllegalStateException e) {
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("error", rootMessage(e)));
     }
 }

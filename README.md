@@ -21,8 +21,8 @@
 
 | 目录 | 说明 |
 |---|---|
-| `backend/` | Spring Boot 后端（Agent 编排 + 工具层 + MCP） |
-| `frontend/` | Tauri + React 桌面壳 |
+| `backend/` | Spring Boot 后端（Agent 编排 + 工具层 + MCP）——迭代 9 起为**纯 API 服务**（无静态资源，OpenAPI 契约 /v3/api-docs） |
+| `frontend/` | Tauri + React 桌面壳——独立工程，只通过 HTTP API 与后端交互 |
 
 ## 项目文档
 
@@ -66,7 +66,8 @@ npm run dev              # http://localhost:1420
 ```
 
 - 三栏布局：左会话列表 | 中对话区（SSE 流式 Markdown 打字机 + 停止按钮） | 右任务面板（最近任务与状态）
-- CORS 已放行 `tauri://localhost` 与开发端口（1420/5173）；前端 API 基地址写死 `http://localhost:8080`（sidecar 模式）
+- CORS 已放行 `tauri://localhost` 与开发端口（1420/5173）
+- 前后端分离（迭代 9）：前端 API 基地址默认 `http://localhost:8080`（桌面版后端随壳以 sidecar 启动），可在界面"服务设置"（顶栏接口图标）里修改、即时生效——云端后端换地址即切换
 
 ### 迭代 3：一句话生成文档（演示场景）
 
@@ -226,7 +227,7 @@ Planner 声明步骤依赖 → 拓扑分层 → **同层步骤并行执行**（�
 
 ```
 桌面壳 Tauri 2（Rust 壳 + WebView2 跑 React 三栏工作台）
-  │  前端只对 8080 说话：fetch / SSE / REST（CORS 放行 tauri://localhost）
+  │  前端只对 8080 说话：fetch / SSE / REST（CORS 放行 tauri://localhost；迭代 9 起基址可在"服务设置"改）
   │  release 模式：启动时拉起 sidecar、退出时 kill；开发模式不拉起（后端手动启动）
   ▼
 vatica-backend-x86_64-pc-windows-msvc.exe —— Rust 启动器（externalBin sidecar）
@@ -293,6 +294,24 @@ npm run tauri build                # NSIS 安装包 → target/release/bundle/ns
 - **默认模型 = 第一个启用的槽位**：对话、任务执行、规划、评测统一走它；模型选择器可临时切换
 - **测试连接**：用当前编辑内容直接测（不必先保存），失败原因（如 401 密钥无效）直接显示
 - 后端接口：`GET/PUT /api/models`、`POST /api/models/test`；模型清单 `GET /api/chat/models` 改为动态注册表驱动
+
+### 迭代 9：前后端分离（工程彻底解耦）
+
+后端收敛为**纯 API 服务**，前后端只通过 HTTP API 契约交互（桌面壳 Tauri 保留不变）：
+
+- **后端零静态资源**：删除迭代 1 遗留的 `static/index.html` 验证页（使命已由 React 前端承接）；浏览器打开 8080 根路径返回 API 索引 JSON（接口前缀 + 契约入口），不再有任何页面
+- **OpenAPI 契约 = 单一事实来源**：springdoc 3.1.0（面向 Spring Boot 4）——`GET /v3/api-docs` 为机器可读契约，`/swagger-ui.html` 开发期可视化（只收录 `/api/**` 业务接口，`/mcp` 属 MCP 协议端点不纳入）
+- **响应类型化 DTO**：chat / task / files / models 全部接口由 `Map` 投影改为类型化 DTO（`TaskDetailDto` / `TaskSummaryDto` / `ModelInfoDto` / `FileArtifactDto`），schema 完整可读；任务详情与 SSE 事件负载同构（事件 = 详情 + `type`），前端一个类型两处复用
+- **错误契约统一** `{"message": "用户可读原因"}`：400 业务校验 / 404 资源不存在（任务 id 查无、未知路径）/ 500 根因消息（异常链剥到最内层、不泄漏堆栈），全局 `@RestControllerAdvice` 一处收口；前端解析并透出服务端消息
+- **前端基址可配置**：顶栏**接口图标**（服务设置）修改后端地址，保存即时生效（localStorage 覆盖 > `VITE_API_BASE` 构建期变量 > 默认 localhost:8080）——P1-6 云端后端切换零代码
+- **工程边界**：后端 = `mvn spring-boot:run` 纯 API（8080）；前端 = `npm run dev`（Vite 1420）+ `npm run build` 独立构建；打包脚本三件套不变（jar 不再含静态资源）
+
+```bash
+# 契约自查（后端启动后）
+curl localhost:8080/                # API 索引 JSON
+curl localhost:8080/v3/api-docs     # OpenAPI 契约
+curl localhost:8080/api/task/不存在   # {"message":"操作失败：任务不存在（id=不存在）。"} HTTP 404
+```
 
 ### 迭代 2.5 新增配置（application.yml，均可调）
 

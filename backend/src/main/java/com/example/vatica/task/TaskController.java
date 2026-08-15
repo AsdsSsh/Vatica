@@ -37,26 +37,26 @@ public class TaskController {
 
     /** 一句话创建任务：Planner 拆解 → 返回计划（PENDING 待审批）。 */
     @PostMapping
-    public Map<String, Object> create(@RequestBody Map<String, String> body) {
+    public TaskDetailDto create(@RequestBody Map<String, String> body) {
         TaskRecord record = taskService.create(body.getOrDefault("goal", ""));
         return detail(record);
     }
 
     /** 审批（计划或挂起步骤）并同步推进执行。 */
     @PostMapping("/{id}/approve")
-    public Map<String, Object> approve(@PathVariable String id) {
+    public TaskDetailDto approve(@PathVariable String id) {
         return detail(taskService.approve(id));
     }
 
     /** 人工返工（迭代 5.5）：DONE（想重做）或 NEEDS_REVISION（评测不合格）→ 重跑并同步推进。 */
     @PostMapping("/{id}/rework")
-    public Map<String, Object> rework(@PathVariable String id) {
+    public TaskDetailDto rework(@PathVariable String id) {
         return detail(taskService.rework(id));
     }
 
     /** 用户终止（迭代 7 I7-4）：PENDING/RUNNING/PENDING_APPROVAL → CANCELLED。 */
     @PostMapping("/{id}/cancel")
-    public Map<String, Object> cancel(@PathVariable String id) {
+    public TaskDetailDto cancel(@PathVariable String id) {
         return detail(taskService.cancel(id));
     }
 
@@ -68,35 +68,32 @@ public class TaskController {
 
     /** 单任务详情。 */
     @GetMapping("/{id}")
-    public Map<String, Object> get(@PathVariable String id) {
+    public TaskDetailDto get(@PathVariable String id) {
         return detail(taskService.get(id));
     }
 
     /** 最近任务列表。 */
     @GetMapping
-    public List<Map<String, Object>> list() {
+    public List<TaskSummaryDto> list() {
         return taskService.recent(20).stream().map(this::summary).toList();
     }
 
-    private Map<String, Object> summary(TaskRecord r) {
-        return Map.of("id", r.getId(), "goal", r.getGoal(), "status", r.getStatus().name(),
-                "createdAt", r.getCreatedAt().toString());
+    private TaskSummaryDto summary(TaskRecord r) {
+        return new TaskSummaryDto(r.getId(), r.getGoal(), r.getStatus().name(),
+                r.getCreatedAt().toString());
     }
 
-    private Map<String, Object> detail(TaskRecord r) {
-        Map<String, Object> detail = new java.util.HashMap<>(summary(r));
+    /** 详情与 SSE 事件负载同构（事件 = 详情 + type 字段），前端一个类型两处复用。 */
+    private TaskDetailDto detail(TaskRecord r) {
+        Object plan;
         try {
-            detail.put("plan", mapper.readValue(r.getPlanJson(), Object.class));
+            plan = mapper.readValue(r.getPlanJson(), Object.class);
         } catch (Exception e) {
-            detail.put("plan", "（计划数据不可读）");
+            plan = "（计划数据不可读）";
         }
-        // 迭代 5.5：质量闭环字段（前端"执行准确率"展示用）
-        detail.put("score", r.getScore());
-        detail.put("verdict", r.getVerdict() == null ? null : r.getVerdict().name());
-        detail.put("reworkCount", r.getReworkCount());
-        if (r.getError() != null) {
-            detail.put("error", r.getError());
-        }
-        return detail;
+        return new TaskDetailDto(r.getId(), r.getGoal(), r.getStatus().name(),
+                r.getCreatedAt().toString(), r.getCurrentStep(), r.getPendingStepId(),
+                r.getScore(), r.getVerdict() == null ? null : r.getVerdict().name(),
+                r.getReworkCount(), r.getError(), plan);
     }
 }

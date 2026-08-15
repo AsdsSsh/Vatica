@@ -119,5 +119,13 @@ vatica:
 #   level:
 #     org.springframework.ai.chat.client.advisor: DEBUG
 
+# ===== OpenAPI 契约（迭代 9 I9-2，springdoc）=====
+# /v3/api-docs = 前后端契约单一事实来源；/swagger-ui.html = 开发期可视化契约
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
 server:
   port: 8080

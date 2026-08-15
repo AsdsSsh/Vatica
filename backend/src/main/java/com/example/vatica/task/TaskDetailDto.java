@@ -1,0 +1,17 @@
+package com.example.vatica.task;
+
+/**
+ * 任务详情（迭代 9 I9-3 契约显式化）：详情接口与 SSE 事件负载同构——
+ * 事件负载 = 详情 + {@code type} 字段（TaskEventPublisher 快照），前端一个类型两处复用。
+ *
+ * @param plan        任务计划（解析后的 JSON 对象；数据损坏时为提示字符串）
+ * @param currentStep 下一个待执行步骤下标（全部完成/未开始执行时为 -1）
+ * @param pendingStepId 挂起审批的步骤 id（无挂起时为 -1）
+ * @param score       Judge 评分（未评测为 null）
+ * @param verdict     PASS / FAIL（未评测为 null）
+ * @param error       失败/终止/评测不合格原因（正常为 null）
+ */
+public record TaskDetailDto(String id, String goal, String status, String createdAt,
+        int currentStep, int pendingStepId, Integer score, String verdict, int reworkCount,
+        String error, Object plan) {
+}
