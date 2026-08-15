@@ -128,6 +128,58 @@ class ModelConfigServiceTest {
                 .hasMessageContaining("模型 ID");
     }
 
+    /** 迭代 10 I10-4：启用的槽位必须填 Base URL（旧实现只校验 model，会漏掉空端点）。 */
+    @Test
+    void validateRejectsEnabledSlotWithoutBaseUrl() {
+        ModelSlot bad = new ModelSlot("x", "缺端点", ModelSlot.PROTOCOL_OPENAI,
+                "  ", "k", "m", 0.7, true);
+        assertThatThrownBy(() -> service.save(List.of(bad)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Base URL");
+    }
+
+    /** 迭代 10 I10-4：温度越界 / 缺失（启用槽位）都拒绝，与前端 0-2 输入一致。 */
+    @Test
+    void validateRejectsIllegalTemperature() {
+        ModelSlot tooHot = new ModelSlot("x", "过热", ModelSlot.PROTOCOL_OPENAI,
+                "https://example.com", "k", "m", 2.1, true);
+        ModelSlot missing = new ModelSlot("y", "缺温度", ModelSlot.PROTOCOL_OPENAI,
+                "https://example.com", "k", "m", null, true);
+
+        assertThatThrownBy(() -> service.save(List.of(tooHot)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("温度");
+        assertThatThrownBy(() -> service.save(List.of(missing)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("温度");
+    }
+
+    /** 迭代 10 I10-4：保存时归一化——id 转小写、协议转小写、字段 trim，读回即归一化值。 */
+    @Test
+    void saveNormalizesSlotFields() {
+        service.save(List.of(new ModelSlot("  DeepSeek  ", " DeepSeek V4 ", "OPENAI",
+                " https://api.deepseek.com ", " sk-key ", " deepseek-v4-flash ", 0.8, true)));
+
+        List<ModelSlot> slots = service.slots();
+
+        assertThat(slots).hasSize(1);
+        ModelSlot s = slots.get(0);
+        assertThat(s.id()).isEqualTo("deepseek");
+        assertThat(s.name()).isEqualTo("DeepSeek V4");
+        assertThat(s.protocol()).isEqualTo(ModelSlot.PROTOCOL_OPENAI);
+        assertThat(s.baseUrl()).isEqualTo("https://api.deepseek.com");
+        assertThat(s.model()).isEqualTo("deepseek-v4-flash");
+        assertThat(s.temperature()).isEqualTo(0.8);
+    }
+
+    /** 迭代 10 I10-4：id 重复按小写归一化后判定（"DS" 与 "ds" 不能并存）。 */
+    @Test
+    void validateRejectsCaseInsensitiveDuplicateId() {
+        assertThatThrownBy(() -> service.save(List.of(slot("DS", true), slot("ds", false))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("重复");
+    }
+
     /** 校验：不支持的协议拒绝。 */
     @Test
     void validateRejectsUnknownProtocol() {

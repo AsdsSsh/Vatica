@@ -113,10 +113,18 @@ public final class MailTools {
             // 显式 connect 传账号密码：静态 Transport.send 依赖 Session 内嵌 Authenticator，
             // 环境变量场景下走显式认证最直白
             Transport transport = session().getTransport("smtp");
-            transport.connect(props.smtpHost(), props.smtpPort(), props.username(), props.password());
-            transport.sendMessage(message, message.getAllRecipients());
-            transport.close();
-            return "已发送邮件：收件人=" + to.trim() + " 主题=" + subject.trim();
+            try {
+                transport.connect(props.smtpHost(), props.smtpPort(), props.username(), props.password());
+                transport.sendMessage(message, message.getAllRecipients());
+                return "已发送邮件：收件人=" + to.trim() + " 主题=" + subject.trim();
+            } finally {
+                // 迭代 10 I10-9：发送失败也要关闭 transport，避免 SMTP 连接泄漏
+                try {
+                    transport.close();
+                } catch (MessagingException ignored) {
+                    // 收尾阶段关闭失败不覆盖原始发送错误
+                }
+            }
         } catch (MessagingException e) {
             throw new IllegalStateException("操作失败：发送邮件失败。" + e.getMessage(), e);
         }

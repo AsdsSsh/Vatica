@@ -69,24 +69,41 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  // 编辑弹窗打开且 Form 挂载后再回填，避免 useForm 尚未连接 Form 的告警/丢值（迭代 10 I10-1）
+  useEffect(() => {
+    if (!editing) return;
+    form.resetFields();
+    form.setFieldsValue(editing);
+  }, [editing, form]);
+
   function openEditor(slot: ModelSlot | null, index: number | null) {
-    setEditing(slot);
+    // 新增时 slot 为 null：必须写入空槽位模板，编辑弹窗的 open 条件才成立（迭代 10 I10-1）
+    const next = slot ?? blankSlot("openai");
+    setEditing(next);
     setEditingIndex(index);
-    form.setFieldsValue(slot ?? blankSlot("openai"));
+  }
+
+  function closeEditor() {
+    setEditing(null);
+    setEditingIndex(null);
   }
 
   /** 编辑表单提交：写回本地列表（点"保存全部"才落盘）。 */
   function applyEditor() {
-    form.validateFields().then((values) => {
-      const next = { ...editing, ...values } as ModelSlot;
-      if (editingIndex === null) {
-        setSlots((prev) => [...prev, next]);
-      } else {
-        setSlots((prev) => prev.map((s, i) => (i === editingIndex ? next : s)));
-      }
-      setEditing(null);
-      setEditingIndex(null);
-    });
+    form
+      .validateFields()
+      .then((values) => {
+        const next = { ...editing, ...values } as ModelSlot;
+        if (editingIndex === null) {
+          setSlots((prev) => [...prev, next]);
+        } else {
+          setSlots((prev) => prev.map((s, i) => (i === editingIndex ? next : s)));
+        }
+        closeEditor();
+      })
+      .catch(() => {
+        // 校验失败：错误已由 Form 就地展示，不额外打扰
+      });
   }
 
   function removeSlot(index: number) {
@@ -247,10 +264,10 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
       <Modal
         title={editingIndex === null ? "添加模型" : "编辑模型"}
         open={editing !== null}
-        onCancel={() => setEditing(null)}
+        onCancel={closeEditor}
         onOk={applyEditor}
         okText="确定"
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={form} layout="vertical" style={{ marginTop: 12 }}>
           <Flex gap={12}>

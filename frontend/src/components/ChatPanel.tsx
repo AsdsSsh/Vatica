@@ -41,13 +41,16 @@ export default function ChatPanel({
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [session.messages]);
 
-  // 模型清单（迭代 7 I7-5；迭代 8.5 设置保存后刷新）
+  // 模型清单（迭代 7 I7-5；迭代 8.5 设置保存后刷新；迭代 10 I10-8 保存设置不重置已选模型）
   function loadModels() {
     fetchModels()
       .then((list) => {
         setModels(list);
-        const firstConfigured = list.find((m) => m.configured);
-        if (firstConfigured) setModel(firstConfigured.id);
+        setModel((prev) => {
+          if (list.some((m) => m.id === prev && m.configured)) return prev;
+          const firstConfigured = list.find((m) => m.configured);
+          return firstConfigured ? firstConfigured.id : prev;
+        });
       })
       .catch(() => {
         // 后端未启动时保持默认模型，不打扰用户

@@ -192,6 +192,11 @@ public class TaskService {
         record.setError(null);
         repository.save(record);
         executeUntilBlocked(record);
+        // 迭代 10 I10-6：与 approve 同款的取消兜底——执行期间若取消标志已置位，
+        // 用悲观锁当前读刷新到库中已提交状态，避免本事务把 RUNNING/其他中间态覆盖回库
+        if (isCancelled(record.getId())) {
+            entityManager.refresh(record, jakarta.persistence.LockModeType.PESSIMISTIC_READ);
+        }
         return repository.save(record);
     }
 

@@ -66,6 +66,7 @@ function App() {
             <SessionList
               sessions={sessions}
               activeId={active.id}
+              disabled={streaming}
               onSelect={setActiveId}
               onNew={newSession}
             />

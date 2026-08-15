@@ -242,6 +242,18 @@ class CalendarToolsTest {
         assertThat(calendarTools.query("2026-08-17", "2026-08-18")).contains("共 2 条日程");
     }
 
+    /** 迭代 10 I10-5：工作目录（data/）不存在时首次创建自动创建父目录并成功落盘。 */
+    @Test
+    void create_createsMissingDataDirectory() {
+        Path nested = tempDir.resolve("data");
+        CalendarTools fresh = new CalendarTools(new FileToolProperties(nested.toString(), 1024));
+
+        fresh.create("新建目录首条日程", "2026-08-17", "2026-08-17", null);
+
+        assertThat(nested.resolve(CalendarTools.CALENDAR_FILE)).exists();
+        assertThat(fresh.query("2026-08-17", "2026-08-17")).contains("新建目录首条日程");
+    }
+
     private String readCalendarFile() {
         try {
             return Files.readString(tempDir.resolve(CalendarTools.CALENDAR_FILE));

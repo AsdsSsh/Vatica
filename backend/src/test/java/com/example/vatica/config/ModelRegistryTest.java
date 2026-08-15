@@ -81,6 +81,27 @@ class ModelRegistryTest {
         assertThat(byId).isSameAs(byDefault);
     }
 
+    /**
+     * 迭代 10 I10-2 回归：对话客户端（带工具）与规划/评测客户端（无工具）
+     * 必须缓存隔离——旧实现缓存键不含 withTools，先构建者会被另一方复用。
+     * 规划与评测同为无工具客户端，共享同一实例是允许的（职责相同）。
+     */
+    @Test
+    void toolModeIsPartOfCacheKey() {
+        ChatClient chat = registry.defaultClient();
+        ChatClient planner = registry.plannerClient();
+        ChatClient judge = registry.judgeClient();
+
+        assertThat(chat).isNotSameAs(planner);
+        assertThat(chat).isNotSameAs(judge);
+        assertThat(planner).isSameAs(judge);
+
+        // 各自按自己的模式缓存：再次取到的是同一实例
+        assertThat(registry.defaultClient()).isSameAs(chat);
+        assertThat(registry.plannerClient()).isSameAs(planner);
+        assertThat(registry.judgeClient()).isSameAs(judge);
+    }
+
     /** 配置指纹缓存：同配置复用实例；配置变化（温度不同）→ 重建新实例。 */
     @Test
     void cacheRebuildsWhenConfigurationChanges() {

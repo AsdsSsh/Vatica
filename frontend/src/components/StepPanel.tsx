@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  App,
   Badge,
   Button,
   Collapse,
@@ -11,7 +12,6 @@ import {
   Space,
   Tag,
   Typography,
-  message,
 } from "antd";
 import {
   CheckCircleOutlined,
@@ -72,6 +72,7 @@ function scoreColor(score: number | null): string {
  * 审批弹窗、终止按钮、准确率徽标 + 返工、文件产物列表（打开文件）。
  */
 export default function StepPanel() {
+  const { message } = App.useApp();
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<TaskDetail | null>(null);

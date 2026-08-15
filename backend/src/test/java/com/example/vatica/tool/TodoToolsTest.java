@@ -167,6 +167,18 @@ class TodoToolsTest {
                 .hasMessageContaining("损坏");
     }
 
+    /** 迭代 10 I10-5：工作目录（data/）不存在时首次添加自动创建父目录并成功落盘。 */
+    @Test
+    void add_createsMissingDataDirectory() {
+        Path nested = tempDir.resolve("data");
+        TodoTools fresh = new TodoTools(new FileToolProperties(nested.toString(), 1024));
+
+        fresh.add("首个待办", "2026-08-30");
+
+        assertThat(nested.resolve(TodoTools.TODO_FILE)).exists();
+        assertThat(fresh.list()).contains("首个待办");
+    }
+
     private static String extractId(String addResult) {
         String marker = "id=";
         int start = addResult.indexOf(marker) + marker.length();

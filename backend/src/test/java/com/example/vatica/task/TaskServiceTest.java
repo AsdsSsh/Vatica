@@ -11,11 +11,14 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,6 +26,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.util.AopTestUtils;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import com.example.vatica.agent.ExecutorAgent;
 import com.example.vatica.agent.JudgeAgent;
@@ -323,6 +328,36 @@ class TaskServiceTest {
         } finally {
             release.countDown();
             pool.shutdownNow();
+        }
+    }
+
+    /**
+     * 迭代 10 I10-6：返工执行期间取消标志置位时，rework 尾部做 approve 同款的
+     * 悲观锁当前读刷新——不把内存中的 RUNNING 中间态提交回库。
+     * （公开 API 并发路径受 READ_COMMITTED 隔离保护，这里直接置位内部标志锁死防御分支。）
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void reworkHonorsCancellationGuard() {
+        when(plannerAgent.plan("目标")).thenReturn(oneStepPlan());
+        when(judgeAgent.evaluate(anyString(), any()))
+                .thenReturn(new JudgeAgent.Evaluation(30, TaskVerdict.FAIL, "不合格"));
+        TaskRecord created = taskService.create("目标");
+        TaskRecord needsRevision = taskService.approve(created.getId());
+        assertThat(needsRevision.getStatus()).isEqualTo(TaskStatus.NEEDS_REVISION);
+
+        TaskService target = AopTestUtils.getUltimateTargetObject(taskService);
+        Map<String, AtomicBoolean> flags = new ConcurrentHashMap<>();
+        flags.put(created.getId(), new AtomicBoolean(true));
+        ReflectionTestUtils.setField(target, "cancelFlags", flags);
+        try {
+            TaskRecord result = taskService.rework(created.getId());
+
+            assertThat(result.getStatus()).isEqualTo(TaskStatus.NEEDS_REVISION);
+            TaskRecord reloaded = repository.findById(created.getId()).orElseThrow();
+            assertThat(reloaded.getStatus()).isEqualTo(TaskStatus.NEEDS_REVISION);
+        } finally {
+            ReflectionTestUtils.setField(target, "cancelFlags", new ConcurrentHashMap<>());
         }
     }
 

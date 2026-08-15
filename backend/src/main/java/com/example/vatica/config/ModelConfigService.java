@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -59,7 +60,8 @@ public class ModelConfigService {
             if (models == null || models.isEmpty()) {
                 return defaults();   // 空配置视为未配置（保留文件不动，等用户保存修复）
             }
-            return models;
+            // 迭代 10 I10-4：读取路径与保存共用同一套归一化——手工改坏的配置同样回退默认而非带病运行
+            return validate(models);
         }
         catch (Exception e) {
             log.error("模型配置 {} 读取失败，本次回退默认配置：{}", file, e.getMessage());
@@ -82,16 +84,27 @@ public class ModelConfigService {
         return normalized;
     }
 
-    /** 槽位校验：id 唯一/非空、名称非空、协议合法、启用的槽位必须填模型 ID。 */
+    /**
+     * 槽位校验与归一化（迭代 10 I10-4）：id 小写唯一、name/baseUrl/apiKey/model 去首尾空白、
+     * 协议 lowercase；启用的槽位 baseUrl/model/temperature 必须齐全，温度统一限定 0-2
+     * （与前端输入控件一致）。返回归一化后的新列表——旧实现用副本校验却返回原始值，
+     * 大写协议能保存但在 ModelRegistry 运行时 switch 失败。
+     */
     List<ModelSlot> validate(List<ModelSlot> slots) {
         if (slots == null || slots.isEmpty()) {
             throw new IllegalArgumentException("操作失败：至少保留一个模型槽位。");
         }
+        List<ModelSlot> normalized = new ArrayList<>(slots.size());
         Set<String> seen = new LinkedHashSet<>();
         for (ModelSlot s : slots) {
-            String id = s.id() == null ? "" : s.id().trim();
+            String id = s.id() == null ? "" : s.id().trim().toLowerCase(Locale.ROOT);
             String name = s.name() == null ? "" : s.name().trim();
             String protocol = s.protocol() == null ? "" : s.protocol().toLowerCase(Locale.ROOT);
+            String baseUrl = s.baseUrl() == null ? "" : s.baseUrl().trim();
+            String apiKey = s.apiKey() == null ? "" : s.apiKey().trim();
+            String model = s.model() == null ? "" : s.model().trim();
+            Double temperature = s.temperature() == null ? 0.7 : s.temperature();
+
             if (id.isEmpty() || name.isEmpty()) {
                 throw new IllegalArgumentException("操作失败：模型槽位的标识与名称不能为空。");
             }
@@ -102,11 +115,25 @@ public class ModelConfigService {
                 throw new IllegalArgumentException(
                         "操作失败：不支持的协议（" + s.protocol() + "），仅支持 openai / anthropic。");
             }
-            if (s.enabled() && (s.model() == null || s.model().isBlank())) {
-                throw new IllegalArgumentException("操作失败：已启用的模型必须填写模型 ID（" + name + "）。");
+            if (temperature < 0 || temperature > 2) {
+                throw new IllegalArgumentException(
+                        "操作失败：温度必须在 0-2 之间（" + name + "）。");
             }
+            if (s.enabled()) {
+                if (baseUrl.isEmpty()) {
+                    throw new IllegalArgumentException("操作失败：已启用的模型必须填写 Base URL（" + name + "）。");
+                }
+                if (model.isEmpty()) {
+                    throw new IllegalArgumentException("操作失败：已启用的模型必须填写模型 ID（" + name + "）。");
+                }
+                if (s.temperature() == null) {
+                    throw new IllegalArgumentException("操作失败：已启用的模型必须填写温度（" + name + "）。");
+                }
+            }
+            normalized.add(new ModelSlot(id, name, protocol, baseUrl, apiKey, model,
+                    temperature, s.enabled()));
         }
-        return slots;
+        return normalized;
     }
 
     /** 默认槽位（文件配置缺失时）：与迭代 7 的 yml/环境变量行为一致。 */

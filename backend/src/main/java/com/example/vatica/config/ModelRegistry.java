@@ -2,6 +2,7 @@ package com.example.vatica.config;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -106,7 +107,19 @@ public class ModelRegistry {
     }
 
     private ChatClient cached(ModelSlot slot, boolean withTools) {
-        return clients.computeIfAbsent(slot.id() + "|" + slot.fingerprint(), key -> build(slot, withTools));
+        // 迭代 10 I10-2：缓存键必须包含 withTools——对话（带工具）与规划/评测（无工具）
+        // 是同槽位不同职责的客户端，旧键只有 slotId+fingerprint，先构建者会被另一方复用
+        String id = slot.id().toLowerCase(Locale.ROOT);
+        String key = id + "|" + withTools + "|" + slot.fingerprint();
+        ChatClient existing = clients.get(key);
+        if (existing != null) {
+            return existing;
+        }
+        // 迭代 10 I10-9：同槽位同职责配置变更后清理旧指纹缓存，避免长跑缓存无限增长
+        // （前缀带 withTools：只清自己这一列，不能把对话/规划评测的另一列误删）
+        String prefix = id + "|" + withTools + "|";
+        clients.keySet().removeIf(k -> k.startsWith(prefix) && !k.equals(key));
+        return clients.computeIfAbsent(key, k -> build(slot, withTools));
     }
 
     private ChatClient build(ModelSlot slot, boolean withTools) {

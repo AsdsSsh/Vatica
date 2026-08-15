@@ -171,6 +171,11 @@ public final class CalendarTools {
 
     private void saveEvents(List<CalendarEvent> events) {
         try {
+            // 迭代 10 I10-5：工作目录可能还不存在 data/，先建父目录再写
+            Path parent = calendarFile.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
             Files.writeString(calendarFile, IcsParser.toIcs(events), StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new IllegalStateException("操作失败：保存日历文件失败。" + e.getMessage(), e);

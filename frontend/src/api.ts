@@ -75,11 +75,6 @@ async function getJson(path: string): Promise<Response> {
 
 // ═══ 会话 ═══
 
-/** 生成会话 ID（会话短期记忆的 sessionId，由前端持有）。 */
-export function newSessionId(): string {
-  return crypto.randomUUID();
-}
-
 /**
  * SSE 流式对话（迭代 6 I6-5）：fetch + ReadableStream 逐行解析 `data:` 事件，
  * 逐块产出文本增量（打字机渲染）。支持 AbortSignal 中断与模型选择（迭代 7）。

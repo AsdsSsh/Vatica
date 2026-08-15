@@ -161,6 +161,11 @@ public final class TodoTools {
 
     private void save(List<Todo> todos) {
         try {
+            // 迭代 10 I10-5：工作目录可能还不存在 data/，先建父目录再写
+            Path parent = todoFile.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
             mapper.writerWithDefaultPrettyPrinter().writeValue(todoFile.toFile(), todos);
         } catch (IOException e) {
             throw new IllegalStateException("操作失败：保存待办数据失败。" + e.getMessage(), e);

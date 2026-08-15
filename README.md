@@ -313,6 +313,17 @@ curl localhost:8080/v3/api-docs     # OpenAPI 契约
 curl localhost:8080/api/task/不存在   # {"message":"操作失败：任务不存在（id=不存在）。"} HTTP 404
 ```
 
+### 迭代 10：质量修复（全面体检问题清零）
+
+对迭代 1-9 做全面体检后集中修复 13 项问题（3 高 + 5 中 + 5 低），要点：
+
+- **模型设置修复**：修复"添加模型"点击无反应（新增时未写入空槽位模板）+ 编辑表单在 Form 挂载后再回填；模型设置保存不再重置对话区已选模型
+- **模型客户端缓存隔离**：`ModelRegistry` 缓存键补 `withTools` 维度——对话客户端（带工具）与规划/评测客户端（无工具）不再互相复用
+- **CORS 放行 PUT**：模型配置保存（`PUT /api/models`）在 Tauri Windows origin / Vite 开发 origin 下预检 200
+- **配置校验归一化**：`models.json` 保存/读取统一归一化（id 小写唯一、协议 lowercase、启用槽位 baseUrl/model/temperature 必填）
+- **数据与契约加固**：PIM 工具首次写入自动建 `data/` 目录；`/api/files` 错误响应统一 `{message}`；流式生成中禁用切换会话防串流
+- 回归：mvn test **230** 全绿（214 → 230）+ npm run build 通过
+
 ### 迭代 2.5 新增配置（application.yml，均可调）
 
 | 配置 | 默认 | 说明 |
