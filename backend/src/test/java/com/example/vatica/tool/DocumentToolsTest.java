@@ -34,8 +34,7 @@ class DocumentToolsTest {
 
     @BeforeEach
     void setUp() {
-        documentTools = new DocumentTools(new FileToolProperties(tempDir.toString(), 1024),
-                TestFileSandbox.policy(tempDir));
+        documentTools = new DocumentTools(TestFileSandbox.policy(tempDir));
     }
 
     // ══════════════ Word ══════════════

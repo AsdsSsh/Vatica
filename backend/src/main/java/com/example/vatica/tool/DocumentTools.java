@@ -59,7 +59,7 @@ public final class DocumentTools {
 
     private final FileSandboxPolicy sandboxPolicy;
 
-    public DocumentTools(FileToolProperties props, FileSandboxPolicy sandboxPolicy) {
+    public DocumentTools(FileSandboxPolicy sandboxPolicy) {
         this.sandboxPolicy = sandboxPolicy;
     }
 

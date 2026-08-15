@@ -46,8 +46,8 @@ public class ToolConfig {
 
     /** 迭代 3：文档生成工具（POI）；迭代 11 起落盘走工作区沙盒。 */
     @Bean
-    DocumentTools documentTools(FileToolProperties props, FileSandboxPolicy sandboxPolicy) {
-        return new DocumentTools(props, sandboxPolicy);
+    DocumentTools documentTools(FileSandboxPolicy sandboxPolicy) {
+        return new DocumentTools(sandboxPolicy);
     }
 
     /** 迭代 3.5：PIM 日历工具；迭代 11 起日历文件存 .vatica，导入源走工作区沙盒。 */
