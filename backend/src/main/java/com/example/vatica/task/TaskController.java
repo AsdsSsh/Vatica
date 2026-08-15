@@ -3,30 +3,35 @@ package com.example.vatica.task;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
- * 任务接口（迭代 5 I5-3）：创建任务（一句话）→ 审批计划/步骤 → 查询进度。
+ * 任务接口（迭代 5 I5-3；迭代 5.5 返工；迭代 7 终止 + 步骤级进度事件）：
+ * 创建任务（一句话）→ 审批计划/步骤 → 查询进度 → 人工返工 → 终止 → SSE 订阅进度。
  *
  * <p>注意（已知边界）：审批接口<b>同步</b>执行到下一个审批点或终态才返回；
- * 步骤级实时进度事件（SSE）在迭代 7 前端步骤面板联调时补充，本迭代先打通闭环。
+ * 步骤级实时进度经 {@code GET /{id}/events}（SSE）推送，订阅即回放当前快照。
  */
 @RestController
 @RequestMapping("/api/task")
 public class TaskController {
 
     private final TaskService taskService;
+    private final TaskEventPublisher eventPublisher;
     private final ObjectMapper mapper;
 
-    public TaskController(TaskService taskService, ObjectMapper mapper) {
+    public TaskController(TaskService taskService, TaskEventPublisher eventPublisher, ObjectMapper mapper) {
         this.taskService = taskService;
+        this.eventPublisher = eventPublisher;
         this.mapper = mapper;
     }
 
@@ -47,6 +52,18 @@ public class TaskController {
     @PostMapping("/{id}/rework")
     public Map<String, Object> rework(@PathVariable String id) {
         return detail(taskService.rework(id));
+    }
+
+    /** 用户终止（迭代 7 I7-4）：PENDING/RUNNING/PENDING_APPROVAL → CANCELLED。 */
+    @PostMapping("/{id}/cancel")
+    public Map<String, Object> cancel(@PathVariable String id) {
+        return detail(taskService.cancel(id));
+    }
+
+    /** 步骤级进度事件（迭代 7 I7-1）：SSE 订阅任务进度，订阅即回放当前快照。 */
+    @GetMapping(value = "/{id}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter events(@PathVariable String id) {
+        return eventPublisher.subscribe(taskService.get(id));
     }
 
     /** 单任务详情。 */

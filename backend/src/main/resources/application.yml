@@ -101,6 +101,15 @@ vatica:
   judge:
     pass-threshold: 70      # Judge 评分 >= 阈值判 PASS 交付；低分自动返工
     max-auto-rework: 2      # 低分自动返工上限（防死循环）；超限 NEEDS_REVISION 交人工
+  # ===== 模型选择器（迭代 7 I7-5）=====
+  # 主模型 DeepSeek 走 spring.ai.openai.*；备用模型通义千问（OpenAI 兼容）：
+  #   setx QWEN_API_KEY <你的通义Key> 后重启，前端模型选择器即可切换
+  model:
+    qwen:
+      api-key: ${QWEN_API_KEY:}
+      base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      model: qwen-plus
+      temperature: 0.7
 
 # 调试工具调用轮次（需要时取消注释，默认关闭）
 # logging:

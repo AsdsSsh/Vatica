@@ -40,6 +40,10 @@ class TaskStateMachineTest {
         assertLegal(TaskStatus.NEEDS_REVISION, TaskStatus.FAILED);
 
         assertLegal(TaskStatus.DONE, TaskStatus.RETRY);
+
+        assertLegal(TaskStatus.PENDING, TaskStatus.CANCELLED);
+        assertLegal(TaskStatus.RUNNING, TaskStatus.CANCELLED);
+        assertLegal(TaskStatus.PENDING_APPROVAL, TaskStatus.CANCELLED);
     }
 
     /** 穷举：除上述合法流转外，其余全部非法（包括从终态出发、回退 PENDING 等）。 */
@@ -60,11 +64,12 @@ class TaskStateMachineTest {
         }
     }
 
-    /** 终态闭包：FAILED 无任何流出；DONE 仅允许人工返工重开（→RETRY，5.5 增补），其余全部拒绝。 */
+    /** 终态闭包：FAILED/CANCELLED 无任何流出；DONE 仅允许人工返工重开（→RETRY，5.5 增补），其余全部拒绝。 */
     @Test
     void terminalStatesHaveNoOutgoingTransitions() {
         for (TaskStatus to : EnumSet.allOf(TaskStatus.class)) {
             assertThat(TaskStateMachine.canTransition(TaskStatus.FAILED, to)).isFalse();
+            assertThat(TaskStateMachine.canTransition(TaskStatus.CANCELLED, to)).isFalse();
         }
         assertThat(TaskStateMachine.canTransition(TaskStatus.DONE, TaskStatus.RETRY)).isTrue();
         for (TaskStatus to : EnumSet.allOf(TaskStatus.class)) {
@@ -72,9 +77,10 @@ class TaskStateMachineTest {
                 assertThat(TaskStateMachine.canTransition(TaskStatus.DONE, to)).isFalse();
             }
         }
-        // 业务终态语义不变：DONE/FAILED 不再接受审批/执行推进，DONE→RETRY 是唯一的人工返工例外
+        // 业务终态语义不变：DONE/FAILED/CANCELLED 不再接受审批/执行推进，DONE→RETRY 是唯一的人工返工例外
         assertThat(TaskStatus.DONE.isTerminal()).isTrue();
         assertThat(TaskStatus.FAILED.isTerminal()).isTrue();
+        assertThat(TaskStatus.CANCELLED.isTerminal()).isTrue();
         assertThat(TaskStatus.RUNNING.isTerminal()).isFalse();
     }
 
@@ -87,15 +93,16 @@ class TaskStateMachineTest {
 
     private static boolean isLegal(TaskStatus from, TaskStatus to) {
         return switch (from) {
-            case PENDING -> to == TaskStatus.RUNNING || to == TaskStatus.FAILED;
-            case RUNNING -> to == TaskStatus.PENDING_APPROVAL || to == TaskStatus.REVIEW || to == TaskStatus.FAILED;
-            case PENDING_APPROVAL -> to == TaskStatus.RUNNING || to == TaskStatus.FAILED;
+            case PENDING -> to == TaskStatus.RUNNING || to == TaskStatus.FAILED || to == TaskStatus.CANCELLED;
+            case RUNNING -> to == TaskStatus.PENDING_APPROVAL || to == TaskStatus.REVIEW || to == TaskStatus.FAILED
+                    || to == TaskStatus.CANCELLED;
+            case PENDING_APPROVAL -> to == TaskStatus.RUNNING || to == TaskStatus.FAILED || to == TaskStatus.CANCELLED;
             case REVIEW -> to == TaskStatus.DONE || to == TaskStatus.RETRY || to == TaskStatus.NEEDS_REVISION
                     || to == TaskStatus.FAILED;
             case RETRY -> to == TaskStatus.RUNNING || to == TaskStatus.NEEDS_REVISION || to == TaskStatus.FAILED;
             case NEEDS_REVISION -> to == TaskStatus.RUNNING || to == TaskStatus.FAILED;
             case DONE -> to == TaskStatus.RETRY;
-            case FAILED -> false;
+            case FAILED, CANCELLED -> false;
         };
     }
 

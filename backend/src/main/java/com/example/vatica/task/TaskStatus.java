@@ -30,11 +30,14 @@ public enum TaskStatus {
     /** 返工超限/人工判定不合格，交人工处理（迭代 5.5 落地）。 */
     NEEDS_REVISION,
 
+    /** 用户手动终止（迭代 7 I7-4，终态；TRAE 公开槽点的差异化能力）。 */
+    CANCELLED,
+
     /** 执行异常/被拒绝（终态）。 */
     FAILED;
 
     /** 是否终态。 */
     public boolean isTerminal() {
-        return this == DONE || this == FAILED;
+        return this == DONE || this == FAILED || this == CANCELLED;
     }
 }

@@ -2,10 +2,13 @@ package com.example.vatica.task;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,6 +16,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 
 import com.example.vatica.agent.ExecutorAgent;
 import com.example.vatica.agent.JudgeAgent;
@@ -47,10 +53,18 @@ public class TaskService {
     private final TaskRecordRepository repository;
     private final ObjectMapper mapper;
     private final Executor parallelExecutor;
+    private final TaskEventPublisher eventPublisher;
+
+    /** 终止标志（迭代 7 I7-4）：取消接口与执行线程的协作式协调点（波次粒度生效）。 */
+    private final Map<String, AtomicBoolean> cancelFlags = new ConcurrentHashMap<>();
+
+    /** 用于跨事务重读被终止任务的最新状态（需悲观锁"当前读"，避开 REPEATABLE_READ 快照）。 */
+    @PersistenceContext
+    private EntityManager entityManager;
 
     public TaskService(PlannerAgent plannerAgent, ExecutorAgent executorAgent, JudgeAgent judgeAgent,
             JudgeProperties judgeProps, TaskRecordRepository repository, ObjectMapper mapper,
-            @Qualifier("taskParallelExecutor") Executor parallelExecutor) {
+            @Qualifier("taskParallelExecutor") Executor parallelExecutor, TaskEventPublisher eventPublisher) {
         this.plannerAgent = plannerAgent;
         this.executorAgent = executorAgent;
         this.judgeAgent = judgeAgent;
@@ -58,6 +72,7 @@ public class TaskService {
         this.repository = repository;
         this.mapper = mapper;
         this.parallelExecutor = parallelExecutor;
+        this.eventPublisher = eventPublisher;
     }
 
     /** 创建任务：Planner 拆解 → PENDING 待审批计划。 */
@@ -114,7 +129,37 @@ public class TaskService {
                     "操作失败：当前状态（" + from + "）不需要审批。");
         }
         executeUntilBlocked(record);
+        // 执行期间被终止：状态已由 cancel() 事务提交为 CANCELLED。
+        // MySQL REPEATABLE_READ 下普通 refresh 是快照读（读到本事务起始的旧状态），
+        // 必须用悲观锁做"当前读"才能拿到 CANCELLED；实体刷新后与库一致（干净态），
+        // 提交时不会把旧状态覆盖回库
+        if (isCancelled(record.getId())) {
+            entityManager.refresh(record, jakarta.persistence.LockModeType.PESSIMISTIC_READ);
+        }
         return repository.save(record);
+    }
+
+    /**
+     * 用户终止任务（迭代 7 I7-4）：PENDING / RUNNING / PENDING_APPROVAL 可终止 → CANCELLED（终态）。
+     * 运行中的执行线程经终止标志协作式感知（波次粒度生效），不回写旧状态。
+     */
+    @Transactional
+    public TaskRecord cancel(String id) {
+        TaskRecord record = get(id);
+        switch (record.getStatus()) {
+            case PENDING, RUNNING, PENDING_APPROVAL -> {
+                TaskStateMachine.requireTransition(record.getStatus(), TaskStatus.CANCELLED);
+                record.setStatus(TaskStatus.CANCELLED);
+                record.setError("用户手动终止");
+                cancelFlags.computeIfAbsent(id, k -> new AtomicBoolean()).set(true);
+                repository.save(record);
+                eventPublisher.publish(record, "cancelled");
+                log.info("任务 {} 被用户终止", id);
+            }
+            default -> throw new IllegalArgumentException(
+                    "操作失败：当前状态（" + record.getStatus() + "）不允许终止。");
+        }
+        return record;
     }
 
     /**
@@ -160,6 +205,9 @@ public class TaskService {
             if (todo.isEmpty()) {
                 continue;
             }
+            if (isCancelled(record.getId())) {
+                return;   // 已被终止：状态已由 cancel() 落 CANCELLED，本线程不回写
+            }
             // 审批点屏障：未批准的审批步骤独占一波（WaveScheduler 保证），挂起等待人工
             if (todo.size() == 1) {
                 int idx = todo.get(0);
@@ -170,6 +218,7 @@ public class TaskService {
                     record.setPendingStepId(step.getId());
                     record.setCurrentStep(idx);
                     repository.save(record);
+                    eventPublisher.publish(record, "approval_required");
                     log.info("任务 {} 步骤 {} 命中审批点，挂起等待人工审批", record.getId(), step.getId());
                     return;
                 }
@@ -178,35 +227,51 @@ public class TaskService {
             List<String> previous = previousResults(plan, record.getCurrentStep());
             List<CompletableFuture<String>> futures = new ArrayList<>();
             try {
+                eventPublisher.publish(record, "step_running");
                 for (int idx : todo) {
                     TaskStep step = plan.getSteps().get(idx);
                     futures.add(CompletableFuture
                             .supplyAsync(() -> execute(record, step, previous), parallelExecutor));
                 }
                 CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
+                if (isCancelled(record.getId())) {
+                    futures.forEach(f -> f.cancel(true));
+                    return;   // 终止在波执行期间生效：不落进度，状态保持 CANCELLED（防旧状态覆盖）
+                }
                 for (int k = 0; k < todo.size(); k++) {
                     plan.getSteps().get(todo.get(k)).setResult(futures.get(k).join());
                 }
                 record.setPlanJson(toJson(plan));
                 record.setCurrentStep(todo.get(todo.size() - 1) + 1);
                 repository.save(record);
+                eventPublisher.publish(record, "step_done");
                 log.info("任务 {} 波次完成：步骤下标 {}（{} 个并行）", record.getId(), todo, todo.size());
             } catch (Exception e) {
                 futures.forEach(f -> f.cancel(true));
+                if (isCancelled(record.getId())) {
+                    return;   // 终止引发的执行中断：不覆盖 CANCELLED
+                }
                 Throwable cause = e instanceof CompletionException ? e.getCause() : e;
                 log.error("任务 {} 波次执行失败（步骤 {}）", record.getId(), todo, cause);
                 TaskStateMachine.requireTransition(record.getStatus(), TaskStatus.FAILED);
                 record.setStatus(TaskStatus.FAILED);
                 record.setError(cause.getMessage());
+                cancelFlags.remove(record.getId());
+                repository.save(record);
+                eventPublisher.publish(record, "failed");
                 return;
             }
         }
         // 全部完成：进入 REVIEW 评测段（迭代 5.5：Judge 评分分流）
+        if (isCancelled(record.getId())) {
+            return;
+        }
         TaskStateMachine.requireTransition(record.getStatus(), TaskStatus.REVIEW);
         record.setStatus(TaskStatus.REVIEW);
         record.setCurrentStep(-1);
         record.setPendingStepId(-1);
         repository.save(record);
+        eventPublisher.publish(record, "review");
         evaluateAndRoute(record, plan);
     }
 
@@ -231,6 +296,9 @@ public class TaskService {
 
     /** REVIEW 段：Judge 评分 → PASS 交付 DONE；FAIL 自动返工（限次）或超限 NEEDS_REVISION；评测异常 FAILED。 */
     private void evaluateAndRoute(TaskRecord record, TaskPlan plan) {
+        if (isCancelled(record.getId())) {
+            return;   // 评测前/中被终止：状态保持 CANCELLED
+        }
         JudgeAgent.Evaluation eval;
         try {
             eval = judgeAgent.evaluate(record.getGoal(), plan);
@@ -239,32 +307,51 @@ public class TaskService {
             TaskStateMachine.requireTransition(TaskStatus.REVIEW, TaskStatus.FAILED);
             record.setStatus(TaskStatus.FAILED);
             record.setError("评测异常：" + e.getMessage());
+            cancelFlags.remove(record.getId());
+            repository.save(record);
+            eventPublisher.publish(record, "failed");
             return;
         }
         record.setScore(eval.score());
         record.setVerdict(eval.verdict());
+        if (isCancelled(record.getId())) {
+            return;   // 评测返回瞬间被终止：不落评测结果
+        }
         if (eval.verdict() == TaskVerdict.PASS) {
             TaskStateMachine.requireTransition(TaskStatus.REVIEW, TaskStatus.DONE);
             record.setStatus(TaskStatus.DONE);
+            cancelFlags.remove(record.getId());
             log.info("任务 {} 评测通过（{} 分），交付", record.getId(), eval.score());
+            repository.save(record);
+            eventPublisher.publish(record, "done");
         } else if (record.getReworkCount() >= judgeProps.maxAutoRework()) {
             TaskStateMachine.requireTransition(TaskStatus.REVIEW, TaskStatus.NEEDS_REVISION);
             record.setStatus(TaskStatus.NEEDS_REVISION);
             record.setError("评测不合格（" + eval.score() + " 分）：" + eval.summary()
                     + "。自动返工已达上限 " + judgeProps.maxAutoRework() + " 次，请人工返工。");
+            cancelFlags.remove(record.getId());
             log.info("任务 {} 评测不合格且自动返工超限，转人工", record.getId());
+            repository.save(record);
+            eventPublisher.publish(record, "needs_revision");
         } else {
             TaskStateMachine.requireTransition(TaskStatus.REVIEW, TaskStatus.RETRY);
             record.setStatus(TaskStatus.RETRY);
             record.setReworkCount(record.getReworkCount() + 1);
             resetPlanForRerun(record, plan);
             repository.save(record);
+            eventPublisher.publish(record, "retry");
             TaskStateMachine.requireTransition(TaskStatus.RETRY, TaskStatus.RUNNING);
             record.setStatus(TaskStatus.RUNNING);
             log.info("任务 {} 评测不合格（{} 分），第 {} 次自动返工", record.getId(),
                     eval.score(), record.getReworkCount());
             executeUntilBlocked(record);   // 递归重跑，深度由 max-auto-rework 兜底
         }
+    }
+
+    /** 是否已被用户终止（取消接口与执行线程的协作式协调点）。 */
+    private boolean isCancelled(String taskId) {
+        AtomicBoolean flag = cancelFlags.get(taskId);
+        return flag != null && flag.get();
     }
 
     /** 返工重跑前重置计划：清步骤结果、撤审批标记（副作用步骤需重新审批=可重入设计）。 */

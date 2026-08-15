@@ -14,11 +14,14 @@ import java.util.Set;
  * <pre>
  * PENDING ──审批计划──▶ RUNNING ──敏感步骤──▶ PENDING_APPROVAL ──审批步骤──▶ RUNNING
  *    │                    │  └──全部完成──▶ REVIEW ──Judge PASS──▶ DONE ──人工返工──▶ RETRY（5.5）
- *    └──执行失败──▶ FAILED ◀──执行异常──────┘   └──Judge FAIL──▶ RETRY ──▶ RUNNING（5.5 自动返工，限 max-auto-rework 次）
- *                                                              └──超限/异常──▶ NEEDS_REVISION ──人工返工──▶ RUNNING（5.5）
+ *    │                    │                 └──Judge FAIL──▶ RETRY ──▶ RUNNING（5.5 自动返工，限 max-auto-rework 次）
+ *    │                    │                                └──超限/异常──▶ NEEDS_REVISION ──人工返工──▶ RUNNING（5.5）
+ *    │                    └──用户终止（7）──▶ CANCELLED ◀──用户终止（7）──┘
+ *    └──执行失败──▶ FAILED ◀──执行异常──────────────────────┘
  * </pre>
  * 迭代 5.5 落地：REVIEW 段由 Judge 评分分流（PASS→DONE / FAIL→RETRY / 超限→NEEDS_REVISION），
  * DONE→RETRY 为"已交付任务人工返工重开"（唯一从 DONE 出发的流转）。
+ * 迭代 7：PENDING/RUNNING/PENDING_APPROVAL 可被用户终止 → CANCELLED（终态，任务终止差异化能力）。
  */
 public final class TaskStateMachine {
 
@@ -48,6 +51,10 @@ public final class TaskStateMachine {
         allow(TaskStatus.NEEDS_REVISION, TaskStatus.FAILED);
 
         allow(TaskStatus.DONE, TaskStatus.RETRY);               // 5.5：已交付任务人工返工重开
+
+        allow(TaskStatus.PENDING, TaskStatus.CANCELLED);        // 7：待审批计划被终止
+        allow(TaskStatus.RUNNING, TaskStatus.CANCELLED);        // 7：运行中被终止
+        allow(TaskStatus.PENDING_APPROVAL, TaskStatus.CANCELLED);   // 7：审批挂起时被终止
     }
 
     private TaskStateMachine() {

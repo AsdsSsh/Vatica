@@ -208,6 +208,18 @@ Planner 声明步骤依赖 → 拓扑分层 → **同层步骤并行执行**（�
 - 老计划兼容：无 dependsOn 字段（迭代 5/5.5 落库）按顺序执行，行为不变
 - 虚拟线程执行器 Bean：`Executors.newVirtualThreadPerTaskExecutor()`，每步骤一虚拟线程
 
+### 迭代 7：UI 完成（工作台全能力）
+
+右侧任务面板 = 完整任务工作台（后端新增接口见括号）：
+
+- **创建任务**：一句话输入 → Planner 拆解（POST /api/task）
+- **步骤实时打勾**：订阅步骤级 SSE 进度事件（GET /api/task/{id}/events，订阅即回放快照），执行中/已完成/待审批三态图标
+- **审批弹窗**：计划审批与敏感步骤审批自动弹出，批准/终止一键（POST /api/task/{id}/approve）
+- **运行中终止**：PENDING/RUNNING/PENDING_APPROVAL 可终止 → CANCELLED 终态（POST /api/task/{id}/cancel，协作式取消 + 波次粒度生效）
+- **执行准确率**：Judge score 徽标（≥70 绿 / <70 红）+ verdict + 返工次数；DONE/NEEDS_REVISION 可一键返工（POST /api/task/{id}/rework）
+- **文件产物**：GET /api/files 列表（白名单目录），双击用系统默认程序打开（Tauri opener 插件）
+- **模型选择器**：对话区切换 DeepSeek / 通义千问（GET /api/chat/models；备用模型 setx QWEN_API_KEY 后启用，未配置置灰）
+
 ### 迭代 2.5 新增配置（application.yml，均可调）
 
 | 配置 | 默认 | 说明 |

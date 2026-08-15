@@ -12,6 +12,9 @@ import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -270,6 +273,82 @@ class TaskServiceTest {
         assertThat(plan.getSteps().get(1).getResult()).isEqualTo("完成该步骤");
         assertThat(plan.getSteps().get(2).getResult()).isEqualTo("完成该步骤");
         verify(executorAgent, times(3)).executeStep(eq("目标"), any(), anyList());
+    }
+
+    /** 7 I7-4：PENDING 任务可直接终止 → CANCELLED（终态，不可再审批/返工）。 */
+    @Test
+    void cancelPendingTask() {
+        TaskRecord created = taskService.create("目标");
+
+        TaskRecord cancelled = taskService.cancel(created.getId());
+
+        assertThat(cancelled.getStatus()).isEqualTo(TaskStatus.CANCELLED);
+        assertThat(cancelled.getError()).contains("终止");
+        assertThatThrownBy(() -> taskService.approve(created.getId()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("不需要审批");
+        assertThatThrownBy(() -> taskService.rework(created.getId()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("不允许返工");
+    }
+
+    /** 7 I7-4：运行中终止——执行线程卡在步骤中时取消，执行线程与库中状态最终都是 CANCELLED（协作式取消）。 */
+    @Test
+    void cancelRunningTaskStopsExecution() throws Exception {
+        when(plannerAgent.plan("目标")).thenReturn(oneStepPlan());
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        when(executorAgent.executeStep(eq("目标"), any(), anyList())).thenAnswer(inv -> {
+            entered.countDown();
+            release.await(5, TimeUnit.SECONDS);
+            return "完成";
+        });
+
+        TaskRecord created = taskService.create("目标");
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<TaskRecord> future = pool.submit(() -> taskService.approve(created.getId()));
+            assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+
+            TaskRecord cancelled = taskService.cancel(created.getId());
+            assertThat(cancelled.getStatus()).isEqualTo(TaskStatus.CANCELLED);
+
+            release.countDown();
+            TaskRecord result = future.get(10, TimeUnit.SECONDS);
+            assertThat(result.getStatus()).isEqualTo(TaskStatus.CANCELLED);   // 执行线程以库中状态为准
+
+            TaskRecord reloaded = repository.findById(created.getId()).orElseThrow();
+            assertThat(reloaded.getStatus()).isEqualTo(TaskStatus.CANCELLED);
+            assertThat(reloaded.getError()).contains("终止");
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    /** 7 I7-4：PENDING_APPROVAL 挂起时终止同样合法。 */
+    @Test
+    void cancelApprovalHungTask() {
+        TaskRecord created = taskService.create("目标");
+        TaskRecord hung = taskService.approve(created.getId());
+        assertThat(hung.getStatus()).isEqualTo(TaskStatus.PENDING_APPROVAL);
+
+        TaskRecord cancelled = taskService.cancel(created.getId());
+
+        assertThat(cancelled.getStatus()).isEqualTo(TaskStatus.CANCELLED);
+    }
+
+    /** 7 I7-4：终态任务不允许终止。 */
+    @Test
+    void cancelTerminalTaskRejected() {
+        when(plannerAgent.plan("目标")).thenReturn(oneStepPlan());
+        TaskRecord created = taskService.create("目标");
+        TaskRecord done = taskService.approve(created.getId());
+        assertThat(done.getStatus()).isEqualTo(TaskStatus.DONE);
+
+        assertThatThrownBy(() -> taskService.cancel(created.getId()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("不允许终止");
     }
 
     /** 终态任务审批 → 拒绝（状态机约束生效）。 */

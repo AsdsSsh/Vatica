@@ -16,6 +16,7 @@ import java.time.Duration;
 import java.util.List;
 
 import com.example.vatica.config.ChatProperties;
+import com.example.vatica.config.ModelProperties;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,7 +39,8 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Flux;
 
 /**
- * 对话控制器单测（迭代 2.5 I2.5-1/I2.5-3）：SSE 错误传播 / 超时 / 断连清理 + 会话历史回放。
+ * 对话控制器单测（迭代 2.5 I2.5-1/I2.5-3）：SSE 错误传播 / 超时 / 断连清理 + 会话历史回放；
+ * 迭代 7 I7-5 增补：模型路由（未知/未配置模型快速失败）。
  *
  * <p>这里测的是迭代 2.5 之后控制器里"真实存在"的错误处理逻辑（错误路径而非转发），
  * 是规划文档 7.2"胶水层不测"规则的例外；LLM 行为仍 mock 化。
@@ -50,7 +52,11 @@ class ChatControllerTest {
     @Mock
     ChatClient chatClient;
     @Mock
+    ChatClient qwenChatClient;
+    @Mock
     ChatClient.ChatClientRequestSpec spec;
+    @Mock
+    ChatClient.ChatClientRequestSpec qwenSpec;
     @Mock
     ChatClient.StreamResponseSpec streamSpec;
     @Mock
@@ -69,9 +75,14 @@ class ChatControllerTest {
                 new ChatProperties.Memory(20, 64, 16000));
     }
 
+    private static ModelProperties modelProps(boolean qwenConfigured) {
+        return new ModelProperties(new ModelProperties.Qwen(
+                qwenConfigured ? "qwen-key" : "", "", "", null));
+    }
+
     private ChatController newController(ChatProperties props, SessionMemory memory) {
         // 迭代 5：控制器直接注入 ChatClient（工具合并在 ChatConfig 完成）+ 会话记忆接口
-        return new ChatController(chatClient, props, memory);
+        return new ChatController(chatClient, qwenChatClient, modelProps(false), props, memory);
     }
 
     private MockMvc mockMvcFor(ChatController controller) {
@@ -149,10 +160,46 @@ class ChatControllerTest {
                 new ChatProperties.Memory(20, 64, 16000));
         ChatController controller = newController(props, new InMemorySessionMemory(20, 64, 16000));
 
-        SseEmitter emitter = controller.stream(new ChatRequest("你好", null));
+        SseEmitter emitter = controller.stream(new ChatRequest("你好", null, null));
 
         assertThat(emitter.getTimeout()).isEqualTo(30_000L);
         assertThat(controller.activeStreamCount()).isEqualTo(1); // 挂起期间计入活跃连接
+    }
+
+    /** 迭代 7 I7-5：qwen 未配置 → 快速失败（不进入流式）；未知模型 → 快速失败。 */
+    @Test
+    void modelRoutingRejectsUnconfiguredOrUnknownModel() {
+        ChatController controller = newController(defaultProps(), new InMemorySessionMemory(20, 64, 16000));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> controller.stream(new ChatRequest("你好", null, "qwen")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("未配置");
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> controller.stream(new ChatRequest("你好", null, "gpt-5")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("未知模型");
+    }
+
+    /** 迭代 7 I7-5：qwen 已配置 → 路由到备用客户端。 */
+    @Test
+    void modelRoutingUsesQwenClientWhenConfigured() throws Exception {
+        when(qwenChatClient.prompt()).thenReturn(qwenSpec);
+        when(qwenSpec.messages(anyList())).thenReturn(qwenSpec);
+        when(qwenSpec.user(anyString())).thenReturn(qwenSpec);
+        when(qwenSpec.call()).thenReturn(callSpec);
+        when(callSpec.content()).thenReturn("通义回复");
+        ChatController controller = new ChatController(chatClient, qwenChatClient,
+                modelProps(true), defaultProps(), new InMemorySessionMemory(20, 64, 16000));
+        MockMvc mockMvc = mockMvcFor(controller);
+
+        mockMvc.perform(post("/api/chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"message\":\"你好\",\"model\":\"qwen\"}"))
+                .andExpect(status().isOk());
+
+        verify(qwenChatClient).prompt();
     }
 
     /** 非流式：第二轮请求自动带上第一轮历史（user + assistant）。 */
