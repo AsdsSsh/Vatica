@@ -8,6 +8,7 @@ description = "Vatica 后端 sidecar 启动器：以打包后的 jlink JRE 拉�
 name = "vatica-backend"
 path = "src/main.rs"
 
-# 父进程看门狗（迭代 8）：Toolhelp 进程快照轮询桌面壳存活
+# 父进程看门狗（迭代 8）：Toolhelp 进程快照轮询桌面壳存活；
+# 用户环境变量合并：RegGetValueW 读 HKCU\Environment（setx 后重启应用即生效）
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["tlhelp32", "handleapi"] }
+winapi = { version = "0.3", features = ["tlhelp32", "handleapi", "winreg"] }

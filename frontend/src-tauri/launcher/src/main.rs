@@ -47,17 +47,18 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let child = match Command::new(&java)
-        .arg("-Xmx256m")
+    let mut cmd = Command::new(&java);
+    cmd.arg("-Xmx256m")
         .arg("-Xms128m")
         .arg("-jar")
         .arg(&jar)
         // packaged profile：H2 文件库零依赖（切 MySQL 见 application-packaged.yml 注释）
         .arg("--spring.profiles.active=packaged")
         .current_dir(&data_dir)
-        .env("VATICA_WATCHDOG_PID", std::process::id().to_string())
-        .spawn()
-    {
+        .env("VATICA_WATCHDOG_PID", std::process::id().to_string());
+    merge_registry_user_env(&mut cmd);
+
+    let child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[vatica-backend] 启动后端失败: {e}");
@@ -114,6 +115,79 @@ fn parent_pid() -> Option<u32> {
 fn pid_alive(pid: u32) -> bool {
     process_entry(|entry| entry.th32ProcessID == pid).is_some()
 }
+
+/// 把 HKCU\Environment（用户级环境变量注册表）中后端用到的键合并进子进程环境。
+///
+/// 背景（迭代 8 实测踩坑）：`setx DEEPSEEK_API_KEY xxx` 只写注册表，正在运行的
+/// explorer 及其派生的进程环境不会刷新——双击快捷方式启动的应用拿不到新 key，
+/// 必须注销重登才生效。本函数每次启动时直接读注册表，注册表有值则覆盖继承环境
+/// （与"用户环境变量优先级高于系统"语义一致），`setx` 后重启应用即生效。
+#[cfg(windows)]
+fn merge_registry_user_env(cmd: &mut Command) {
+    use winapi::um::winreg::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
+
+    // 后端用到的全部环境变量键（application.yml / application-packaged.yml 中引用）
+    const KEYS: &[&str] = &[
+        "DEEPSEEK_API_KEY",
+        "AMAP_MCP_KEY",
+        "QWEN_API_KEY",
+        "MAIL_IMAP_HOST",
+        "MAIL_IMAP_PORT",
+        "MAIL_SMTP_HOST",
+        "MAIL_SMTP_PORT",
+        "MAIL_USERNAME",
+        "MAIL_PASSWORD",
+        "MYSQL_HOST",
+        "MYSQL_PORT",
+        "MYSQL_DATABASE",
+        "MYSQL_USERNAME",
+        "MYSQL_PASSWORD",
+        "PACKAGED_DB_URL",
+        "PACKAGED_DB_USERNAME",
+        "PACKAGED_DB_PASSWORD",
+    ];
+
+    unsafe {
+        let env_key: Vec<u16> = "Environment".encode_utf16().chain(std::iter::once(0)).collect();
+        for key in KEYS {
+            let key_wide: Vec<u16> = key.encode_utf16().chain(std::iter::once(0)).collect();
+            let mut size: u32 = 0;
+            // 第一次调用取所需缓冲区大小（RRF_RT_REG_SZ 限定字符串类型）
+            let result = RegGetValueW(
+                HKEY_CURRENT_USER,
+                env_key.as_ptr(),
+                key_wide.as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut size,
+            );
+            if result != 0 || size == 0 {
+                continue;   // 键不存在或类型不符：沿用继承环境
+            }
+            let mut buf = vec![0u16; (size / 2) as usize + 1];
+            let result = RegGetValueW(
+                HKEY_CURRENT_USER,
+                env_key.as_ptr(),
+                key_wide.as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                buf.as_mut_ptr() as *mut _,
+                &mut size,
+            );
+            if result != 0 {
+                continue;
+            }
+            let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            if let Ok(value) = String::from_utf16(&buf[..end]) {
+                cmd.env(key, value);
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn merge_registry_user_env(_cmd: &mut Command) {}
 
 /// 用 Toolhelp 进程快照找一条进程记录（当前进程/父进程存活检查共用）。
 #[cfg(windows)]
