@@ -158,3 +158,49 @@ export async function fetchModels(): Promise<ModelInfo[]> {
   if (!res.ok) throw new Error(`请求失败（HTTP ${res.status}）`);
   return res.json();
 }
+
+/** 模型槽位（迭代 8.5 模型配置中心：GET/PUT /api/models）。 */
+export interface ModelSlot {
+  id: string;
+  name: string;
+  /** 协议：openai = OpenAI 兼容端点；anthropic = Anthropic Messages 协议。 */
+  protocol: "openai" | "anthropic";
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  temperature: number;
+  enabled: boolean;
+}
+
+export async function fetchModelSlots(): Promise<ModelSlot[]> {
+  const res = await fetch(`${API_BASE}/api/models`);
+  if (!res.ok) throw new Error(`请求失败（HTTP ${res.status}）`);
+  return res.json();
+}
+
+export async function saveModelSlots(slots: ModelSlot[]): Promise<ModelSlot[]> {
+  const res = await fetch(`${API_BASE}/api/models`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(slots),
+  });
+  if (!res.ok) throw new Error(`请求失败（HTTP ${res.status}）`);
+  return res.json();
+}
+
+/** 连通性测试结果（POST /api/models/test，失败时 error 为根因消息）。 */
+export interface ModelTestResult {
+  ok: boolean;
+  reply?: string;
+  error?: string;
+}
+
+export async function testModelConnection(slot: ModelSlot): Promise<ModelTestResult> {
+  const res = await fetch(`${API_BASE}/api/models/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(slot),
+  });
+  if (!res.ok) throw new Error(`请求失败（HTTP ${res.status}）`);
+  return res.json();
+}

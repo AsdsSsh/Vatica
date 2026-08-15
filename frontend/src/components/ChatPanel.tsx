@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, Flex, Input, Select, Spin, Tag, Typography } from "antd";
-import { SendOutlined, StopOutlined } from "@ant-design/icons";
+import { Button, Flex, Input, Select, Spin, Tag, Tooltip, Typography } from "antd";
+import { SendOutlined, SettingOutlined, StopOutlined } from "@ant-design/icons";
 import type { ChatMessage, ChatSession } from "../types";
 import { fetchModels, streamChat, type ModelInfo } from "../api";
 import Markdown from "./Markdown";
+import ModelSettings from "./ModelSettings";
 
 /**
- * 中栏：对话区（迭代 6 I6-4/I6-5；迭代 7 I7-5 模型选择器）——
+ * 中栏：对话区（迭代 6 I6-4/I6-5；迭代 7 I7-5 模型选择器；
+ * 迭代 8.5 模型设置入口 + 配置保存后即时刷新选择器）——
  * 消息列表 + Markdown 渲染 + SSE 流式打字机 + 停止按钮 + 模型选择。
  */
 interface Props {
@@ -29,6 +31,7 @@ export default function ChatPanel({
   const [input, setInput] = useState("");
   const [model, setModel] = useState("deepseek");
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -36,8 +39,8 @@ export default function ChatPanel({
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [session.messages]);
 
-  // 模型清单（迭代 7 I7-5）
-  useEffect(() => {
+  // 模型清单（迭代 7 I7-5；迭代 8.5 设置保存后刷新）
+  function loadModels() {
     fetchModels()
       .then((list) => {
         setModels(list);
@@ -47,7 +50,8 @@ export default function ChatPanel({
       .catch(() => {
         // 后端未启动时保持默认模型，不打扰用户
       });
-  }, []);
+  }
+  useEffect(loadModels, []);
 
   async function send() {
     const text = input.trim();
@@ -85,27 +89,42 @@ export default function ChatPanel({
 
   return (
     <Flex vertical style={{ height: "100%" }}>
-      {/* 顶栏：会话标题 + 模型选择器 */}
+      {/* 顶栏：会话标题 + 模型选择器 + 模型设置 */}
       <Flex
         justify="space-between"
         align="center"
         style={{ padding: "8px 16px", borderBottom: "1px solid #f0f0f0" }}
       >
-        <Typography.Text ellipsis={{ tooltip: session.title }} strong style={{ maxWidth: "55%" }}>
+        <Typography.Text ellipsis={{ tooltip: session.title }} strong style={{ maxWidth: "45%" }}>
           {session.title}
         </Typography.Text>
-        <Select
-          size="small"
-          style={{ width: 220 }}
-          value={model}
-          onChange={setModel}
-          options={models.map((m) => ({
-            value: m.id,
-            label: m.configured ? m.name : `${m.name}（未配置）`,
-            disabled: !m.configured,
-          }))}
-        />
+        <Flex gap={8} align="center">
+          <Select
+            size="small"
+            style={{ width: 220 }}
+            value={model}
+            onChange={setModel}
+            options={models.map((m) => ({
+              value: m.id,
+              label: m.configured ? m.name : `${m.name}（未配置）`,
+              disabled: !m.configured,
+            }))}
+          />
+          <Tooltip title="模型设置">
+            <Button
+              size="small"
+              icon={<SettingOutlined />}
+              onClick={() => setSettingsOpen(true)}
+            />
+          </Tooltip>
+        </Flex>
       </Flex>
+
+      <ModelSettings
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onSaved={loadModels}
+      />
 
       {/* 消息区 */}
       <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>

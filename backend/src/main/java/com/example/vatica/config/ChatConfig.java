@@ -1,9 +1,6 @@
 package com.example.vatica.config;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
-import org.springframework.ai.tool.ToolCallbackProvider;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -19,17 +16,18 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * 对话层装配（迭代 2.5 会话记忆；迭代 4 MCP 工具合并；迭代 5 ChatClient Bean 化 + 会话持久化；
- * 迭代 5.5 Judge Agent）。
+ * 迭代 5.5 Judge Agent；迭代 8.5 三个客户端改为动态委托——默认模型改配置即时生效）。
  *
  * <p>ChatClient 分工（面试可讲"关注点分离"）：
  * <ul>
- *   <li><b>vaticaChatClient</b>：聊天 + 任务执行——本地工具与 MCP 远程工具合并进 defaultTools</li>
+ *   <li><b>vaticaChatClient</b>：聊天 + 任务执行——动态委托 {@link ModelRegistry} 的默认模型（带本地工具 + MCP 韧性包装）</li>
  *   <li><b>plannerChatClient</b>：规划专用，无工具——规划阶段只做分解不执行，防副作用</li>
  *   <li><b>judgeChatClient</b>：评测专用，无工具——评测只读执行材料，不执行任何操作</li>
  * </ul>
  */
 @Configuration
-@EnableConfigurationProperties({ ChatProperties.class, JudgeProperties.class })
+@EnableConfigurationProperties({
+        ChatProperties.class, JudgeProperties.class, ModelProperties.class, OpenAiDefaultsProperties.class })
 public class ChatConfig {
 
     /** 会话短期记忆：内存滑窗热缓存 + MySQL 落库（迭代 5 I5-4）。 */
@@ -46,26 +44,25 @@ public class ChatConfig {
         return new ObjectMapper();
     }
 
-    /** 主对话/执行客户端：本地工具 + MCP 远程工具（迭代 4 合并进 defaultTools；迭代 8 韧性包装）。 */
+    /**
+     * 主对话/执行客户端（迭代 8.5）：动态委托默认模型——界面改配置（含换模型/换 Key）
+     * 即时生效，ExecutorAgent 等既有注入方零改动。
+     */
     @Bean
-    ChatClient vaticaChatClient(ChatClient.Builder builder, ToolCallbackProvider vaticaTools,
-            ObjectProvider<SyncMcpToolCallbackProvider> mcpToolProvider) {
-        SyncMcpToolCallbackProvider mcpTools = mcpToolProvider.getIfAvailable();
-        return mcpTools == null
-                ? builder.defaultTools(vaticaTools).build()
-                : builder.defaultTools(vaticaTools, new McpToolProviderGuard(mcpTools)).build();
+    ChatClient vaticaChatClient(ModelRegistry registry) {
+        return new DelegatingChatClient(registry::defaultClient);
     }
 
-    /** 规划专用客户端：无工具（规划不执行）。 */
+    /** 规划专用客户端：无工具（规划不执行），随默认模型动态切换。 */
     @Bean
-    ChatClient plannerChatClient(ChatClient.Builder builder) {
-        return builder.build();
+    ChatClient plannerChatClient(ModelRegistry registry) {
+        return new DelegatingChatClient(registry::plannerClient);
     }
 
-    /** 评测专用客户端：无工具（评测只读材料、不执行任何操作）。 */
+    /** 评测专用客户端：无工具（评测只读材料、不执行任何操作），随默认模型动态切换。 */
     @Bean
-    ChatClient judgeChatClient(ChatClient.Builder builder) {
-        return builder.build();
+    ChatClient judgeChatClient(ModelRegistry registry) {
+        return new DelegatingChatClient(registry::judgeClient);
     }
 
     /** 迭代 5 I5-1：Planner Agent。 */

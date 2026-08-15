@@ -7,13 +7,12 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import com.example.vatica.config.ChatProperties;
-import com.example.vatica.config.ModelProperties;
+import com.example.vatica.config.ModelRegistry;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -26,7 +25,8 @@ import reactor.core.Disposable;
 
 /**
  * 对话接口 —— 迭代 1：能聊天的后端；迭代 2.5：SSE 健壮性 + 会话短期记忆（内存版）；
- * 迭代 7：模型选择器（deepseek 主 / qwen 备，按请求 model 字段路由）。
+ * 迭代 7：模型选择器（按请求 model 字段路由）；迭代 8.5：路由改为动态模型注册表
+ * （界面配置中心，默认模型 = 第一个启用的槽位）。
  *
  * <p>流式错误处理约定（迭代 2.5 代码审查 R1 修复）：
  * <ul>
@@ -36,7 +36,7 @@ import reactor.core.Disposable;
  * </ul>
  *
  * <p>会话记忆：每轮对话（user / 最终 assistant 纯文本）写入 {@link SessionMemory}，
- * 下一轮请求自动带上前文（滑动窗口，内存版不持久化——持久化仍在迭代 5）。
+ * 下一轮请求自动带上前文（滑动窗口；迭代 5 起 JPA 落库，重启不丢）。
  */
 @RestController
 @RequestMapping("/api/chat")
@@ -44,49 +44,36 @@ public class ChatController {
 
     private static final Logger log = LoggerFactory.getLogger(ChatController.class);
 
-    private final ChatClient chatClient;
-    private final ChatClient qwenChatClient;
-    private final ModelProperties modelProperties;
+    private final ModelRegistry registry;
     private final ChatProperties chatProperties;
     private final SessionMemory sessionMemory;
 
     /** 活跃流式连接注册表：可观测 + 断连清理（迭代 5 任务终止/迭代 7 前端联调可复用）。 */
     private final Set<SseEmitter> activeEmitters = ConcurrentHashMap.newKeySet();
 
-    public ChatController(@Qualifier("vaticaChatClient") ChatClient chatClient,
-            @Qualifier("qwenChatClient") ChatClient qwenChatClient,
-            ModelProperties modelProperties, ChatProperties chatProperties, SessionMemory sessionMemory) {
-        // 迭代 4：MCP 远程工具与本地工具的合并已上移到 ChatConfig（vaticaChatClient Bean）；
-        // 迭代 5：会话记忆注入接口（内存实现用于单测，JPA 实现用于生产）
-        this.chatClient = chatClient;
-        this.qwenChatClient = qwenChatClient;
-        this.modelProperties = modelProperties;
+    public ChatController(ModelRegistry registry, ChatProperties chatProperties, SessionMemory sessionMemory) {
+        this.registry = registry;
         this.chatProperties = chatProperties;
         this.sessionMemory = sessionMemory;
     }
 
-    /** 可用模型清单（迭代 7 模型选择器数据源）。 */
+    /** 可用模型清单（迭代 7 模型选择器；迭代 8.5 起来自动态注册表，配置中心保存后即时刷新）。 */
     @GetMapping("/models")
     public List<Map<String, Object>> models() {
-        return List.of(
-                Map.of("id", "deepseek", "name", "DeepSeek deepseek-v4-flash", "configured", true),
-                Map.of("id", "qwen", "name", "通义千问 qwen-plus",
-                        "configured", modelProperties.qwen().configured()));
+        return registry.slots().stream()
+                .map(s -> Map.<String, Object>of(
+                        "id", s.id(),
+                        "name", s.name(),
+                        "configured", s.enabled()))
+                .toList();
     }
 
-    /** 按请求路由模型（未知/未配置模型快速失败，不进入流式流程）。 */
+    /** 按请求路由模型（迭代 8.5：id 空取默认；未启用/未知模型快速失败，不进入流式流程）。 */
     private ChatClient resolveClient(String model) {
-        if (model == null || model.isBlank() || model.equalsIgnoreCase("deepseek")) {
-            return chatClient;
+        if (model == null || model.isBlank()) {
+            return registry.defaultClient();
         }
-        if (model.equalsIgnoreCase("qwen")) {
-            if (!modelProperties.qwen().configured()) {
-                throw new IllegalArgumentException(
-                        "操作失败：通义千问未配置（设置 QWEN_API_KEY 环境变量后重启）。");
-            }
-            return qwenChatClient;
-        }
-        throw new IllegalArgumentException("操作失败：未知模型（" + model + "）。");
+        return registry.clientFor(model);
     }
 
     /** 非流式对话 */

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ConfigProvider, Layout, theme } from "antd";
+import { App as AntApp, ConfigProvider, Layout, theme } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import SessionList from "./components/SessionList";
 import ChatPanel from "./components/ChatPanel";
@@ -59,29 +59,31 @@ function App() {
       locale={zhCN}
       theme={{ algorithm: theme.defaultAlgorithm, token: { colorPrimary: "#1677ff" } }}
     >
-      <Layout style={{ height: "100vh" }}>
-        <Sider width={230} theme="light" style={{ borderRight: "1px solid #f0f0f0" }}>
-          <div className="app-brand">Vatica · 个人 AI 助理</div>
-          <SessionList
-            sessions={sessions}
-            activeId={active.id}
-            onSelect={setActiveId}
-            onNew={newSession}
-          />
-        </Sider>
-        <Content style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-          <ChatPanel
-            session={active}
-            streaming={streaming}
-            onStreamingChange={setStreaming}
-            onAppendMessage={appendMessage}
-            onUpdateMessage={updateMessage}
-          />
-        </Content>
-        <Sider width={300} theme="light" style={{ borderLeft: "1px solid #f0f0f0" }}>
-          <StepPanel />
-        </Sider>
-      </Layout>
+      <AntApp>
+        <Layout style={{ height: "100vh" }}>
+          <Sider width={230} theme="light" style={{ borderRight: "1px solid #f0f0f0" }}>
+            <div className="app-brand">Vatica · 个人 AI 助理</div>
+            <SessionList
+              sessions={sessions}
+              activeId={active.id}
+              onSelect={setActiveId}
+              onNew={newSession}
+            />
+          </Sider>
+          <Content style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+            <ChatPanel
+              session={active}
+              streaming={streaming}
+              onStreamingChange={setStreaming}
+              onAppendMessage={appendMessage}
+              onUpdateMessage={updateMessage}
+            />
+          </Content>
+          <Sider width={300} theme="light" style={{ borderLeft: "1px solid #f0f0f0" }}>
+            <StepPanel />
+          </Sider>
+        </Layout>
+      </AntApp>
     </ConfigProvider>
   );
 }
