@@ -103,23 +103,27 @@ curl -N -X POST localhost:8080/api/chat/stream -H "Content-Type: application/jso
 Vatica 同时是 MCP Server 与 MCP Client：
 
 - **Server**：16 个本地工具零改动经 Streamable HTTP 暴露在 `POST /mcp`（加 starter 自动转换 ToolCallback，任何 MCP 客户端可接入）
-- **Client**：具备接入第三方 MCP 服务的能力（原迭代 4 演示用的模拟天气服务已于 2026-08-15 删除，正在调研接入真实 MCP 服务，见 `任务进度.md` 迭代 4.5）
+- **Client**：已接入**高德地图官方 MCP**（`https://mcp.amap.com`，迭代 4.5，替代原模拟天气服务），15 个地图/天气工具与本地 16 个工具合并供 Agent 调用
 
-接入真实第三方 MCP 服务 = 在 `application.yml` 的 `spring.ai.mcp.client.streamable-http.connections` 下增加一个连接块（url + endpoint），无需改代码：
+#### 高德 MCP 接入（迭代 4.5）
 
-```yaml
-spring:
-  ai:
-    mcp:
-      client:
-        streamable-http:
-          connections:
-            amap:                    # 连接名，任意
-              url: https://<真实服务地址>
-              endpoint: /mcp
+```powershell
+setx AMAP_MCP_KEY <高德Web服务Key>   # console.amap.com 创建"Web服务"类型 Key，重启终端后生效
 ```
 
-- 远程工具经 `SyncMcpToolCallbackProvider` 自动发现并与本地 16 个工具合并进 Agent 的 defaultTools
+- 工具：`maps_weather`（天气/预报）、`maps_text_search` / `maps_around_search`（地点搜索）、`maps_geo` / `maps_regeocode`（地理编码）、驾车/步行/骑行/公交路径规划、距离测量、IP 定位等 15 个
+- 实测要点（curl + 全链路验证归档）：
+  - 端点参数名是 **`?key=`**（官方文档写 `api_key`，但网关只认 `key`，用错返回 INVALID_USER_KEY）
+  - 网关只接受 POST（GET 405），SDK 客户端自动降级为请求-响应模式；服务端无会话头（无状态）
+  - 协议协商 2025-03-26（SDK 自动处理）
+- 验证（Agent 经 MCP 调用真实天气数据）：
+
+```bash
+curl -N -X POST localhost:8080/api/chat/stream -H "Content-Type: application/json" \
+  --data-binary @payload.json    # {"message":"杭州今天天气怎么样？请用 maps_weather 查询后告诉我。"}
+```
+
+- 接其他第三方 MCP 服务 = 在 `application.yml` 的 `spring.ai.mcp.client.streamable-http.connections` 下增加连接块（url + endpoint），无需改代码
 - 注意：`spring.ai.mcp.server.protocol: STREAMABLE` 必须显式声明（缺失退回 SSE、/mcp 返回 404）；
   若配置了连接块，主应用启动时会连该服务——服务不在线时先注释掉对应连接块
 
