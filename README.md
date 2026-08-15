@@ -281,6 +281,19 @@ npm run tauri build                # NSIS 安装包 → target/release/bundle/ns
 4. **运行中终止**：长任务执行中点击终止 → 状态收敛 CANCELLED（协作式取消，不留半成品假装成功）
 5. **天气（MCP）**：配置 AMAP_MCP_KEY 后问"杭州今天天气怎么样"→ Agent 经高德 MCP 作答并注明数据来源
 
+### 迭代 8.5：模型配置中心（图形界面管理模型）
+
+对话区顶栏 **齿轮按钮** 打开模型设置：增删改模型槽位、测试连接、保存全部——**保存即生效，无需重启**。
+
+- **两种协议**，覆盖主流模型生态：
+  - **OpenAI 兼容**：DeepSeek / 通义千问 / Kimi / GLM / Ollama 本地端点等（换 base-url 即切换）
+  - **Anthropic**：Claude 及兼容端点
+- **每个槽位可配**：名称 / 标识 / base-url / API Key（本地端点可留空）/ 模型 ID / 温度 / 启用开关
+- **配置存储**：`data/models.json`（打包模式 `%APPDATA%\Vatica\data\`）——界面配置优先；未保存过时回退 yml/环境变量（DeepSeek + 通义默认槽位，与迭代 7 行为一致）
+- **默认模型 = 第一个启用的槽位**：对话、任务执行、规划、评测统一走它；模型选择器可临时切换
+- **测试连接**：用当前编辑内容直接测（不必先保存），失败原因（如 401 密钥无效）直接显示
+- 后端接口：`GET/PUT /api/models`、`POST /api/models/test`；模型清单 `GET /api/chat/models` 改为动态注册表驱动
+
 ### 迭代 2.5 新增配置（application.yml，均可调）
 
 | 配置 | 默认 | 说明 |
