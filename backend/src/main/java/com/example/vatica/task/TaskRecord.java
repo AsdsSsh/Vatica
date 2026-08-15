@@ -15,7 +15,7 @@ import jakarta.persistence.Table;
  * 任务持久化实体（迭代 5 I5-4）：计划与步骤结果以 JSON 存 TEXT 列
  * （步骤列表是文档型数据，没必要为每个步骤建表）；状态用枚举字符串列。
  *
- * <p>score / reworkCount 为迭代 5.5 质量闭环预留字段（Judge 评分、返工限次）。
+ * <p>score / reworkCount / verdict 为迭代 5.5 质量闭环字段（Judge 评分、自动返工限次、评测结论）。
  */
 @Entity
 @Table(name = "vatica_task")
@@ -55,6 +55,11 @@ public class TaskRecord {
     /** 迭代 5.5 预留：自动返工次数（限 2）。 */
     @Column(nullable = false)
     private int reworkCount = 0;
+
+    /** 迭代 5.5：最近一次评测结论（PASS/FAIL）。 */
+    @Enumerated(EnumType.STRING)
+    @Column(length = 16)
+    private TaskVerdict verdict;
 
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
@@ -147,6 +152,14 @@ public class TaskRecord {
 
     public void setReworkCount(int reworkCount) {
         this.reworkCount = reworkCount;
+    }
+
+    public TaskVerdict getVerdict() {
+        return verdict;
+    }
+
+    public void setVerdict(TaskVerdict verdict) {
+        this.verdict = verdict;
     }
 
     public Instant getCreatedAt() {

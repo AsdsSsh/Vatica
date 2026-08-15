@@ -11,19 +11,24 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.example.vatica.agent.ExecutorAgent;
+import com.example.vatica.agent.JudgeAgent;
 import com.example.vatica.agent.PlannerAgent;
+import com.example.vatica.config.JudgeProperties;
 import com.example.vatica.task.TaskPlan.TaskStep;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
- * 任务编排（迭代 5 I5-3）：创建（Planner）→ 审批（HITL）→ 逐步执行（Executor）→ 状态机流转 → 持久化。
+ * 任务编排（迭代 5 I5-3；迭代 5.5 I5.5-2/3）：创建（Planner）→ 审批（HITL）→ 逐步执行（Executor）
+ * → 评测（Judge）→ 状态机流转 → 持久化。
  *
  * <p>审批点有两级（面试核心：<b>HITL 是执行前人工审批，管"能不能干"</b>）：
  * <ol>
  *   <li>计划审批：PENDING → RUNNING（用户确认拆解结果后才开始执行）</li>
  *   <li>敏感步骤审批：执行到 needsApproval 步骤挂起 PENDING_APPROVAL → 用户批准后继续</li>
  * </ol>
- * REVIEW 段本迭代为占位（自动转 DONE），迭代 5.5 接入 Judge 评分后分流 RETRY / NEEDS_REVISION。
+ * 执行完进入 REVIEW 段（迭代 5.5，质量门禁管"干得好不好"）：Judge PASS → DONE；
+ * Judge FAIL → 自动返工 RETRY（限 max-auto-rework 次）→ 超限 NEEDS_REVISION 交人工。
+ * 人工返工入口 {@link #rework}（DONE / NEEDS_REVISION 均可，返工需重新审批副作用步骤）。
  */
 @Service
 public class TaskService {
@@ -32,13 +37,17 @@ public class TaskService {
 
     private final PlannerAgent plannerAgent;
     private final ExecutorAgent executorAgent;
+    private final JudgeAgent judgeAgent;
+    private final JudgeProperties judgeProps;
     private final TaskRecordRepository repository;
     private final ObjectMapper mapper;
 
-    public TaskService(PlannerAgent plannerAgent, ExecutorAgent executorAgent,
-            TaskRecordRepository repository, ObjectMapper mapper) {
+    public TaskService(PlannerAgent plannerAgent, ExecutorAgent executorAgent, JudgeAgent judgeAgent,
+            JudgeProperties judgeProps, TaskRecordRepository repository, ObjectMapper mapper) {
         this.plannerAgent = plannerAgent;
         this.executorAgent = executorAgent;
+        this.judgeAgent = judgeAgent;
+        this.judgeProps = judgeProps;
         this.repository = repository;
         this.mapper = mapper;
     }
@@ -100,7 +109,40 @@ public class TaskService {
         return repository.save(record);
     }
 
-    /** 从 currentStep 逐步执行：遇审批点挂起；全部完成 → REVIEW → DONE；异常 → FAILED。 */
+    /**
+     * 人工返工（迭代 5.5 I5.5-3）：DONE（已交付想重做）或 NEEDS_REVISION（评测不合格交人工）均可发起。
+     * 清空步骤结果与审批标记后重跑（副作用步骤需重新审批=可重入设计：已发邮件等副作用由人工确认是否重放）；
+     * 重置自动返工窗口（人工介入开启新一轮评测循环）。同步执行到下一个审批点或终态后返回。
+     */
+    @Transactional
+    public TaskRecord rework(String id) {
+        TaskRecord record = get(id);
+        switch (record.getStatus()) {
+            case NEEDS_REVISION -> {
+                TaskStateMachine.requireTransition(TaskStatus.NEEDS_REVISION, TaskStatus.RUNNING);
+                record.setStatus(TaskStatus.RUNNING);
+            }
+            case DONE -> {
+                TaskStateMachine.requireTransition(TaskStatus.DONE, TaskStatus.RETRY);
+                record.setStatus(TaskStatus.RETRY);
+                TaskStateMachine.requireTransition(TaskStatus.RETRY, TaskStatus.RUNNING);
+                record.setStatus(TaskStatus.RUNNING);
+            }
+            default -> throw new IllegalArgumentException(
+                    "操作失败：当前状态（" + record.getStatus() + "）不允许返工，仅 DONE / NEEDS_REVISION 可返工。");
+        }
+        TaskPlan plan = parse(record.getPlanJson());
+        resetPlanForRerun(record, plan);
+        record.setReworkCount(0);   // 人工返工重置自动返工窗口（新一轮评测循环）
+        record.setScore(null);
+        record.setVerdict(null);
+        record.setError(null);
+        repository.save(record);
+        executeUntilBlocked(record);
+        return repository.save(record);
+    }
+
+    /** 从 currentStep 逐步执行：遇审批点挂起；全部完成 → REVIEW 评测段；异常 → FAILED。 */
     private void executeUntilBlocked(TaskRecord record) {
         TaskPlan plan = parse(record.getPlanJson());
         List<String> previous = new ArrayList<>();
@@ -135,14 +177,62 @@ public class TaskService {
                 return;
             }
         }
-        // 全部完成：REVIEW 占位（迭代 5.5 换 Judge 分流），当前自动交付
+        // 全部完成：进入 REVIEW 评测段（迭代 5.5：Judge 评分分流）
         TaskStateMachine.requireTransition(record.getStatus(), TaskStatus.REVIEW);
         record.setStatus(TaskStatus.REVIEW);
         record.setCurrentStep(-1);
         record.setPendingStepId(-1);
-        TaskStateMachine.requireTransition(TaskStatus.REVIEW, TaskStatus.DONE);
-        record.setStatus(TaskStatus.DONE);
-        log.info("任务 {} 执行完成，交付", record.getId());
+        repository.save(record);
+        evaluateAndRoute(record, plan);
+    }
+
+    /** REVIEW 段：Judge 评分 → PASS 交付 DONE；FAIL 自动返工（限次）或超限 NEEDS_REVISION；评测异常 FAILED。 */
+    private void evaluateAndRoute(TaskRecord record, TaskPlan plan) {
+        JudgeAgent.Evaluation eval;
+        try {
+            eval = judgeAgent.evaluate(record.getGoal(), plan);
+        } catch (Exception e) {
+            log.error("任务 {} 评测异常", record.getId(), e);
+            TaskStateMachine.requireTransition(TaskStatus.REVIEW, TaskStatus.FAILED);
+            record.setStatus(TaskStatus.FAILED);
+            record.setError("评测异常：" + e.getMessage());
+            return;
+        }
+        record.setScore(eval.score());
+        record.setVerdict(eval.verdict());
+        if (eval.verdict() == TaskVerdict.PASS) {
+            TaskStateMachine.requireTransition(TaskStatus.REVIEW, TaskStatus.DONE);
+            record.setStatus(TaskStatus.DONE);
+            log.info("任务 {} 评测通过（{} 分），交付", record.getId(), eval.score());
+        } else if (record.getReworkCount() >= judgeProps.maxAutoRework()) {
+            TaskStateMachine.requireTransition(TaskStatus.REVIEW, TaskStatus.NEEDS_REVISION);
+            record.setStatus(TaskStatus.NEEDS_REVISION);
+            record.setError("评测不合格（" + eval.score() + " 分）：" + eval.summary()
+                    + "。自动返工已达上限 " + judgeProps.maxAutoRework() + " 次，请人工返工。");
+            log.info("任务 {} 评测不合格且自动返工超限，转人工", record.getId());
+        } else {
+            TaskStateMachine.requireTransition(TaskStatus.REVIEW, TaskStatus.RETRY);
+            record.setStatus(TaskStatus.RETRY);
+            record.setReworkCount(record.getReworkCount() + 1);
+            resetPlanForRerun(record, plan);
+            repository.save(record);
+            TaskStateMachine.requireTransition(TaskStatus.RETRY, TaskStatus.RUNNING);
+            record.setStatus(TaskStatus.RUNNING);
+            log.info("任务 {} 评测不合格（{} 分），第 {} 次自动返工", record.getId(),
+                    eval.score(), record.getReworkCount());
+            executeUntilBlocked(record);   // 递归重跑，深度由 max-auto-rework 兜底
+        }
+    }
+
+    /** 返工重跑前重置计划：清步骤结果、撤审批标记（副作用步骤需重新审批=可重入设计）。 */
+    private void resetPlanForRerun(TaskRecord record, TaskPlan plan) {
+        for (TaskStep step : plan.getSteps()) {
+            step.setResult(null);
+            step.setApproved(false);
+        }
+        record.setPlanJson(toJson(plan));
+        record.setCurrentStep(0);
+        record.setPendingStepId(-1);
     }
 
     private TaskPlan parse(String json) {

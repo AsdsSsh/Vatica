@@ -4,7 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -17,13 +20,16 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import com.example.vatica.agent.ExecutorAgent;
+import com.example.vatica.agent.JudgeAgent;
 import com.example.vatica.agent.PlannerAgent;
 import com.example.vatica.task.TaskPlan.TaskStep;
 
 /**
- * 任务编排集成测试（迭代 5 I5-3/I5-7）：真实 H2 持久化 + Mock 两个 Agent（LLM 行为 mock 化）。
+ * 任务编排集成测试（迭代 5 I5-3/I5-7；迭代 5.5 I5.5-2/3）：真实 H2 持久化 + Mock 三个 Agent（LLM 行为 mock 化）。
  * 覆盖：创建→计划审批→执行→敏感步骤审批点挂起→续批→REVIEW→DONE 全链路、
- * 执行失败→FAILED、非法审批拒绝、状态机在编排层被强制执行。
+ * 执行失败→FAILED、非法审批拒绝、状态机在编排层被强制执行；
+ * 5.5 新增：低分自动返工（限 2 次）→ 交付 / 超限 NEEDS_REVISION、人工返工（DONE/NEEDS_REVISION 两入口）、
+ * 返工副作用步骤重新审批（可重入设计）、评测异常→FAILED。
  */
 @SpringBootTest(properties = {
         "spring.ai.mcp.client.enabled=false",
@@ -38,6 +44,8 @@ class TaskServiceTest {
     PlannerAgent plannerAgent;
     @MockitoBean
     ExecutorAgent executorAgent;
+    @MockitoBean
+    JudgeAgent judgeAgent;
 
     @Autowired
     TaskService taskService;
@@ -48,13 +56,13 @@ class TaskServiceTest {
     void setUp() {
         repository.deleteAll();
         when(plannerAgent.plan("目标")).thenReturn(twoStepPlan());
+        when(executorAgent.executeStep(eq("目标"), any(), anyList())).thenReturn("完成该步骤");
+        when(judgeAgent.evaluate(anyString(), any())).thenReturn(new JudgeAgent.Evaluation(85, TaskVerdict.PASS, "合格"));
     }
 
-    /** 全链路：创建 PENDING → 审批计划执行第 1 步 → 第 2 步审批点挂起 → 续批 → DONE，全程落库。 */
+    /** 全链路：创建 PENDING → 审批计划执行第 1 步 → 第 2 步审批点挂起 → 续批 → 评测 PASS → DONE，全程落库。 */
     @Test
     void fullFlowWithApprovalPoint() {
-        when(executorAgent.executeStep(eq("目标"), any(), anyList())).thenReturn("完成该步骤");
-
         TaskRecord created = taskService.create("目标");
         assertThat(created.getStatus()).isEqualTo(TaskStatus.PENDING);
         assertThat(created.getCurrentStep()).isZero();
@@ -71,9 +79,14 @@ class TaskServiceTest {
         assertThat(done.getCurrentStep()).isEqualTo(-1);
         TaskPlan finalPlan = parsePlan(done);
         assertThat(finalPlan.getSteps().get(1).getResult()).isEqualTo("完成该步骤");
+        assertThat(done.getScore()).isEqualTo(85);
+        assertThat(done.getVerdict()).isEqualTo(TaskVerdict.PASS);
 
-        // 持久化验证：从库里重读状态一致
-        assertThat(repository.findById(created.getId()).orElseThrow().getStatus()).isEqualTo(TaskStatus.DONE);
+        // 持久化验证：从库里重读状态/评测一致
+        TaskRecord reloaded = repository.findById(created.getId()).orElseThrow();
+        assertThat(reloaded.getStatus()).isEqualTo(TaskStatus.DONE);
+        assertThat(reloaded.getVerdict()).isEqualTo(TaskVerdict.PASS);
+        assertThat(reloaded.getScore()).isEqualTo(85);
     }
 
     /** 步骤执行抛异常 → FAILED 并记录原因（不允许停在 RUNNING 假装成功）。 */
@@ -89,10 +102,134 @@ class TaskServiceTest {
         assertThat(failed.getError()).contains("步骤 1").contains("上游 API 超时");
     }
 
+    /** 5.5：低分 → 自动返工重跑 → 二评 PASS → DONE；reworkCount=1，执行器共被调用 2 轮。 */
+    @Test
+    void lowScoreAutoReworksThenPasses() {
+        when(plannerAgent.plan("目标")).thenReturn(oneStepPlan());
+        when(judgeAgent.evaluate(anyString(), any())).thenReturn(
+                new JudgeAgent.Evaluation(40, TaskVerdict.FAIL, "内容不完整"),
+                new JudgeAgent.Evaluation(80, TaskVerdict.PASS, "返工后合格"));
+
+        TaskRecord created = taskService.create("目标");
+        TaskRecord done = taskService.approve(created.getId());
+
+        assertThat(done.getStatus()).isEqualTo(TaskStatus.DONE);
+        assertThat(done.getReworkCount()).isEqualTo(1);
+        assertThat(done.getScore()).isEqualTo(80);
+        assertThat(done.getVerdict()).isEqualTo(TaskVerdict.PASS);
+        verify(executorAgent, times(2)).executeStep(eq("目标"), any(), anyList());
+    }
+
+    /** 5.5：连续低分 → 自动返工 2 次仍不合格 → NEEDS_REVISION 交人工（限次防死循环）。 */
+    @Test
+    void lowScoreTwiceExceedsLimitToNeedsRevision() {
+        when(plannerAgent.plan("目标")).thenReturn(oneStepPlan());
+        when(judgeAgent.evaluate(anyString(), any()))
+                .thenReturn(new JudgeAgent.Evaluation(30, TaskVerdict.FAIL, "始终不合格"));
+
+        TaskRecord created = taskService.create("目标");
+        TaskRecord needsRevision = taskService.approve(created.getId());
+
+        assertThat(needsRevision.getStatus()).isEqualTo(TaskStatus.NEEDS_REVISION);
+        assertThat(needsRevision.getReworkCount()).isEqualTo(2);
+        assertThat(needsRevision.getError()).contains("上限 2 次").contains("人工返工");
+        verify(executorAgent, times(3)).executeStep(eq("目标"), any(), anyList());   // 首轮 + 2 次返工
+    }
+
+    /** 5.5：NEEDS_REVISION 人工返工 → 重跑 → 二评 PASS → DONE；自动返工窗口被重置（reworkCount=0）。 */
+    @Test
+    void manualReworkFromNeedsRevisionResetsWindowAndPasses() {
+        when(plannerAgent.plan("目标")).thenReturn(oneStepPlan());
+        when(judgeAgent.evaluate(anyString(), any()))
+                .thenReturn(new JudgeAgent.Evaluation(30, TaskVerdict.FAIL, "始终不合格"));
+
+        TaskRecord created = taskService.create("目标");
+        TaskRecord needsRevision = taskService.approve(created.getId());
+        assertThat(needsRevision.getStatus()).isEqualTo(TaskStatus.NEEDS_REVISION);
+        assertThat(needsRevision.getReworkCount()).isEqualTo(2);
+
+        when(judgeAgent.evaluate(anyString(), any()))
+                .thenReturn(new JudgeAgent.Evaluation(90, TaskVerdict.PASS, "人工返工后合格"));
+
+        TaskRecord done = taskService.rework(created.getId());
+
+        assertThat(done.getStatus()).isEqualTo(TaskStatus.DONE);
+        assertThat(done.getReworkCount()).isZero();          // 人工返工重置自动返工窗口
+        assertThat(done.getScore()).isEqualTo(90);
+        assertThat(done.getVerdict()).isEqualTo(TaskVerdict.PASS);
+        assertThat(done.getError()).isNull();
+        verify(executorAgent, times(4)).executeStep(eq("目标"), any(), anyList());   // 首轮 + 2 返工 + 人工返工
+    }
+
+    /** 5.5：已交付 DONE 任务人工返工 → DONE→RETRY→RUNNING 重跑 → 再评测 PASS → DONE。 */
+    @Test
+    void manualReworkFromDoneReruns() {
+        when(plannerAgent.plan("目标")).thenReturn(oneStepPlan());
+
+        TaskRecord created = taskService.create("目标");
+        TaskRecord done = taskService.approve(created.getId());
+        assertThat(done.getStatus()).isEqualTo(TaskStatus.DONE);
+
+        TaskRecord redone = taskService.rework(created.getId());
+
+        assertThat(redone.getStatus()).isEqualTo(TaskStatus.DONE);
+        assertThat(redone.getReworkCount()).isZero();
+        assertThat(redone.getVerdict()).isEqualTo(TaskVerdict.PASS);
+        verify(executorAgent, times(2)).executeStep(eq("目标"), any(), anyList());
+    }
+
+    /** 5.5 可重入设计：返工清空步骤审批标记——副作用步骤（发邮件）重新挂起审批，由人工确认是否重放副作用。 */
+    @Test
+    void reworkRequiresReApprovalOfSideEffectSteps() {
+        TaskRecord created = taskService.create("目标");
+        taskService.approve(created.getId());                 // 第 1 步执行、第 2 步挂起
+        TaskRecord done = taskService.approve(created.getId());   // 续批 → 评测 PASS → DONE
+        assertThat(done.getStatus()).isEqualTo(TaskStatus.DONE);
+
+        TaskRecord redone = taskService.rework(created.getId());
+
+        assertThat(redone.getStatus()).isEqualTo(TaskStatus.PENDING_APPROVAL);
+        assertThat(redone.getPendingStepId()).isEqualTo(2);   // 副作用步骤重新要求审批
+        TaskPlan plan = parsePlan(redone);
+        assertThat(plan.getSteps().get(1).isApproved()).isFalse();
+        assertThat(plan.getSteps().get(1).getResult()).isNull();
+    }
+
+    /** 5.5：非 DONE/NEEDS_REVISION 状态不允许人工返工（PENDING 与 FAILED 均拒绝）。 */
+    @Test
+    void reworkOnNonReworkableTaskRejected() {
+        TaskRecord created = taskService.create("目标");
+        assertThatThrownBy(() -> taskService.rework(created.getId()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("不允许返工");
+
+        when(executorAgent.executeStep(eq("目标"), any(), anyList()))
+                .thenThrow(new IllegalStateException("上游 API 超时"));
+        TaskRecord failedTask = taskService.create("目标");
+        taskService.approve(failedTask.getId());
+        TaskRecord reloaded = repository.findById(failedTask.getId()).orElseThrow();
+        assertThat(reloaded.getStatus()).isEqualTo(TaskStatus.FAILED);
+        assertThatThrownBy(() -> taskService.rework(failedTask.getId()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("不允许返工");
+    }
+
+    /** 5.5：评测阶段异常（如 LLM 不可用）→ REVIEW→FAILED 并记录原因。 */
+    @Test
+    void judgeExceptionMarksFailed() {
+        when(plannerAgent.plan("目标")).thenReturn(oneStepPlan());
+        when(judgeAgent.evaluate(anyString(), any())).thenThrow(new IllegalStateException("评测服务不可用"));
+
+        TaskRecord created = taskService.create("目标");
+        TaskRecord failed = taskService.approve(created.getId());
+
+        assertThat(failed.getStatus()).isEqualTo(TaskStatus.FAILED);
+        assertThat(failed.getError()).contains("评测异常");
+    }
+
     /** 终态任务审批 → 拒绝（状态机约束生效）。 */
     @Test
     void approveOnTerminalTaskRejected() {
-        when(executorAgent.executeStep(eq("目标"), any(), anyList())).thenReturn("完成");
         TaskRecord created = taskService.create("目标");
         taskService.approve(created.getId());
         taskService.approve(created.getId());
@@ -118,10 +255,11 @@ class TaskServiceTest {
                 .hasMessageContaining("不存在");
     }
 
-    /** 最近任务按创建时间倒序。 */
+    /** 最近任务按创建时间倒序（两次创建间隔 >1ms，避免 createdAt 同刻导致排序不稳定）。 */
     @Test
-    void recentListsNewestFirst() {
+    void recentListsNewestFirst() throws InterruptedException {
         TaskRecord first = taskService.create("目标1");
+        Thread.sleep(5);
         TaskRecord second = taskService.create("目标2");
 
         List<TaskRecord> recent = taskService.recent(20);
@@ -136,6 +274,12 @@ class TaskServiceTest {
         plan.setSteps(List.of(
                 new TaskStep(1, "读取数据文件", false),
                 new TaskStep(2, "发送邮件通知", true)));
+        return plan;
+    }
+
+    private static TaskPlan oneStepPlan() {
+        TaskPlan plan = new TaskPlan();
+        plan.setSteps(List.of(new TaskStep(1, "生成统计报告", false)));
         return plan;
     }
 

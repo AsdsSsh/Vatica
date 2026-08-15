@@ -13,12 +13,12 @@ import java.util.Set;
  * <p>合法流转图：
  * <pre>
  * PENDING ──审批计划──▶ RUNNING ──敏感步骤──▶ PENDING_APPROVAL ──审批步骤──▶ RUNNING
- *    │                    │  └──全部完成──▶ REVIEW ──▶ DONE（5.5 接入 Judge 后分流 RETRY/NEEDS_REVISION）
- *    └──执行失败──▶ FAILED ◀──执行异常──────┘                └──▶ RETRY ──▶ RUNNING（5.5 自动返工）
- *                                                             └──▶ NEEDS_REVISION ──▶ RUNNING（5.5 人工返工）
+ *    │                    │  └──全部完成──▶ REVIEW ──Judge PASS──▶ DONE ──人工返工──▶ RETRY（5.5）
+ *    └──执行失败──▶ FAILED ◀──执行异常──────┘   └──Judge FAIL──▶ RETRY ──▶ RUNNING（5.5 自动返工，限 max-auto-rework 次）
+ *                                                              └──超限/异常──▶ NEEDS_REVISION ──人工返工──▶ RUNNING（5.5）
  * </pre>
- * REVIEW→RETRY/NEEDS_REVISION 与 RETRY/NEEDS_REVISION→RUNNING 为迭代 5.5 预留：
- * 状态与流转在 5 定义并单测锁死，执行逻辑 5.5 落地。
+ * 迭代 5.5 落地：REVIEW 段由 Judge 评分分流（PASS→DONE / FAIL→RETRY / 超限→NEEDS_REVISION），
+ * DONE→RETRY 为"已交付任务人工返工重开"（唯一从 DONE 出发的流转）。
  */
 public final class TaskStateMachine {
 
@@ -35,7 +35,7 @@ public final class TaskStateMachine {
         allow(TaskStatus.PENDING_APPROVAL, TaskStatus.RUNNING); // 步骤审批通过，继续执行
         allow(TaskStatus.PENDING_APPROVAL, TaskStatus.FAILED);  // 审批期间异常
 
-        allow(TaskStatus.REVIEW, TaskStatus.DONE);              // 本迭代：评测段占位，自动交付
+        allow(TaskStatus.REVIEW, TaskStatus.DONE);              // 5.5：Judge PASS 交付
         allow(TaskStatus.REVIEW, TaskStatus.RETRY);             // 5.5：Judge 低分自动返工
         allow(TaskStatus.REVIEW, TaskStatus.NEEDS_REVISION);    // 5.5：返工超限交人工
         allow(TaskStatus.REVIEW, TaskStatus.FAILED);            // 评测异常
@@ -46,6 +46,8 @@ public final class TaskStateMachine {
 
         allow(TaskStatus.NEEDS_REVISION, TaskStatus.RUNNING);   // 5.5：人工返工重跑
         allow(TaskStatus.NEEDS_REVISION, TaskStatus.FAILED);
+
+        allow(TaskStatus.DONE, TaskStatus.RETRY);               // 5.5：已交付任务人工返工重开
     }
 
     private TaskStateMachine() {

@@ -8,12 +8,13 @@ import java.util.EnumSet;
 import org.junit.jupiter.api.Test;
 
 /**
- * 任务状态机单测（迭代 5 I5-7）：合法流转全部命中 + 非法流转全部拒绝 + 终态闭包。
+ * 任务状态机单测（迭代 5 I5-7；迭代 5.5 增补 DONE→RETRY）：合法流转全部命中 +
+ * 非法流转全部拒绝 + 终态闭包（FAILED 完全闭合，DONE 仅允许人工返工重开）。
  * 用穷举法（8×8 全组合断言），避免"只测写过的用例"漏掉意外放行。
  */
 class TaskStateMachineTest {
 
-    /** 合法流转全命中（含 5.5 预留的 REVIEW→RETRY/NEEDS_REVISION、RETRY/NEEDS_REVISION→RUNNING）。 */
+    /** 合法流转全命中（含 5.5 的 REVIEW→RETRY/NEEDS_REVISION、RETRY/NEEDS_REVISION→RUNNING、DONE→RETRY）。 */
     @Test
     void legalTransitions() {
         assertLegal(TaskStatus.PENDING, TaskStatus.RUNNING);
@@ -37,6 +38,8 @@ class TaskStateMachineTest {
 
         assertLegal(TaskStatus.NEEDS_REVISION, TaskStatus.RUNNING);
         assertLegal(TaskStatus.NEEDS_REVISION, TaskStatus.FAILED);
+
+        assertLegal(TaskStatus.DONE, TaskStatus.RETRY);
     }
 
     /** 穷举：除上述合法流转外，其余全部非法（包括从终态出发、回退 PENDING 等）。 */
@@ -57,15 +60,21 @@ class TaskStateMachineTest {
         }
     }
 
-    /** 终态闭包：DONE / FAILED 不接受任何流出。 */
+    /** 终态闭包：FAILED 无任何流出；DONE 仅允许人工返工重开（→RETRY，5.5 增补），其余全部拒绝。 */
     @Test
     void terminalStatesHaveNoOutgoingTransitions() {
-        for (TaskStatus terminal : EnumSet.of(TaskStatus.DONE, TaskStatus.FAILED)) {
-            assertThat(terminal.isTerminal()).isTrue();
-            for (TaskStatus to : EnumSet.allOf(TaskStatus.class)) {
-                assertThat(TaskStateMachine.canTransition(terminal, to)).isFalse();
+        for (TaskStatus to : EnumSet.allOf(TaskStatus.class)) {
+            assertThat(TaskStateMachine.canTransition(TaskStatus.FAILED, to)).isFalse();
+        }
+        assertThat(TaskStateMachine.canTransition(TaskStatus.DONE, TaskStatus.RETRY)).isTrue();
+        for (TaskStatus to : EnumSet.allOf(TaskStatus.class)) {
+            if (to != TaskStatus.RETRY) {
+                assertThat(TaskStateMachine.canTransition(TaskStatus.DONE, to)).isFalse();
             }
         }
+        // 业务终态语义不变：DONE/FAILED 不再接受审批/执行推进，DONE→RETRY 是唯一的人工返工例外
+        assertThat(TaskStatus.DONE.isTerminal()).isTrue();
+        assertThat(TaskStatus.FAILED.isTerminal()).isTrue();
         assertThat(TaskStatus.RUNNING.isTerminal()).isFalse();
     }
 
@@ -85,7 +94,8 @@ class TaskStateMachineTest {
                     || to == TaskStatus.FAILED;
             case RETRY -> to == TaskStatus.RUNNING || to == TaskStatus.NEEDS_REVISION || to == TaskStatus.FAILED;
             case NEEDS_REVISION -> to == TaskStatus.RUNNING || to == TaskStatus.FAILED;
-            case DONE, FAILED -> false;
+            case DONE -> to == TaskStatus.RETRY;
+            case FAILED -> false;
         };
     }
 

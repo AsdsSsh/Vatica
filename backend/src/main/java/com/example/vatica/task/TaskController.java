@@ -43,6 +43,12 @@ public class TaskController {
         return detail(taskService.approve(id));
     }
 
+    /** 人工返工（迭代 5.5）：DONE（想重做）或 NEEDS_REVISION（评测不合格）→ 重跑并同步推进。 */
+    @PostMapping("/{id}/rework")
+    public Map<String, Object> rework(@PathVariable String id) {
+        return detail(taskService.rework(id));
+    }
+
     /** 单任务详情。 */
     @GetMapping("/{id}")
     public Map<String, Object> get(@PathVariable String id) {
@@ -67,6 +73,10 @@ public class TaskController {
         } catch (Exception e) {
             detail.put("plan", "（计划数据不可读）");
         }
+        // 迭代 5.5：质量闭环字段（前端"执行准确率"展示用）
+        detail.put("score", r.getScore());
+        detail.put("verdict", r.getVerdict() == null ? null : r.getVerdict().name());
+        detail.put("reworkCount", r.getReworkCount());
         if (r.getError() != null) {
             detail.put("error", r.getError());
         }

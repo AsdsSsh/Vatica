@@ -144,7 +144,7 @@ curl localhost:8080/api/task/<任务id>
 curl localhost:8080/api/task
 ```
 
-- 状态机：PENDING → RUNNING → PENDING_APPROVAL → REVIEW → DONE / FAILED（RETRY/NEEDS_REVISION 为 5.5 质量闭环预留）
+- 状态机：PENDING → RUNNING → PENDING_APPROVAL → REVIEW → DONE / FAILED，低分自动返工 RETRY（限 2 次）→ 超限 NEEDS_REVISION；DONE 可人工返工重开
 - **MySQL 配置**（迭代 5 起后端启动依赖 MySQL，凭据走环境变量、不进 git）：
   ```powershell
   # 本机 MySQL（默认）：建库建用户后设置
@@ -156,6 +156,28 @@ curl localhost:8080/api/task
   表结构由 JPA 自动创建（ddl-auto: update）；测试环境用 H2（MySQL 兼容模式），单测零外部依赖
 - 会话记忆已持久化：多轮对话重启后仍可引用前文（内存滑窗热缓存 + MySQL 落库）
 
+### 迭代 5.5：质量闭环（LLM-as-Judge 评分 + 自动/人工返工）
+
+任务执行完进入 REVIEW 段：Judge Agent 按评分卡打分（完整性 30 + 正确性 50 + 格式 20 = 100），
+**分数 ≥ 阈值（默认 70）交付 DONE**；低分**自动返工**（限 2 次，防死循环）；超限 **NEEDS_REVISION 交人工**。
+评测结果（score / verdict / reworkCount）落库并在任务详情接口返回：
+
+```bash
+# 低分任务自动返工 2 次后仍未达标 → NEEDS_REVISION（error 里带评分与原因）
+curl -X POST localhost:8080/api/task/<任务id>/approve
+
+# 人工返工：DONE（想重做）或 NEEDS_REVISION 均可，重跑并重新评测
+curl -X POST localhost:8080/api/task/<任务id>/rework
+
+# 任务详情含执行准确率
+curl localhost:8080/api/task/<任务id>   # → {"score":100,"verdict":"PASS","reworkCount":0, ...}
+```
+
+- 规则校验先行：步骤无结果 → 直接 FAIL 0 分（不烧 token）；LLM 评分不可解析 → 规则兜底 PASS（score=null 如实标注）
+- **返工可重入设计**：返工清空审批标记，副作用步骤（发邮件/覆盖文件）重新挂起审批——由人工确认是否重放副作用
+- 配置（`vatica.judge.*`，均可调）：`pass-threshold` 默认 70；`max-auto-rework` 默认 2
+- 实测：周报任务 Judge 100 分交付；计算任务执行器编造订单数据（真实幻觉）被 Judge 连续 3 轮抓住（20/40/25 分）并拒绝交付——质量门禁如实拦截
+
 ### 迭代 2.5 新增配置（application.yml，均可调）
 
 | 配置 | 默认 | 说明 |
@@ -165,3 +187,5 @@ curl localhost:8080/api/task
 | `vatica.chat.memory.max-chars` | 16000 | 单会话历史字符数上限（token 的工程近似） |
 | `vatica.chat.memory.max-sessions` | 64 | 会话总数上限（LRU 淘汰） |
 | `vatica.tool.max-calls-per-request` | 20 | 单次请求工具调用次数护栏（防死循环烧 token） |
+| `vatica.judge.pass-threshold` | 70 | Judge 评分 ≥ 阈值判 PASS 交付（迭代 5.5） |
+| `vatica.judge.max-auto-rework` | 2 | 低分自动返工上限，超限 NEEDS_REVISION 交人工（迭代 5.5） |

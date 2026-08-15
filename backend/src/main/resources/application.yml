@@ -89,7 +89,7 @@ vatica:
 
 # ===== 对话层配置（迭代 2.5）=====
 # SSE 超时保护：上游挂起/客户端假死时主动收尾，避免连接无限期挂起（默认 5 分钟）
-# 会话短期记忆（内存版）：单会话消息数滑动窗口 + 会话总数 LRU 淘汰；持久化留迭代 5
+# 会话短期记忆（内存版）：单会话消息数滑动窗口 + 会话总数 LRU 淘汰；持久化迭代 5 已落地（JPA）
   chat:
     sse:
       timeout: 5m
@@ -97,6 +97,10 @@ vatica:
       max-messages: 20
       max-sessions: 64
       max-chars: 16000     # 单会话历史字符数上限（token 的工程近似）
+  # ===== 质量评测（迭代 5.5，LLM-as-Judge）=====
+  judge:
+    pass-threshold: 70      # Judge 评分 >= 阈值判 PASS 交付；低分自动返工
+    max-auto-rework: 2      # 低分自动返工上限（防死循环）；超限 NEEDS_REVISION 交人工
 
 # 调试工具调用轮次（需要时取消注释，默认关闭）
 # logging:
