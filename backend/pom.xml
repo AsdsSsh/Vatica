@@ -130,31 +130,10 @@
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
 				<configuration>
-					<!-- 迭代 4：存在两个主类（VaticaApplication / 天气 MCP 服务），默认 run 主应用；
-					     天气服务用 mvn spring-boot:run -Pweather 启动（见下方 profile，
-					     -Dspring-boot.run.main-class 实测被本配置覆盖，故用 profile 切换） -->
 					<mainClass>com.example.vatica.VaticaApplication</mainClass>
 				</configuration>
 			</plugin>
 		</plugins>
 	</build>
-
-	<!-- 迭代 4：weather profile 把 spring-boot:run 的主类切换为天气 MCP 服务 -->
-	<profiles>
-		<profile>
-			<id>weather</id>
-			<build>
-				<plugins>
-					<plugin>
-						<groupId>org.springframework.boot</groupId>
-						<artifactId>spring-boot-maven-plugin</artifactId>
-						<configuration>
-							<mainClass>com.example.vatica.weather.WeatherMcpApplication</mainClass>
-						</configuration>
-					</plugin>
-				</plugins>
-			</build>
-		</profile>
-	</profiles>
 
 </project>

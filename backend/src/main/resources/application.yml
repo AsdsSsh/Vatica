@@ -35,15 +35,13 @@ spring:
         # 不写会退回 SSE 传输、POST /mcp 收 JSON-RPC 返回 404（迭代 4 实测）
         protocol: STREAMABLE
         instructions: Vatica 个人助理工具集：文件读写、文档生成（Word/Excel）、日历、待办、邮件。
-      client:
-        # 客户端：接入第三方 MCP 服务。weather = 模拟天气服务（独立进程 8081，见 application-weather.yml）
-        # 注意：client.initialized 默认 true，主应用启动时会连 weather——须先启动天气服务；
-        # 若暂不使用 MCP 演示，注释掉整个 connections.weather 块即可（不连任何服务也能正常启动）
-        streamable-http:
-          connections:
-            weather:
-              url: http://localhost:8081
-              endpoint: /mcp
+      # 客户端：待接入真实 MCP 服务（原模拟天气服务已删除，见任务进度迭代 4.5）
+      # 接入方式：在下方 streamable-http.connections 增加连接块即可，例：
+      #   streamable-http:
+      #     connections:
+      #       amap:
+      #         url: https://<真实服务地址>
+      #         endpoint: /mcp
     # ═══ 多模型切换（只改配置，不动代码）═══
     # DeepSeek 与通义千问都兼容 OpenAI 协议：换模型 = 换 base-url + model + api-key
     # 旧别名 deepseek-chat/deepseek-reasoner 已于 2026-07-24 弃用，改用 v4 系列 ID：deepseek-v4-flash / deepseek-v4-pro
