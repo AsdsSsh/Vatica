@@ -122,4 +122,53 @@ class PlannerAgentTest {
 
         assertThat(plan.getSteps()).hasSize(PlannerAgent.MAX_STEPS);
     }
+
+    /** 迭代 6：显式 [] 声明并行 → 依赖归一化为空列表。 */
+    @Test
+    void normalizesExplicitParallelDependencies() {
+        when(callSpec.content()).thenReturn("""
+                {"steps":[
+                  {"description":"查日历","needsApproval":false,"dependsOn":[]},
+                  {"description":"查天气","needsApproval":false,"dependsOn":[]}
+                ]}""");
+
+        TaskPlan plan = planner.plan("目标");
+
+        assertThat(plan.getSteps().get(0).getDependsOn()).isEmpty();
+        assertThat(plan.getSteps().get(1).getDependsOn()).isEmpty();
+    }
+
+    /** 迭代 6：字段缺失 → 顺序执行（依赖上一步）；首步无依赖。 */
+    @Test
+    void missingDependsOnDefaultsSequential() {
+        when(callSpec.content()).thenReturn("""
+                {"steps":[
+                  {"description":"A","needsApproval":false},
+                  {"description":"B","needsApproval":false},
+                  {"description":"C","needsApproval":false}
+                ]}""");
+
+        TaskPlan plan = planner.plan("目标");
+
+        assertThat(plan.getSteps().get(0).getDependsOn()).isEmpty();
+        assertThat(plan.getSteps().get(1).getDependsOn()).containsExactly(1);
+        assertThat(plan.getSteps().get(2).getDependsOn()).containsExactly(2);
+    }
+
+    /** 迭代 6：声明合法依赖 → 保留并随重编号生效；非法引用 → 保守退回顺序执行。 */
+    @Test
+    void validatesDeclaredDependencies() {
+        when(callSpec.content()).thenReturn("""
+                {"steps":[
+                  {"description":"A","needsApproval":false,"dependsOn":[]},
+                  {"description":"B","needsApproval":false,"dependsOn":[1]},
+                  {"description":"C","needsApproval":false,"dependsOn":[99,-1]}
+                ]}""");
+
+        TaskPlan plan = planner.plan("目标");
+
+        assertThat(plan.getSteps().get(1).getDependsOn()).containsExactly(1);
+        // 声明的依赖全部非法 → 不授予并行，退回依赖上一步
+        assertThat(plan.getSteps().get(2).getDependsOn()).containsExactly(2);
+    }
 }

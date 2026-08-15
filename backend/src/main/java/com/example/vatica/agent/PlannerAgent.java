@@ -1,5 +1,6 @@
 package com.example.vatica.agent;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -38,12 +39,14 @@ public class PlannerAgent {
 
     private static final String SYSTEM_PROMPT = """
             你是任务规划 Agent。把用户目标拆解为可执行的步骤，只输出一个 JSON 对象（不要 markdown 代码块、不要任何解释文字），格式：
-            {"steps":[{"description":"步骤描述：具体、可执行、写明要调用哪个工具","needsApproval":false}]}
+            {"steps":[{"description":"步骤描述：具体、可执行、写明要调用哪个工具","needsApproval":false,"dependsOn":[]}]}
             规则：
             1. 步骤 1-8 个，按执行顺序排列；
             2. 涉及发送邮件、覆盖用户已有文件、删除数据等不可逆操作的步骤，needsApproval 必须为 true，其余为 false；
             3. 涉及具体时间/地点/数字的步骤，描述里注明"数据必须来自工具返回，不得编造"；
-            4. 不要发明不存在的工具，只用系统提供的工具（read_file/write_file/list_files/calculator/text_stats/create_word_report/create_excel_stats/calendar_*/todo_*/mail_*）。""";
+            4. 没有先后依赖的步骤声明可并行：dependsOn 填依赖的前序步骤编号列表（从 1 开始、只能引用编号更小的步骤）；
+               完全独立的步骤填 []（例如两个互不依赖的查询步骤都写 []）；省略该字段 = 默认依赖上一步（顺序执行）；
+            5. 不要发明不存在的工具，只用系统提供的工具（read_file/write_file/list_files/calculator/text_stats/create_word_report/create_excel_stats/calendar_*/todo_*/mail_*）。""";
 
     private final ChatClient plannerClient;
     private final ObjectMapper mapper;
@@ -89,7 +92,7 @@ public class PlannerAgent {
         return plan;
     }
 
-    /** 归一化：重编号、截断超长计划、清空结果字段。 */
+    /** 归一化：重编号、截断超长计划、清空结果字段、解析依赖（迭代 6）。 */
     private static TaskPlan normalize(TaskPlan plan) {
         List<TaskStep> steps = plan.getSteps();
         if (steps.size() > MAX_STEPS) {
@@ -97,11 +100,37 @@ public class PlannerAgent {
         }
         int i = 1;
         for (TaskStep step : steps) {
-            step.setId(i++);
+            step.setId(i);
             step.setResult(null);
+            step.setDependsOn(normalizeDependencies(step.getDependsOn(), i));
+            i++;
         }
         plan.setSteps(steps);
         return plan;
+    }
+
+    /**
+     * 依赖归一化（迭代 6）：null（字段缺失）= 顺序执行（依赖上一步）；
+     * 显式 [] = 与步骤 1 并行；显式声明则校验（去重、只允许引用编号更小的步骤），
+     * 全部非法 → 保守退回顺序执行（模型声明了依赖却写错，不应授予并行）。
+     */
+    private static List<Integer> normalizeDependencies(List<Integer> raw, int stepId) {
+        if (raw == null) {
+            return stepId <= 1 ? List.of() : List.of(stepId - 1);
+        }
+        if (raw.isEmpty()) {
+            return List.of();   // 显式 [] = 与步骤 1 并行
+        }
+        List<Integer> valid = new ArrayList<>();
+        for (Integer dep : raw) {
+            if (dep != null && dep >= 1 && dep < stepId && !valid.contains(dep)) {
+                valid.add(dep);
+            }
+        }
+        if (valid.isEmpty() && stepId > 1) {
+            return List.of(stepId - 1);
+        }
+        return List.copyOf(valid);
     }
 
     private static String snippet(String raw) {

@@ -12,8 +12,8 @@
 
 | 端 | 技术 |
 |---|---|
-| 后端 | Spring Boot 4.1 + Spring AI 2.0 + MCP Java SDK + Apache POI + JavaMail（Java 21） |
-| 前端 | Tauri 2 + React 19（桌面应用） |
+| 后端 | Spring Boot 4.1 + Spring AI 2.0 + MCP Java SDK + Apache POI + JavaMail（Java 21，虚拟线程并行） |
+| 前端 | Tauri 2 + React 19 + Ant Design 6 + @uiw/react-md-editor（桌面应用） |
 | 模型 | DeepSeek（OpenAI 兼容 API，可换通义千问） |
 | 测试 | JUnit 5 + AssertJ（工具层/状态机单测）+ GreenMail（邮件集成测试） |
 
@@ -54,6 +54,19 @@
   ```json
   {"message": "我叫什么名字？", "sessionId": "s1"}
   ```
+
+### 快速开始（前端，迭代 6 起）
+
+```powershell
+cd frontend
+npm install
+npm run tauri dev        # 桌面窗口（先按上方步骤启动后端）
+# 或只用浏览器调试三栏 UI：
+npm run dev              # http://localhost:1420
+```
+
+- 三栏布局：左会话列表 | 中对话区（SSE 流式 Markdown 打字机 + 停止按钮） | 右任务面板（最近任务与状态）
+- CORS 已放行 `tauri://localhost` 与开发端口（1420/5173）；前端 API 基地址写死 `http://localhost:8080`（sidecar 模式）
 
 ### 迭代 3：一句话生成文档（演示场景）
 
@@ -177,6 +190,23 @@ curl localhost:8080/api/task/<任务id>   # → {"score":100,"verdict":"PASS","r
 - **返工可重入设计**：返工清空审批标记，副作用步骤（发邮件/覆盖文件）重新挂起审批——由人工确认是否重放副作用
 - 配置（`vatica.judge.*`，均可调）：`pass-threshold` 默认 70；`max-auto-rework` 默认 2
 - 实测：周报任务 Judge 100 分交付；计算任务执行器编造订单数据（真实幻觉）被 Judge 连续 3 轮抓住（20/40/25 分）并拒绝交付——质量门禁如实拦截
+
+### 迭代 6：多 Agent 并行执行（后端）
+
+Planner 声明步骤依赖 → 拓扑分层 → **同层步骤并行执行**（虚拟线程 + CompletableFuture），审批点作为屏障独占一波：
+
+```json
+// Planner 输出的计划 JSON（dependsOn：[]=与步骤 1 并行；省略=依赖上一步；只允许引用编号更小的步骤）
+{"steps":[
+  {"description":"list_files 扫描 data 目录","needsApproval":false,"dependsOn":[]},
+  {"description":"read_file 读取周记录","needsApproval":false,"dependsOn":[]},
+  {"description":"生成周报 Word（覆盖需审批）","needsApproval":true,"dependsOn":[1,2]}
+]}
+```
+
+- 波次调度（WaveScheduler）：层级 = 1 + max(依赖层级)；同层一波并行、依赖链串行；未批准审批步骤独占一波（并行不绕过 HITL）
+- 老计划兼容：无 dependsOn 字段（迭代 5/5.5 落库）按顺序执行，行为不变
+- 虚拟线程执行器 Bean：`Executors.newVirtualThreadPerTaskExecutor()`，每步骤一虚拟线程
 
 ### 迭代 2.5 新增配置（application.yml，均可调）
 

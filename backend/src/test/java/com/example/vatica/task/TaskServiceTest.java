@@ -11,6 +11,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -227,6 +229,49 @@ class TaskServiceTest {
         assertThat(failed.getError()).contains("评测异常");
     }
 
+    /** 6：并行波并发执行证明——两步骤互相等待对方进场（门闩）；顺序执行会超时导致 FAILED。 */
+    @Test
+    void parallelWaveRunsConcurrently() throws InterruptedException {
+        when(plannerAgent.plan("目标")).thenReturn(parallelPlan());
+        CountDownLatch bothEntered = new CountDownLatch(2);
+        when(executorAgent.executeStep(eq("目标"), any(), anyList())).thenAnswer(inv -> {
+            bothEntered.countDown();
+            if (!bothEntered.await(2, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("并行波未并发执行");
+            }
+            return "完成";
+        });
+
+        TaskRecord created = taskService.create("目标");
+        TaskRecord done = taskService.approve(created.getId());
+
+        assertThat(done.getStatus()).isEqualTo(TaskStatus.DONE);
+        assertThat(bothEntered.await(3, TimeUnit.SECONDS)).isTrue();
+        verify(executorAgent, times(2)).executeStep(eq("目标"), any(), anyList());
+        TaskPlan plan = parsePlan(done);
+        assertThat(plan.getSteps().get(0).getResult()).isEqualTo("完成");
+        assertThat(plan.getSteps().get(1).getResult()).isEqualTo("完成");
+    }
+
+    /** 6：审批点屏障拆分并行波——先执行步骤 1、挂起审批步骤 2；续批后步骤 2、3 并行执行完。 */
+    @Test
+    void approvalBarrierInParallelPlanThenRejoinWave() {
+        when(plannerAgent.plan("目标")).thenReturn(parallelPlanWithApproval());
+
+        TaskRecord created = taskService.create("目标");
+        TaskRecord hung = taskService.approve(created.getId());
+        assertThat(hung.getStatus()).isEqualTo(TaskStatus.PENDING_APPROVAL);
+        assertThat(hung.getPendingStepId()).isEqualTo(2);
+        assertThat(parsePlan(hung).getSteps().get(0).getResult()).isEqualTo("完成该步骤");
+
+        TaskRecord done = taskService.approve(created.getId());
+        assertThat(done.getStatus()).isEqualTo(TaskStatus.DONE);
+        TaskPlan plan = parsePlan(done);
+        assertThat(plan.getSteps().get(1).getResult()).isEqualTo("完成该步骤");
+        assertThat(plan.getSteps().get(2).getResult()).isEqualTo("完成该步骤");
+        verify(executorAgent, times(3)).executeStep(eq("目标"), any(), anyList());
+    }
+
     /** 终态任务审批 → 拒绝（状态机约束生效）。 */
     @Test
     void approveOnTerminalTaskRejected() {
@@ -280,6 +325,30 @@ class TaskServiceTest {
     private static TaskPlan oneStepPlan() {
         TaskPlan plan = new TaskPlan();
         plan.setSteps(List.of(new TaskStep(1, "生成统计报告", false)));
+        return plan;
+    }
+
+    /** 两个互不依赖的步骤（迭代 6 并行计划）。 */
+    private static TaskPlan parallelPlan() {
+        TaskPlan plan = new TaskPlan();
+        TaskStep s1 = new TaskStep(1, "查询日历", false);
+        s1.setDependsOn(List.of());
+        TaskStep s2 = new TaskStep(2, "查询天气", false);
+        s2.setDependsOn(List.of());
+        plan.setSteps(List.of(s1, s2));
+        return plan;
+    }
+
+    /** 三个同层步骤、中间带审批点（迭代 6 屏障拆分：先 1、挂起 2、续批后 2+3 并行）。 */
+    private static TaskPlan parallelPlanWithApproval() {
+        TaskPlan plan = new TaskPlan();
+        TaskStep s1 = new TaskStep(1, "读取数据", false);
+        s1.setDependsOn(List.of());
+        TaskStep s2 = new TaskStep(2, "发送邮件通知", true);
+        s2.setDependsOn(List.of());
+        TaskStep s3 = new TaskStep(3, "生成周报", false);
+        s3.setDependsOn(List.of());
+        plan.setSteps(List.of(s1, s2, s3));
         return plan;
     }
 

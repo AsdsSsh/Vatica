@@ -32,6 +32,8 @@ public class TaskPlan {
         private boolean approved;
         /** 执行结果摘要（执行完回填）。 */
         private String result;
+        /** 迭代 6：依赖的前序步骤编号（1 起）。null=依赖上一步（顺序执行）；空列表=与步骤 1 并行。 */
+        private List<Integer> dependsOn;
 
         public TaskStep() {
         }
@@ -80,6 +82,14 @@ public class TaskPlan {
 
         public void setResult(String result) {
             this.result = result;
+        }
+
+        public List<Integer> getDependsOn() {
+            return dependsOn;
+        }
+
+        public void setDependsOn(List<Integer> dependsOn) {
+            this.dependsOn = dependsOn;
         }
     }
 }
