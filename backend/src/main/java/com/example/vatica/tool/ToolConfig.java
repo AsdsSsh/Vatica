@@ -1,6 +1,7 @@
 package com.example.vatica.tool;
 
 import com.example.vatica.config.AppStateProperties;
+import com.example.vatica.permission.FilePermissionRequestService;
 import com.example.vatica.permission.FileSandboxPolicy;
 
 import org.springframework.ai.tool.ToolCallbackProvider;
@@ -25,6 +26,13 @@ import org.springframework.context.annotation.Configuration;
 @EnableConfigurationProperties({FileToolProperties.class, ToolProperties.class, MailProperties.class,
         AppStateProperties.class})
 public class ToolConfig {
+
+    /** 迭代 11：文件沙盒策略由工具层显式装配（默认工作区根 = workspace-dir）。 */
+    @Bean
+    FileSandboxPolicy fileSandboxPolicy(FilePermissionRequestService permissionRequests,
+            FileToolProperties fileProps) {
+        return new FileSandboxPolicy(permissionRequests, fileProps);
+    }
 
     @Bean
     FileTools fileTools(FileToolProperties props, FileSandboxPolicy sandboxPolicy) {

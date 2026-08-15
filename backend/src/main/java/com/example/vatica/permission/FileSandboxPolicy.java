@@ -7,8 +7,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-import org.springframework.stereotype.Component;
-
 /**
  * 文件沙盒策略（迭代 11）：按请求携带的权限快照机械判定 allow / ask / deny。
  *
@@ -22,8 +20,10 @@ import org.springframework.stereotype.Component;
  *
  * <p>路径安全：目标存在时用真实路径参与匹配；不存在时解析父目录真实路径后拼接，
  * 防符号链接逃逸与大小写/前缀混淆。
+ *
+ * <p>Bean 由 {@code ToolConfig.fileSandboxPolicy(...)} 显式装配（迭代 11 修正 IDEA 对
+ * 跨包组件扫描的误报，也把"沙盒策略由工具层装配"表达得更直白）。
  */
-@Component
 public class FileSandboxPolicy {
 
     private static final Set<String> ALWAYS_PROTECTED = Set.of(".vatica");
