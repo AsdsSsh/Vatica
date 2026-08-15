@@ -137,8 +137,8 @@ curl -N -X POST localhost:8080/api/chat/stream -H "Content-Type: application/jso
 ```
 
 - 接其他第三方 MCP 服务 = 在 `application.yml` 的 `spring.ai.mcp.client.streamable-http.connections` 下增加连接块（url + endpoint），无需改代码
-- 注意：`spring.ai.mcp.server.protocol: STREAMABLE` 必须显式声明（缺失退回 SSE、/mcp 返回 404）；
-  若配置了连接块，主应用启动时会连该服务——服务不在线时先注释掉对应连接块
+- 注意：`spring.ai.mcp.server.protocol: STREAMABLE` 必须显式声明（缺失退回 SSE、/mcp 返回 404）
+- **懒初始化 + 韧性兜底（迭代 8）**：`spring.ai.mcp.client.initialized=false`——启动不握手第三方服务（未配 AMAP_MCP_KEY / 断网也能正常启动），首次真正用到 MCP 工具时才连接；连接失败由 `McpToolProviderGuard` 兜底（空工具集 + 5 分钟退避不重试），本地工具与对话不受影响
 
 ### 迭代 5：核心闭环（任务拆解 + 人工审批 + 状态机 + MySQL 持久化）
 
@@ -158,7 +158,7 @@ curl localhost:8080/api/task
 ```
 
 - 状态机：PENDING → RUNNING → PENDING_APPROVAL → REVIEW → DONE / FAILED，低分自动返工 RETRY（限 2 次）→ 超限 NEEDS_REVISION；DONE 可人工返工重开
-- **MySQL 配置**（迭代 5 起后端启动依赖 MySQL，凭据走环境变量、不进 git）：
+- **MySQL 配置**（开发模式依赖 MySQL，凭据走环境变量、不进 git；打包模式自动切 H2 文件库零依赖，见迭代 8）：
   ```powershell
   # 本机 MySQL（默认）：建库建用户后设置
   setx MYSQL_USERNAME vatica
@@ -219,6 +219,67 @@ Planner 声明步骤依赖 → 拓扑分层 → **同层步骤并行执行**（�
 - **执行准确率**：Judge score 徽标（≥70 绿 / <70 红）+ verdict + 返工次数；DONE/NEEDS_REVISION 可一键返工（POST /api/task/{id}/rework）
 - **文件产物**：GET /api/files 列表（白名单目录），双击用系统默认程序打开（Tauri opener 插件）
 - **模型选择器**：对话区切换 DeepSeek / 通义千问（GET /api/chat/models；备用模型 setx QWEN_API_KEY 后启用，未配置置灰）
+
+### 迭代 8：打包交付（Tauri sidecar + NSIS 安装包）
+
+#### 架构图（安装包形态）
+
+```
+桌面壳 Tauri 2（Rust 壳 + WebView2 跑 React 三栏工作台）
+  │  前端只对 8080 说话：fetch / SSE / REST（CORS 放行 tauri://localhost）
+  │  release 模式：启动时拉起 sidecar、退出时 kill；开发模式不拉起（后端手动启动）
+  ▼
+vatica-backend-x86_64-pc-windows-msvc.exe —— Rust 启动器（externalBin sidecar）
+  │  用捆绑的 jlink 最小 JRE 启动 Spring Boot fat jar（-Xmx256m）
+  │  工作目录切到 %APPDATA%\Vatica（安装目录只读，数据落用户目录）
+  │  注入 VATICA_WATCHDOG_PID = 自身 PID
+  ▼
+后端 Spring Boot 4.1（--spring.profiles.active=packaged）
+  ├─ 16 个本地工具 ── MCP Server 暴露 POST /mcp（Streamable HTTP）
+  ├─ MCP Client ── 高德官方 MCP（懒初始化 + 失败退避兜底）
+  ├─ 持久化：H2 文件库 data/vatica-db.mv.db（零依赖开箱即用；PACKAGED_DB_URL + PACKAGED_DB_USERNAME/PASSWORD 可切回 MySQL）
+  └─ 看门狗 SidecarWatchdog：轮询不到启动器 PID → 10 秒内自行退出（防 8080 孤儿进程）
+```
+
+**进程生命周期**：
+
+- 正常退出：壳收到退出事件 → kill 启动器 → 启动器 wait() 收尾
+- 壳被强杀：启动器随进程树终止 → 后端看门狗 10 秒内感知并自行退出——不会留下孤儿后端占着 8080
+
+#### 打包步骤（三件套可一键重新生成）
+
+```powershell
+cd frontend/src-tauri
+.\package-sidecar.ps1              # 生成三件套：launcher → binaries/、fat jar + jlink JRE → backend-sidecar/（-SkipTests 快速出包 / -ForceJre 重建 JRE）
+npm run tauri build                # NSIS 安装包 → target/release/bundle/nsis/Vatica_0.1.0_x64-setup.exe
+```
+
+- 生成物（`binaries/`、`backend-sidecar/`、`sidecar-stage/`）已 gitignore；**源码**（`launcher/`、`package-sidecar.ps1`）入库，随时可重建
+- `sidecar-stage/` 是安装目录布局的镜像：直接运行其中的启动器即可本地冒烟
+- **首次构建要下载 NSIS 工具链**（GitHub，国内网络可能超时——实测踩过）：预下载到 `%LOCALAPPDATA%\tauri\` 即可离线构建——
+  ① `nsis-3.11.zip` 解压为 `%LOCALAPPDATA%\tauri\NSIS\`（完整目录，含 Bin/Stubs/Include/Plugins）
+  ② `nsis_tauri_utils.dll` 放 `%LOCALAPPDATA%\tauri\NSIS\Plugins\x86-unicode\additional\`
+  两个文件的 SHA1 校验值与 13 项必需文件清单见 tauri-bundler 源码（bundle/windows/nsis/mod.rs）
+
+#### 安装后体验（零依赖）
+
+安装包在**没有 MySQL / 没有 JDK** 的机器上双击即可用，数据全部落 `%APPDATA%\Vatica`。
+需要联网/聊天时再配置环境变量（设置后重启应用生效）：
+
+| 环境变量 | 用途 | 缺省影响 |
+|---|---|---|
+| `DEEPSEEK_API_KEY` | 对话 / 任务执行 | 聊天不可用，界面与任务管理正常 |
+| `AMAP_MCP_KEY`（可选） | 高德地图/天气 MCP 工具 | 无 MCP 远程工具，本地 16 工具照常 |
+| `QWEN_API_KEY`（可选） | 备用模型（通义千问） | 模型选择器置灰 |
+| `MAIL_*`（可选） | 邮件查询/发送 | mail_* 工具返回未配置指引 |
+
+#### 演示场景脚本（桌面应用，承接演示视频职能）
+
+1. **周报交付**：创建任务"读取 data/本周工作记录.md，生成周报 Word 和统计 Excel"→ 批准计划 → 右侧面板步骤实时打勾 → Judge 100 分绿徽标 → 产物列表双击打开成品
+2. **个人助理**："整理下周日程并提醒我准备会议材料"→ calendar_query / todo_add / todo_remind 全链路，数据全部来自工具返回
+3. **质量门禁拦截幻觉**：让 Agent 做计算类总结任务 → Judge 低分红徽标 → 自动返工 2 次 → NEEDS_REVISION（error 里带评分与原因）
+4. **运行中终止**：长任务执行中点击终止 → 状态收敛 CANCELLED（协作式取消，不留半成品假装成功）
+5. **天气（MCP）**：配置 AMAP_MCP_KEY 后问"杭州今天天气怎么样"→ Agent 经高德 MCP 作答并注明数据来源
 
 ### 迭代 2.5 新增配置（application.yml，均可调）
 

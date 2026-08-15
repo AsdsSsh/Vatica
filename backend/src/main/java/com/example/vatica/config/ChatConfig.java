@@ -46,14 +46,14 @@ public class ChatConfig {
         return new ObjectMapper();
     }
 
-    /** 主对话/执行客户端：本地工具 + MCP 远程工具（迭代 4 合并进 defaultTools）。 */
+    /** 主对话/执行客户端：本地工具 + MCP 远程工具（迭代 4 合并进 defaultTools；迭代 8 韧性包装）。 */
     @Bean
     ChatClient vaticaChatClient(ChatClient.Builder builder, ToolCallbackProvider vaticaTools,
             ObjectProvider<SyncMcpToolCallbackProvider> mcpToolProvider) {
         SyncMcpToolCallbackProvider mcpTools = mcpToolProvider.getIfAvailable();
         return mcpTools == null
                 ? builder.defaultTools(vaticaTools).build()
-                : builder.defaultTools(vaticaTools, mcpTools).build();
+                : builder.defaultTools(vaticaTools, new McpToolProviderGuard(mcpTools)).build();
     }
 
     /** 规划专用客户端：无工具（规划不执行）。 */

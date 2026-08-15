@@ -82,7 +82,9 @@
 		<dependency>
 			<groupId>com.h2database</groupId>
 			<artifactId>h2</artifactId>
-			<scope>test</scope>
+			<!-- 迭代 8 I8-1：runtime 而非 test——打包模式 packaged profile 用 H2 文件库
+			     （零外部依赖开箱即用），测试继续用 H2 内存库 -->
+			<scope>runtime</scope>
 		</dependency>
 
 		<!-- 迭代 3：Apache POI 文档生成（Word 周报 + Excel 统计）。

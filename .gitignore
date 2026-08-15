@@ -10,6 +10,12 @@ frontend/dist/
 frontend/src-tauri/target/
 frontend/src-tauri/gen/
 
+# ===== Tauri sidecar 打包产物（迭代 8，生成物不入库，package-sidecar.ps1 可重新生成）=====
+frontend/src-tauri/binaries/
+frontend/src-tauri/backend-sidecar/
+frontend/src-tauri/sidecar-stage/
+frontend/src-tauri/launcher/target/
+
 # ===== IDE =====
 .idea/
 *.iml

@@ -51,7 +51,7 @@ public class ModelConfig {
         ChatClient.Builder builder = ChatClient.builder(qwenChatModel);
         return mcpTools == null
                 ? builder.defaultTools(vaticaTools).build()
-                : builder.defaultTools(vaticaTools, mcpTools).build();
+                : builder.defaultTools(vaticaTools, new McpToolProviderGuard(mcpTools)).build();
     }
 
     /** 构建方式照搬 Spring AI 2.0 自动配置（OpenAiChatAutoConfiguration 源码核实）。 */
