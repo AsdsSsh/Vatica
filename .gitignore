@@ -39,3 +39,6 @@ test_key.txt
 AI办公Agent平台-项目规划.md
 任务总清单.md
 任务进度.md
+
+# ===== 工作区基础设施（Agent 技能等，非项目代码）=====
+.agents/
