@@ -18,6 +18,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.example.vatica.permission.TestFileSandbox;
+
 /**
  * 文档工具真实 IO 单测（迭代 3）：生成后用 POI 读回校验真实内容，不 mock。
  * 覆盖：正常生成（Word 标题/章节/段落、Excel 表头/数值/文本单元格）、扩展名补全/拒绝、
@@ -32,7 +34,8 @@ class DocumentToolsTest {
 
     @BeforeEach
     void setUp() {
-        documentTools = new DocumentTools(new FileToolProperties(tempDir.toString(), 1024));
+        documentTools = new DocumentTools(new FileToolProperties(tempDir.toString(), 1024),
+                TestFileSandbox.policy(tempDir));
     }
 
     // ══════════════ Word ══════════════

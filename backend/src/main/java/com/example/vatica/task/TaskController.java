@@ -1,7 +1,6 @@
 package com.example.vatica.task;
 
 import java.util.List;
-import java.util.Map;
 
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -35,10 +34,10 @@ public class TaskController {
         this.mapper = mapper;
     }
 
-    /** 一句话创建任务：Planner 拆解 → 返回计划（PENDING 待审批）。 */
+    /** 一句话创建任务：Planner 拆解 → 返回计划（PENDING 待审批）；迭代 11 起携带权限快照。 */
     @PostMapping
-    public TaskDetailDto create(@RequestBody Map<String, String> body) {
-        TaskRecord record = taskService.create(body.getOrDefault("goal", ""));
+    public TaskDetailDto create(@RequestBody TaskCreateRequest body) {
+        TaskRecord record = taskService.create(body.goal(), body.permission());
         return detail(record);
     }
 

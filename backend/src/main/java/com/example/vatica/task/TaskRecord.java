@@ -37,6 +37,10 @@ public class TaskRecord {
     @Column(nullable = false, columnDefinition = "TEXT")
     private String planJson;
 
+    /** 迭代 11：创建任务时的文件权限快照（JSON），执行期据此校验工作区。 */
+    @Column(columnDefinition = "TEXT")
+    private String permissionJson;
+
     /** 当前待执行步骤下标（0 起）；全部完成置 -1。 */
     @Column(nullable = false)
     private int currentStep;
@@ -71,12 +75,14 @@ public class TaskRecord {
         // JPA
     }
 
-    public TaskRecord(String id, String goal, TaskStatus status, String planJson, int currentStep) {
+    public TaskRecord(String id, String goal, TaskStatus status, String planJson, int currentStep,
+            String permissionJson) {
         this.id = id;
         this.goal = goal;
         this.status = status;
         this.planJson = planJson;
         this.currentStep = currentStep;
+        this.permissionJson = permissionJson;
     }
 
     @PrePersist
@@ -112,6 +118,10 @@ public class TaskRecord {
 
     public void setPlanJson(String planJson) {
         this.planJson = planJson;
+    }
+
+    public String getPermissionJson() {
+        return permissionJson;
     }
 
     public int getCurrentStep() {

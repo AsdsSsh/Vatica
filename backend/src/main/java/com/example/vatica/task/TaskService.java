@@ -13,6 +13,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,6 +26,9 @@ import com.example.vatica.agent.ExecutorAgent;
 import com.example.vatica.agent.JudgeAgent;
 import com.example.vatica.agent.PlannerAgent;
 import com.example.vatica.config.JudgeProperties;
+import com.example.vatica.permission.FilePermissionPolicy;
+import com.example.vatica.permission.FilePermissionRequestService;
+import com.example.vatica.permission.PermissionBoundToolCallbacks;
 import com.example.vatica.task.TaskPlan.TaskStep;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -54,6 +59,8 @@ public class TaskService {
     private final ObjectMapper mapper;
     private final Executor parallelExecutor;
     private final TaskEventPublisher eventPublisher;
+    private final ToolCallbackProvider vaticaTools;
+    private final FilePermissionRequestService permissionRequests;
 
     /** 终止标志（迭代 7 I7-4）：取消接口与执行线程的协作式协调点（波次粒度生效）。 */
     private final Map<String, AtomicBoolean> cancelFlags = new ConcurrentHashMap<>();
@@ -64,7 +71,8 @@ public class TaskService {
 
     public TaskService(PlannerAgent plannerAgent, ExecutorAgent executorAgent, JudgeAgent judgeAgent,
             JudgeProperties judgeProps, TaskRecordRepository repository, ObjectMapper mapper,
-            @Qualifier("taskParallelExecutor") Executor parallelExecutor, TaskEventPublisher eventPublisher) {
+            @Qualifier("taskParallelExecutor") Executor parallelExecutor, TaskEventPublisher eventPublisher,
+            ToolCallbackProvider vaticaTools, FilePermissionRequestService permissionRequests) {
         this.plannerAgent = plannerAgent;
         this.executorAgent = executorAgent;
         this.judgeAgent = judgeAgent;
@@ -73,17 +81,26 @@ public class TaskService {
         this.mapper = mapper;
         this.parallelExecutor = parallelExecutor;
         this.eventPublisher = eventPublisher;
+        this.vaticaTools = vaticaTools;
+        this.permissionRequests = permissionRequests;
     }
 
     /** 创建任务：Planner 拆解 → PENDING 待审批计划。 */
     @Transactional
     public TaskRecord create(String goal) {
+        return create(goal, null);
+    }
+
+    /** 创建任务（迭代 11：携带前端权限快照）。 */
+    @Transactional
+    public TaskRecord create(String goal, FilePermissionPolicy permission) {
         if (goal == null || goal.isBlank()) {
             throw new IllegalArgumentException("操作失败：任务目标不能为空。");
         }
         TaskPlan plan = plannerAgent.plan(goal.trim());
+        String permissionJson = permission == null ? null : toPermissionJson(permission);
         TaskRecord record = new TaskRecord(UUID.randomUUID().toString(), goal.trim(),
-                TaskStatus.PENDING, toJson(plan), 0);
+                TaskStatus.PENDING, toJson(plan), 0, permissionJson);
         return repository.save(record);
     }
 
@@ -152,6 +169,7 @@ public class TaskService {
                 record.setStatus(TaskStatus.CANCELLED);
                 record.setError("用户手动终止");
                 cancelFlags.computeIfAbsent(id, k -> new AtomicBoolean()).set(true);
+                permissionRequests.cancelChannel(id);
                 repository.save(record);
                 eventPublisher.publish(record, "cancelled");
                 log.info("任务 {} 被用户终止", id);
@@ -283,7 +301,11 @@ public class TaskService {
     /** 单步骤执行包装：异常附步骤号（并行波中定位失败来源）；supplyAsync 会再包一层 CompletionException。 */
     private String execute(TaskRecord record, TaskStep step, List<String> previous) {
         try {
-            return executorAgent.executeStep(record.getGoal(), step, previous);
+            // 迭代 11：把任务创建时的权限快照绑定到本次步骤的全部工具调用
+            FilePermissionPolicy policy = parsePermission(record.getPermissionJson());
+            ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
+                    vaticaTools, policy, record.getId());
+            return executorAgent.executeStep(record.getGoal(), step, previous, callbacks);
         } catch (RuntimeException e) {
             throw new IllegalStateException("步骤 " + step.getId() + " 执行失败：" + e.getMessage(), e);
         }
@@ -383,6 +405,25 @@ public class TaskService {
             return mapper.writeValueAsString(plan);
         } catch (Exception e) {
             throw new IllegalStateException("操作失败：计划序列化失败。" + e.getMessage(), e);
+        }
+    }
+
+    private FilePermissionPolicy parsePermission(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            return mapper.readValue(json, FilePermissionPolicy.class);
+        } catch (Exception e) {
+            throw new IllegalStateException("操作失败：任务文件权限数据损坏。" + e.getMessage(), e);
+        }
+    }
+
+    private String toPermissionJson(FilePermissionPolicy policy) {
+        try {
+            return mapper.writeValueAsString(policy);
+        } catch (Exception e) {
+            throw new IllegalStateException("操作失败：文件权限序列化失败。" + e.getMessage(), e);
         }
     }
 

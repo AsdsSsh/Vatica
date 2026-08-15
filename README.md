@@ -71,27 +71,27 @@ npm run dev              # http://localhost:1420
 
 ### 迭代 3：一句话生成文档（演示场景）
 
-Agent 共 7 个工具：`read_file` / `write_file` / `list_files` / `calculator` / `text_stats` / `create_word_report` / `create_excel_stats`。
+Agent 的文件工具：`read_file` / `write_file` / `list_files` / `create_word_report` / `create_excel_stats`。
 一条 prompt 走全链路"列目录 → 读文件 → 生成 Word 周报 + Excel 统计"：
 
 ```bash
 curl -N -X POST localhost:8080/api/chat/stream \
   -H "Content-Type: application/json" \
-  --data-binary @payload.json    # {"message":"读取 data/本周工作记录.md，生成一份周报 Word 和一张统计 Excel"}
+  --data-binary @payload.json    # {"message":"读取 本周工作记录.md，生成一份周报 Word 和一张统计 Excel"}
 ```
 
 - Word 内容约定（`create_word_report` 的 sections 参数）：`# ` 开头=一级标题、`## ` 开头=二级标题、其余行=正文段落
 - Excel 数字规则（`create_excel_stats`）：仅严格数字（无前导零/无科学计数法）写为数值单元格，其余一律文本——"001"编号不会变 1
-- 产物落盘在 `backend/data/`（文件工具白名单目录，文档工具复用同一安全边界）
+- 迭代 11 起产物落盘在当前工作区根目录（后端启动目录），不再有 `data/`
 
 ### 迭代 3.5：PIM 私人数据（日历 / 待办 / 邮件）
 
-Agent 现有 **16 个工具**，新增 PIM 三件套：
+Agent 现有 **17 个工具**（迭代 11 起含 `list_workspace_roots`），PIM 三件套：
 
 | 工具 | 功能 | 存储/说明 |
 |---|---|---|
-| `calendar_query` / `calendar_create` / `calendar_import` | 查日程（重复自动展开）/ 建日程 / 导入 ICS | 手写 RFC5545 子集，本地 `data/calendar.ics` |
-| `todo_add` / `todo_list` / `todo_complete` / `todo_remind` | 待办增查改 + 到期提醒 | 本地 `data/todos.json`（运行时数据，已 gitignore） |
+| `calendar_query` / `calendar_create` / `calendar_import` | 查日程（重复自动展开）/ 建日程 / 导入 ICS | 手写 RFC5545 子集，本地 `.vatica/calendar.ics` |
+| `todo_add` / `todo_list` / `todo_complete` / `todo_remind` | 待办增查改 + 到期提醒 | 本地 `.vatica/todos.json`（运行时数据，已 gitignore） |
 | `mail_query` / `mail_send` | IMAP 收件箱查询/搜索 + SMTP 发送 | 环境变量配置；发送需用户确认（confirm="yes"） |
 
 主演示场景（一句话）：
@@ -102,7 +102,7 @@ curl -N -X POST localhost:8080/api/chat/stream -H "Content-Type: application/jso
 ```
 
 - 数据约束：涉及具体时间/日期的内容模型必须从工具返回值引用（幻觉控制约定，写在工具描述里）
-- `data/calendar.ics` 已内置下周 4 条演示日程（含每周重复的"项目周会"）
+- 日历数据存 `.vatica/calendar.ics`；旧 `data/calendar.ics` 会在启动时自动迁移到 `.vatica/`
 - **邮件配置**（可选，不配也能用其他工具）：
   ```powershell
   setx MAIL_IMAP_HOST imap.qq.com
@@ -116,8 +116,8 @@ curl -N -X POST localhost:8080/api/chat/stream -H "Content-Type: application/jso
 
 Vatica 同时是 MCP Server 与 MCP Client：
 
-- **Server**：16 个本地工具零改动经 Streamable HTTP 暴露在 `POST /mcp`（加 starter 自动转换 ToolCallback，任何 MCP 客户端可接入）
-- **Client**：已接入**高德地图官方 MCP**（`https://mcp.amap.com`，迭代 4.5，替代原模拟天气服务），15 个地图/天气工具与本地 16 个工具合并供 Agent 调用
+- **Server**：17 个本地工具零改动经 Streamable HTTP 暴露在 `POST /mcp`（加 starter 自动转换 ToolCallback，任何 MCP 客户端可接入）
+- **Client**：已接入**高德地图官方 MCP**（`https://mcp.amap.com`，迭代 4.5，替代原模拟天气服务），15 个地图/天气工具与本地 17 个工具合并供 Agent 调用
 
 #### 高德 MCP 接入（迭代 4.5）
 
@@ -147,7 +147,7 @@ curl -N -X POST localhost:8080/api/chat/stream -H "Content-Type: application/jso
 
 ```bash
 # 1. 创建任务（返回任务 id + 拆解计划，状态 PENDING 待审批）
-curl -X POST localhost:8080/api/task -H "Content-Type: application/json" -d "{\"goal\":\"读取 data/本周工作记录.md 生成周报 Word，并发送邮件通知张总\"}"
+curl -X POST localhost:8080/api/task -H "Content-Type: application/json" -d "{\"goal\":\"读取 本周工作记录.md 生成周报 Word，并发送邮件通知张总\"}"
 
 # 2. 审批计划并开始执行（同步推进到下一个审批点或终态）
 curl -X POST localhost:8080/api/task/<任务id>/approve
@@ -238,7 +238,7 @@ vatica-backend-x86_64-pc-windows-msvc.exe —— Rust 启动器（externalBin si
 后端 Spring Boot 4.1（--spring.profiles.active=packaged）
   ├─ 16 个本地工具 ── MCP Server 暴露 POST /mcp（Streamable HTTP）
   ├─ MCP Client ── 高德官方 MCP（懒初始化 + 失败退避兜底）
-  ├─ 持久化：H2 文件库 data/vatica-db.mv.db（零依赖开箱即用；PACKAGED_DB_URL + PACKAGED_DB_USERNAME/PASSWORD 可切回 MySQL）
+  ├─ 持久化：H2 文件库 .vatica/vatica-db.mv.db（零依赖开箱即用；PACKAGED_DB_URL + PACKAGED_DB_USERNAME/PASSWORD 可切回 MySQL）
   └─ 看门狗 SidecarWatchdog：轮询不到启动器 PID → 10 秒内自行退出（防 8080 孤儿进程）
 ```
 
@@ -276,7 +276,7 @@ npm run tauri build                # NSIS 安装包 → target/release/bundle/ns
 
 #### 演示场景脚本（桌面应用，承接演示视频职能）
 
-1. **周报交付**：创建任务"读取 data/本周工作记录.md，生成周报 Word 和统计 Excel"→ 批准计划 → 右侧面板步骤实时打勾 → Judge 100 分绿徽标 → 产物列表双击打开成品
+1. **周报交付**：创建任务"读取 本周工作记录.md，生成周报 Word 和统计 Excel"→ 批准计划 → 右侧面板步骤实时打勾 → Judge 100 分绿徽标 → 成品在工作区根目录
 2. **个人助理**："整理下周日程并提醒我准备会议材料"→ calendar_query / todo_add / todo_remind 全链路，数据全部来自工具返回
 3. **质量门禁拦截幻觉**：让 Agent 做计算类总结任务 → Judge 低分红徽标 → 自动返工 2 次 → NEEDS_REVISION（error 里带评分与原因）
 4. **运行中终止**：长任务执行中点击终止 → 状态收敛 CANCELLED（协作式取消，不留半成品假装成功）
@@ -290,7 +290,7 @@ npm run tauri build                # NSIS 安装包 → target/release/bundle/ns
   - **OpenAI 兼容**：DeepSeek / 通义千问 / Kimi / GLM / Ollama 本地端点等（换 base-url 即切换）
   - **Anthropic**：Claude 及兼容端点
 - **每个槽位可配**：名称 / 标识 / base-url / API Key（本地端点可留空）/ 模型 ID / 温度 / 启用开关
-- **配置存储**：`data/models.json`（打包模式 `%APPDATA%\Vatica\data\`）——界面配置优先；未保存过时回退 yml/环境变量（DeepSeek + 通义默认槽位，与迭代 7 行为一致）
+- **配置存储**：`.vatica/models.json`（打包模式 `%APPDATA%\Vatica\.vatica\`）——界面配置优先；未保存过时回退 yml/环境变量（DeepSeek + 通义默认槽位，与迭代 7 行为一致）
 - **默认模型 = 第一个启用的槽位**：对话、任务执行、规划、评测统一走它；模型选择器可临时切换
 - **测试连接**：用当前编辑内容直接测（不必先保存），失败原因（如 401 密钥无效）直接显示
 - 后端接口：`GET/PUT /api/models`、`POST /api/models/test`；模型清单 `GET /api/chat/models` 改为动态注册表驱动
@@ -321,9 +321,19 @@ curl localhost:8080/api/task/不存在   # {"message":"操作失败：任务不�
 - **模型客户端缓存隔离**：`ModelRegistry` 缓存键补 `withTools` 维度——对话客户端（带工具）与规划/评测客户端（无工具）不再互相复用
 - **CORS 放行 PUT**：模型配置保存（`PUT /api/models`）在 Tauri Windows origin / Vite 开发 origin 下预检 200
 - **配置校验归一化**：`models.json` 保存/读取统一归一化（id 小写唯一、协议 lowercase、启用槽位 baseUrl/model/temperature 必填）
-- **数据与契约加固**：PIM 工具首次写入自动建 `data/` 目录；`/api/files` 错误响应统一 `{message}`；流式生成中禁用切换会话防串流
+- **数据与契约加固**：PIM 工具首次写入自动建 `.vatica/` 目录；`/api/files` 下线；流式生成中禁用切换会话防串流
 - **开发模式环境变量兜底**：`setx` 只写注册表、运行中的终端/IDE 拿不到新值——后端启动时自动从 `HKCU\Environment` 回填缺失的 `MYSQL_*` / `*_API_KEY` 等变量（与打包版启动器同策略），避免 `Access denied ... using password: NO` 启动失败
-- 回归：mvn test **233** 全绿（214 → 230 迭代修复 + 3 热修复解析用例）+ npm run build 通过
+- 回归：mvn test **237** 全绿 + npm run build 通过
+
+### 迭代 11：文件权限改造（前端权限中心 + 后端执行校验，删除 data/）
+
+- **默认工作区 = 后端启动目录**（Codex workspace 语义），工作区内 `workspace-write` 自动放行，越界触发权限请求
+- **前端 localStorage 是权限事实来源**：沙盒模式（read-only / workspace-write / danger-full-access）、工作区根、永久授权都存前端，聊天/任务请求自动携带权限快照
+- **权限弹窗**：任务面板与对话区都会弹"文件访问需要授权"，可选"仅本次允许 / 永久允许 / 拒绝"；5 分钟超时自动拒绝
+- **任务工作目录**：创建任务时可填任务工作目录（WorkBuddy 式），不填用全局工作区
+- **内部状态迁到 `.vatica/`**：calendar.ics / todos.json / models.json / H2 数据库；旧 `data/` 启动时自动迁移并删除
+- **新工具 `list_workspace_roots`**：Agent 可查询当前沙盒模式与工作区根
+- 接口：`POST /api/permissions/requests/{id}/approve`（remember）、`POST /api/permissions/requests/{id}/deny`
 
 ### 迭代 2.5 新增配置（application.yml，均可调）
 

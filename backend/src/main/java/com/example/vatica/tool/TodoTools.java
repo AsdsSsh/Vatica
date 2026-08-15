@@ -16,13 +16,14 @@ import java.util.UUID;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
+import com.example.vatica.config.AppStateProperties;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * 待办工具（todo_add / todo_list / todo_complete / todo_remind）——迭代 3.5 PIM：待办。
  *
- * <p>本地 JSON 存储：{@code data/todos.json}；JSON 用 Jackson 读写（Boot 自带），
+ * <p>迭代 11：本地 JSON 存储从 {@code data/todos.json} 迁至 {@code .vatica/todos.json}；
  * 数据损坏时报错而非静默清空（避免用户数据丢失）。
  *
  * <p>todo_remind 是"提醒"语义：列出截止时间在 N 天内（含已逾期）的未完成待办，
@@ -30,7 +31,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  */
 public final class TodoTools {
 
-    /** 待办存储文件名（相对白名单目录）。 */
+    /** 待办存储文件名（相对内部状态目录）。 */
     public static final String TODO_FILE = "todos.json";
 
     private static final DateTimeFormatter DUE = DateTimeFormatter.ofPattern("yyyy-MM-dd");
@@ -43,8 +44,8 @@ public final class TodoTools {
     private final Path todoFile;
     private final ObjectMapper mapper = new ObjectMapper();
 
-    public TodoTools(FileToolProperties props) {
-        this.todoFile = Path.of(props.workspaceDir()).toAbsolutePath().normalize().resolve(TODO_FILE);
+    public TodoTools(AppStateProperties props) {
+        this.todoFile = Path.of(props.stateDir()).toAbsolutePath().normalize().resolve(TODO_FILE);
     }
 
     @Tool(name = "todo_add", description = "添加一条待办到本地清单。截止日期可选（yyyy-MM-dd）。"

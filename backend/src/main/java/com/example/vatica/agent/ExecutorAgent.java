@@ -3,6 +3,7 @@ package com.example.vatica.agent;
 import java.util.List;
 
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.tool.ToolCallback;
 
 import com.example.vatica.task.TaskPlan.TaskStep;
 
@@ -33,6 +34,16 @@ public class ExecutorAgent {
      * @param previousResults 前序步骤结果摘要（可为空）
      */
     public String executeStep(String goal, TaskStep step, List<String> previousResults) {
+        return executeStep(goal, step, previousResults, null);
+    }
+
+    /**
+     * 执行单个步骤，返回结果摘要。
+     *
+     * @param toolCallbacks 迭代 11：绑定了本任务权限快照的工具回调；null 时用默认工具
+     */
+    public String executeStep(String goal, TaskStep step, List<String> previousResults,
+            ToolCallback[] toolCallbacks) {
         var prompt = executorClient.prompt()
                 .system(SYSTEM_PROMPT)
                 .user("任务目标：" + goal);
@@ -42,6 +53,9 @@ public class ExecutorAgent {
                 ctx.append(i + 1).append(". ").append(previousResults.get(i)).append('\n');
             }
             prompt = prompt.user(ctx.toString());
+        }
+        if (toolCallbacks != null && toolCallbacks.length > 0) {
+            prompt = prompt.toolCallbacks(toolCallbacks);
         }
         return prompt.user("现在执行步骤（第 " + step.getId() + " 步）：" + step.getDescription()
                         + "\n完成后用一句话总结本步骤结果（含关键数据）。")

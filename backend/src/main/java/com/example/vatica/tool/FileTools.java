@@ -9,17 +9,20 @@ import java.time.format.DateTimeFormatter;
 import java.util.Comparator;
 import java.util.stream.Stream;
 
+import com.example.vatica.permission.FileSandboxPolicy;
+
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
 /**
  * 文件读写工具（read_file / write_file / list_files）。
  *
- * <p>纯 POJO，不依赖 Spring（单测可直接 {@code new}）；白名单目录经 {@link FileToolProperties} 注入。
+ * <p>迭代 11：路径判定从单一 data/ 白名单改为 {@link FileSandboxPolicy}——
+ * 工作区内按模式自动放行、越界 on-request 用户确认。
  *
  * <p>错误约定（对工具调用循环敏感）：
  * <ul>
- *   <li>参数非法/文件不存在/白名单外/超限 → 抛 {@link IllegalArgumentException}，message 是给模型的指引文案；
+ *   <li>参数非法/文件不存在/未授权/超限 → 抛 {@link IllegalArgumentException}，message 是给模型的指引文案；
  *       工具异常时由 ToolCallingAdvisor 把 message 回传模型继续循环（模型会转述给用户并调整策略）</li>
  *   <li>IO 异常 → 统一 catch 包装为 {@link IllegalStateException}；
  *       <b>严禁裸抛 {@link IOException}</b>（非 RuntimeException 会被异常处理器直接重抛、中断整次会话）</li>
@@ -29,20 +32,20 @@ public final class FileTools {
 
     private static final DateTimeFormatter M_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
-    private final Path workspaceRoot;
+    private final FileSandboxPolicy sandboxPolicy;
     private final long maxReadSizeBytes;
 
-    public FileTools(FileToolProperties props) {
-        this.workspaceRoot = Path.of(props.workspaceDir()).toAbsolutePath().normalize();
+    public FileTools(FileToolProperties props, FileSandboxPolicy sandboxPolicy) {
+        this.sandboxPolicy = sandboxPolicy;
         this.maxReadSizeBytes = props.maxReadSizeBytes();
     }
 
-    @Tool(name = "read_file", description = "读取已授权工作目录内文本文件的内容并返回完整文本。"
+    @Tool(name = "read_file", description = "读取工作区或用户授权目录内文本文件的内容并返回完整文本。"
             + "适用于 .md / .txt / .csv / .json 等 UTF-8 纯文本文件；不适用于图片、Word、Excel 等二进制文件。"
             + "文件较大或不确定路径时，先调用 list_files 查看目录结构。")
-    public String readFile(@ToolParam(description = "文件路径。相对路径以已授权工作目录为基准（如 \"本周工作记录.md\" 或 \"数据/统计.csv\"）；"
-            + "也支持绝对路径，但必须位于已授权工作目录内", required = true) String path) {
-        Path target = PathSecurityGuard.resolveForRead(workspaceRoot, path);
+    public String readFile(@ToolParam(description = "文件路径。相对路径以当前工作区根为基准；"
+            + "也支持绝对路径，未授权目录会触发用户确认", required = true) String path) {
+        Path target = sandboxPolicy.resolveForRead(path);
         try {
             if (!Files.exists(target)) {
                 throw new IllegalArgumentException("操作失败：文件不存在。请先调用 list_files 确认路径。");
@@ -61,13 +64,13 @@ public final class FileTools {
         }
     }
 
-    @Tool(name = "write_file", description = "将文本内容写入已授权工作目录内的文件。文件已存在则整体覆盖；"
+    @Tool(name = "write_file", description = "将文本内容写入工作区或用户授权目录内的文件。文件已存在则整体覆盖；"
             + "父目录不存在会自动创建。用于保存生成的分析结果、报告草稿等产物。"
             + "写入前若不确定目标是否已存在，先调用 list_files 确认，避免误覆盖。")
     public String writeFile(
-            @ToolParam(description = "目标文件路径，相对路径以已授权工作目录为基准；也支持白名单内的绝对路径", required = true) String path,
+            @ToolParam(description = "目标文件路径，相对路径以当前工作区根为基准；也支持绝对路径，未授权目录会触发用户确认", required = true) String path,
             @ToolParam(description = "要写入的完整文件内容", required = true) String content) {
-        Path target = PathSecurityGuard.resolveForWrite(workspaceRoot, path);
+        Path target = sandboxPolicy.resolveForWrite(path);
         try {
             byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
             Files.write(target, bytes);
@@ -77,13 +80,13 @@ public final class FileTools {
         }
     }
 
-    @Tool(name = "list_files", description = "列出已授权工作目录内某目录下的文件和子目录（名称、类型、大小、修改时间）。"
+    @Tool(name = "list_files", description = "列出工作区或用户授权目录内某目录下的文件和子目录（名称、类型、大小、修改时间）。"
             + "用于查看有哪些可用数据文件、确认目标是否已存在、规划下一步操作。"
             + "只列一层，不递归子目录；想看子目录内容需传入子目录路径。")
-    public String listFiles(@ToolParam(description = "目录路径；传入 \".\" 表示工作目录根；相对路径以工作目录为基准",
+    public String listFiles(@ToolParam(description = "目录路径；传入 \".\" 表示当前工作区根；相对路径以工作区根为基准",
             required = false) String path) {
         String dirPath = (path == null || path.isBlank()) ? "." : path;
-        Path dir = PathSecurityGuard.resolveForRead(workspaceRoot, dirPath);
+        Path dir = sandboxPolicy.resolveForRead(dirPath);
         if (!Files.exists(dir)) {
             throw new IllegalArgumentException("操作失败：目录不存在。请先调用 list_files 确认路径。");
         }

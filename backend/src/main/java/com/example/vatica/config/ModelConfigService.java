@@ -10,7 +10,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-import com.example.vatica.tool.FileToolProperties;
 import com.example.vatica.tool.PathSecurityGuard;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -20,8 +19,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
- * 模型配置存取（迭代 8.5 模型配置中心）：界面配置存 {@code data/models.json}
- * （工作目录白名单内，打包模式即 {@code %APPDATA%\Vatica\data\models.json}）。
+ * 模型配置存取（迭代 8.5 模型配置中心）：界面配置存 {@code .vatica/models.json}
+ * （迭代 11 从 data/ 迁入内部状态目录；打包模式即 {@code %APPDATA%\Vatica\.vatica\models.json}）。
  *
  * <p><b>优先级（已定决策 2026-08-15）</b>：界面配置优先——文件存在且非空即以其为准；
  * 文件不存在/为空/损坏时回退默认槽位（DeepSeek 走 {@code spring.ai.openai.*}、
@@ -34,14 +33,14 @@ public class ModelConfigService {
     private static final Logger log = LoggerFactory.getLogger(ModelConfigService.class);
     private static final String FILE_NAME = "models.json";
 
-    private final FileToolProperties fileProps;
+    private final AppStateProperties appProps;
     private final ObjectMapper objectMapper;
     private final OpenAiDefaultsProperties openAiDefaults;
     private final ModelProperties modelProps;
 
-    public ModelConfigService(FileToolProperties fileProps, ObjectMapper objectMapper,
+    public ModelConfigService(AppStateProperties appProps, ObjectMapper objectMapper,
             OpenAiDefaultsProperties openAiDefaults, ModelProperties modelProps) {
-        this.fileProps = fileProps;
+        this.appProps = appProps;
         this.objectMapper = objectMapper;
         this.openAiDefaults = openAiDefaults;
         this.modelProps = modelProps;
@@ -162,7 +161,7 @@ public class ModelConfigService {
     }
 
     private Path resolveFile() {
-        return PathSecurityGuard.resolveForWrite(Path.of(fileProps.workspaceDir()), FILE_NAME);
+        return PathSecurityGuard.resolveForWrite(Path.of(appProps.stateDir()), FILE_NAME);
     }
 
     /** models.json 顶层结构（带版本号，便于将来迁移）。 */

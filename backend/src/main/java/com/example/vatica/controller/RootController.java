@@ -22,7 +22,7 @@ public class RootController {
         info.put("description", "Vatica AI 办公 Agent 平台——纯 API 后端（前后端分离，前端为 Tauri 桌面壳）");
         info.put("openapi", "/v3/api-docs");
         info.put("swaggerUi", "/swagger-ui.html");
-        info.put("apiPrefixes", List.of("/api/chat", "/api/task", "/api/files", "/api/models"));
+        info.put("apiPrefixes", List.of("/api/chat", "/api/task", "/api/models", "/api/permissions"));
         info.put("mcpEndpoint", "/mcp");
         return info;
     }

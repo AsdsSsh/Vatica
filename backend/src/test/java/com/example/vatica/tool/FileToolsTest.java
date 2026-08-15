@@ -8,6 +8,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import com.example.vatica.permission.TestFileSandbox;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -26,7 +28,8 @@ class FileToolsTest {
 
     @BeforeEach
     void setUp() {
-        fileTools = new FileTools(new FileToolProperties(tempDir.toString(), 1024));
+        fileTools = new FileTools(new FileToolProperties(tempDir.toString(), 1024),
+                TestFileSandbox.policy(tempDir));
     }
 
     /** read_file 正常读取中文内容 */

@@ -42,3 +42,12 @@ AI办公Agent平台-项目规划.md
 
 # ===== 工作区基础设施（Agent 技能等，非项目代码）=====
 .agents/
+
+# ===== 迭代 11：内部状态目录与 data/ 迁移到工作区根的历史产物 =====
+.vatica/
+backend/.vatica/
+backend/数据/
+backend/data-迁移*/
+backend/*.docx
+backend/*.xlsx
+backend/本周工作记录.md

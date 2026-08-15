@@ -33,8 +33,8 @@ class RootControllerTest {
                             .contains("\"swaggerUi\":\"/swagger-ui.html\"")
                             .contains("\"/api/chat\"")
                             .contains("\"/api/task\"")
-                            .contains("\"/api/files\"")
                             .contains("\"/api/models\"")
+                            .contains("\"/api/permissions\"")
                             .contains("\"mcpEndpoint\":\"/mcp\"");
                 });
     }

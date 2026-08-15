@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -66,7 +67,7 @@ class TaskServiceTest {
     void setUp() {
         repository.deleteAll();
         when(plannerAgent.plan("目标")).thenReturn(twoStepPlan());
-        when(executorAgent.executeStep(eq("目标"), any(), anyList())).thenReturn("完成该步骤");
+        when(executorAgent.executeStep(eq("目标"), any(), anyList(), any(ToolCallback[].class))).thenReturn("完成该步骤");
         when(judgeAgent.evaluate(anyString(), any())).thenReturn(new JudgeAgent.Evaluation(85, TaskVerdict.PASS, "合格"));
     }
 
@@ -102,7 +103,7 @@ class TaskServiceTest {
     /** 步骤执行抛异常 → FAILED 并记录原因（不允许停在 RUNNING 假装成功）。 */
     @Test
     void executionFailureMarksFailed() {
-        when(executorAgent.executeStep(eq("目标"), any(), anyList()))
+        when(executorAgent.executeStep(eq("目标"), any(), anyList(), any(ToolCallback[].class)))
                 .thenThrow(new IllegalStateException("上游 API 超时"));
 
         TaskRecord created = taskService.create("目标");
@@ -127,7 +128,7 @@ class TaskServiceTest {
         assertThat(done.getReworkCount()).isEqualTo(1);
         assertThat(done.getScore()).isEqualTo(80);
         assertThat(done.getVerdict()).isEqualTo(TaskVerdict.PASS);
-        verify(executorAgent, times(2)).executeStep(eq("目标"), any(), anyList());
+        verify(executorAgent, times(2)).executeStep(eq("目标"), any(), anyList(), any(ToolCallback[].class));
     }
 
     /** 5.5：连续低分 → 自动返工 2 次仍不合格 → NEEDS_REVISION 交人工（限次防死循环）。 */
@@ -143,7 +144,7 @@ class TaskServiceTest {
         assertThat(needsRevision.getStatus()).isEqualTo(TaskStatus.NEEDS_REVISION);
         assertThat(needsRevision.getReworkCount()).isEqualTo(2);
         assertThat(needsRevision.getError()).contains("上限 2 次").contains("人工返工");
-        verify(executorAgent, times(3)).executeStep(eq("目标"), any(), anyList());   // 首轮 + 2 次返工
+        verify(executorAgent, times(3)).executeStep(eq("目标"), any(), anyList(), any(ToolCallback[].class));   // 首轮 + 2 次返工
     }
 
     /** 5.5：NEEDS_REVISION 人工返工 → 重跑 → 二评 PASS → DONE；自动返工窗口被重置（reworkCount=0）。 */
@@ -168,7 +169,7 @@ class TaskServiceTest {
         assertThat(done.getScore()).isEqualTo(90);
         assertThat(done.getVerdict()).isEqualTo(TaskVerdict.PASS);
         assertThat(done.getError()).isNull();
-        verify(executorAgent, times(4)).executeStep(eq("目标"), any(), anyList());   // 首轮 + 2 返工 + 人工返工
+        verify(executorAgent, times(4)).executeStep(eq("目标"), any(), anyList(), any(ToolCallback[].class));   // 首轮 + 2 返工 + 人工返工
     }
 
     /** 5.5：已交付 DONE 任务人工返工 → DONE→RETRY→RUNNING 重跑 → 再评测 PASS → DONE。 */
@@ -185,7 +186,7 @@ class TaskServiceTest {
         assertThat(redone.getStatus()).isEqualTo(TaskStatus.DONE);
         assertThat(redone.getReworkCount()).isZero();
         assertThat(redone.getVerdict()).isEqualTo(TaskVerdict.PASS);
-        verify(executorAgent, times(2)).executeStep(eq("目标"), any(), anyList());
+        verify(executorAgent, times(2)).executeStep(eq("目标"), any(), anyList(), any(ToolCallback[].class));
     }
 
     /** 5.5 可重入设计：返工清空步骤审批标记——副作用步骤（发邮件）重新挂起审批，由人工确认是否重放副作用。 */
@@ -213,7 +214,7 @@ class TaskServiceTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("不允许返工");
 
-        when(executorAgent.executeStep(eq("目标"), any(), anyList()))
+        when(executorAgent.executeStep(eq("目标"), any(), anyList(), any(ToolCallback[].class)))
                 .thenThrow(new IllegalStateException("上游 API 超时"));
         TaskRecord failedTask = taskService.create("目标");
         taskService.approve(failedTask.getId());
@@ -242,7 +243,7 @@ class TaskServiceTest {
     void parallelWaveRunsConcurrently() throws InterruptedException {
         when(plannerAgent.plan("目标")).thenReturn(parallelPlan());
         CountDownLatch bothEntered = new CountDownLatch(2);
-        when(executorAgent.executeStep(eq("目标"), any(), anyList())).thenAnswer(inv -> {
+        when(executorAgent.executeStep(eq("目标"), any(), anyList(), any(ToolCallback[].class))).thenAnswer(inv -> {
             bothEntered.countDown();
             if (!bothEntered.await(2, TimeUnit.SECONDS)) {
                 throw new IllegalStateException("并行波未并发执行");
@@ -255,7 +256,7 @@ class TaskServiceTest {
 
         assertThat(done.getStatus()).isEqualTo(TaskStatus.DONE);
         assertThat(bothEntered.await(3, TimeUnit.SECONDS)).isTrue();
-        verify(executorAgent, times(2)).executeStep(eq("目标"), any(), anyList());
+        verify(executorAgent, times(2)).executeStep(eq("目标"), any(), anyList(), any(ToolCallback[].class));
         TaskPlan plan = parsePlan(done);
         assertThat(plan.getSteps().get(0).getResult()).isEqualTo("完成");
         assertThat(plan.getSteps().get(1).getResult()).isEqualTo("完成");
@@ -277,7 +278,7 @@ class TaskServiceTest {
         TaskPlan plan = parsePlan(done);
         assertThat(plan.getSteps().get(1).getResult()).isEqualTo("完成该步骤");
         assertThat(plan.getSteps().get(2).getResult()).isEqualTo("完成该步骤");
-        verify(executorAgent, times(3)).executeStep(eq("目标"), any(), anyList());
+        verify(executorAgent, times(3)).executeStep(eq("目标"), any(), anyList(), any(ToolCallback[].class));
     }
 
     /** 7 I7-4：PENDING 任务可直接终止 → CANCELLED（终态，不可再审批/返工）。 */
@@ -303,7 +304,7 @@ class TaskServiceTest {
         when(plannerAgent.plan("目标")).thenReturn(oneStepPlan());
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
-        when(executorAgent.executeStep(eq("目标"), any(), anyList())).thenAnswer(inv -> {
+        when(executorAgent.executeStep(eq("目标"), any(), anyList(), any(ToolCallback[].class))).thenAnswer(inv -> {
             entered.countDown();
             release.await(5, TimeUnit.SECONDS);
             return "完成";

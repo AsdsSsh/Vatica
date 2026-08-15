@@ -8,7 +8,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
-import com.example.vatica.tool.FileToolProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -28,7 +27,7 @@ class ModelConfigServiceTest {
     void setUp() {
         modelsFile = tempDir.resolve("models.json");
         service = new ModelConfigService(
-                new FileToolProperties(tempDir.toString(), 524288),
+                new AppStateProperties(tempDir.toString()),
                 new ObjectMapper(),
                 new OpenAiDefaultsProperties("deep-key", "https://api.deepseek.com",
                         new OpenAiDefaultsProperties.Chat("deepseek-v4-flash", 0.7)),

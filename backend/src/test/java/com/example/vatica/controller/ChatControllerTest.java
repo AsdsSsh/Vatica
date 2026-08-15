@@ -19,6 +19,8 @@ import java.util.List;
 import com.example.vatica.config.ChatProperties;
 import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.config.ModelSlot;
+import com.example.vatica.permission.FilePermissionRequestService;
+import com.example.vatica.permission.PermissionEventPublisher;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,6 +33,8 @@ import org.mockito.quality.Strictness;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -66,6 +70,12 @@ class ChatControllerTest {
     ChatClient.StreamResponseSpec streamSpec;
     @Mock
     ChatClient.CallResponseSpec callSpec;
+    @Mock
+    ToolCallbackProvider toolProvider;
+    @Mock
+    PermissionEventPublisher permissionEvents;
+    @Mock
+    FilePermissionRequestService permissionRequests;
 
     @BeforeEach
     void stubCommonChain() {
@@ -75,6 +85,8 @@ class ChatControllerTest {
         when(chatClient.prompt()).thenReturn(spec);
         when(spec.messages(anyList())).thenReturn(spec);
         when(spec.user(anyString())).thenReturn(spec);
+        when(toolProvider.getToolCallbacks()).thenReturn(new ToolCallback[0]);
+        when(spec.toolCallbacks(any(ToolCallback[].class))).thenReturn(spec);
     }
 
     private ChatProperties defaultProps() {
@@ -84,8 +96,8 @@ class ChatControllerTest {
     }
 
     private ChatController newController(ChatProperties props, SessionMemory memory) {
-        // 迭代 8.5：控制器注入动态模型注册表（客户端按请求解析）
-        return new ChatController(registry, props, memory);
+        // 迭代 8.5：控制器注入动态模型注册表（客户端按请求解析）；迭代 11 注入权限组件
+        return new ChatController(registry, props, memory, toolProvider, permissionEvents, permissionRequests);
     }
 
     private MockMvc mockMvcFor(ChatController controller) {
@@ -163,7 +175,7 @@ class ChatControllerTest {
                 new ChatProperties.Memory(20, 64, 16000));
         ChatController controller = newController(props, new InMemorySessionMemory(20, 64, 16000));
 
-        SseEmitter emitter = controller.stream(new ChatRequest("你好", null, null));
+        SseEmitter emitter = controller.stream(new ChatRequest("你好", null, null, null));
 
         assertThat(emitter.getTimeout()).isEqualTo(30_000L);
         assertThat(controller.activeStreamCount()).isEqualTo(1); // 挂起期间计入活跃连接
@@ -179,12 +191,12 @@ class ChatControllerTest {
         ChatController controller = newController(defaultProps(), new InMemorySessionMemory(20, 64, 16000));
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
-                () -> controller.stream(new ChatRequest("你好", null, "qwen")))
+                () -> controller.stream(new ChatRequest("你好", null, "qwen", null)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("未启用");
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
-                () -> controller.stream(new ChatRequest("你好", null, "gpt-5")))
+                () -> controller.stream(new ChatRequest("你好", null, "gpt-5", null)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("未知模型");
     }
@@ -196,6 +208,7 @@ class ChatControllerTest {
         when(qwenChatClient.prompt()).thenReturn(qwenSpec);
         when(qwenSpec.messages(anyList())).thenReturn(qwenSpec);
         when(qwenSpec.user(anyString())).thenReturn(qwenSpec);
+        when(qwenSpec.toolCallbacks(any(ToolCallback[].class))).thenReturn(qwenSpec);
         when(qwenSpec.call()).thenReturn(callSpec);
         when(callSpec.content()).thenReturn("通义回复");
         ChatController controller = newController(defaultProps(), new InMemorySessionMemory(20, 64, 16000));

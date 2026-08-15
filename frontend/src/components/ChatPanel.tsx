@@ -1,11 +1,26 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, Flex, Input, Select, Spin, Tag, Tooltip, Typography } from "antd";
-import { ApiOutlined, SendOutlined, SettingOutlined, StopOutlined } from "@ant-design/icons";
+import { App, Button, Checkbox, Flex, Input, Modal, Select, Space, Spin, Tag, Tooltip, Typography } from "antd";
+import {
+  ApiOutlined,
+  SafetyCertificateOutlined,
+  SendOutlined,
+  SettingOutlined,
+  StopOutlined,
+} from "@ant-design/icons";
 import type { ChatMessage, ChatSession } from "../types";
-import { fetchModels, streamChat, type ModelInfo } from "../api";
+import {
+  approvePermissionRequest,
+  denyPermissionRequest,
+  fetchModels,
+  streamChat,
+  type FilePermissionRequest,
+  type ModelInfo,
+} from "../api";
+import { loadPermissionPolicy, rememberWorkspaceRoot } from "../permissions";
 import Markdown from "./Markdown";
 import ModelSettings from "./ModelSettings";
 import ServerSettings from "./ServerSettings";
+import FilePermissionSettings from "./FilePermissionSettings";
 
 /**
  * 中栏：对话区（迭代 6 I6-4/I6-5；迭代 7 I7-5 模型选择器；
@@ -29,11 +44,17 @@ export default function ChatPanel({
   onAppendMessage,
   onUpdateMessage,
 }: Props) {
+  const { message } = App.useApp();
   const [input, setInput] = useState("");
   const [model, setModel] = useState("deepseek");
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
+  const [permissionSettingsOpen, setPermissionSettingsOpen] = useState(false);
+  const [permissionRequest, setPermissionRequest] = useState<FilePermissionRequest | null>(null);
+  const [permissionDeciding, setPermissionDeciding] = useState(false);
+  const [permissionRemember, setPermissionRemember] = useState(true);
+  const permissionResolveRef = useRef<((approved: boolean) => void) | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -58,6 +79,39 @@ export default function ChatPanel({
   }
   useEffect(loadModels, []);
 
+  /** 展示权限弹窗并等待用户决定（streamChat 暂停在此处，后端工具同步等待）。 */
+  function askPermission(request: FilePermissionRequest): Promise<boolean> {
+    setPermissionRemember(true);
+    setPermissionRequest(request);
+    return new Promise((resolve) => {
+      permissionResolveRef.current = resolve;
+    });
+  }
+
+  async function decidePermission(approved: boolean) {
+    const request = permissionRequest;
+    if (!request) return;
+    setPermissionDeciding(true);
+    try {
+      if (approved && permissionRemember) {
+        rememberWorkspaceRoot(request.path, request.access);
+      }
+      if (approved) {
+        await approvePermissionRequest(request.requestId, permissionRemember);
+      } else {
+        await denyPermissionRequest(request.requestId);
+      }
+      permissionResolveRef.current?.(approved);
+    } catch (e) {
+      message.error(`权限请求处理失败：${(e as Error).message}`);
+      permissionResolveRef.current?.(false);
+    } finally {
+      permissionResolveRef.current = null;
+      setPermissionRequest(null);
+      setPermissionDeciding(false);
+    }
+  }
+
   async function send() {
     const text = input.trim();
     if (!text || streaming) return;
@@ -70,11 +124,28 @@ export default function ChatPanel({
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      for await (const chunk of streamChat(text, session.id, model, controller.signal)) {
-        onUpdateMessage(assistantId, (m) => ({
-          ...m,
-          content: m.content + chunk,
-        }));
+      for await (const event of streamChat(
+        text,
+        session.id,
+        loadPermissionPolicy(),
+        model,
+        controller.signal,
+      )) {
+        if (event.kind === "text") {
+          onUpdateMessage(assistantId, (m) => ({
+            ...m,
+            content: m.content + event.content,
+          }));
+        } else {
+          // 权限请求：等待用户决定；后端工具调用保持阻塞，批准/拒绝后模型继续
+          const approved = await askPermission(event.request);
+          if (!approved) {
+            onUpdateMessage(assistantId, (m) => ({
+              ...m,
+              note: "（已拒绝文件访问授权）",
+            }));
+          }
+        }
       }
     } catch (e) {
       const reason =
@@ -89,6 +160,9 @@ export default function ChatPanel({
   }
 
   function stop() {
+    permissionResolveRef.current?.(false);
+    permissionResolveRef.current = null;
+    setPermissionRequest(null);
     abortRef.current?.abort();
   }
 
@@ -122,6 +196,13 @@ export default function ChatPanel({
               onClick={() => setSettingsOpen(true)}
             />
           </Tooltip>
+          <Tooltip title="文件权限与工作区">
+            <Button
+              size="small"
+              icon={<SafetyCertificateOutlined />}
+              onClick={() => setPermissionSettingsOpen(true)}
+            />
+          </Tooltip>
           <Tooltip title="服务设置（后端接口地址）">
             <Button
               size="small"
@@ -140,6 +221,10 @@ export default function ChatPanel({
       <ServerSettings
         open={serverSettingsOpen}
         onClose={() => setServerSettingsOpen(false)}
+      />
+      <FilePermissionSettings
+        open={permissionSettingsOpen}
+        onClose={() => setPermissionSettingsOpen(false)}
       />
 
       {/* 消息区 */}
@@ -217,6 +302,47 @@ export default function ChatPanel({
           )}
         </Flex>
       </div>
+
+      {/* 文件权限请求弹窗（迭代 11） */}
+      <Modal
+        open={permissionRequest !== null}
+        title="文件访问需要授权"
+        onCancel={() => decidePermission(false)}
+        footer={
+          <Space>
+            <Button danger onClick={() => decidePermission(false)}>
+              拒绝
+            </Button>
+            <Button
+              type="primary"
+              loading={permissionDeciding}
+              onClick={() => decidePermission(true)}
+            >
+              允许
+            </Button>
+          </Space>
+        }
+      >
+        {permissionRequest && (
+          <div>
+            <Typography.Paragraph>
+              Agent 请求<b>{permissionRequest.access === "WRITE" ? "写入" : "读取"}</b>以下路径：
+            </Typography.Paragraph>
+            <Typography.Paragraph code copyable style={{ wordBreak: "break-all" }}>
+              {permissionRequest.path}
+            </Typography.Paragraph>
+            <Typography.Paragraph type="secondary">
+              {permissionRequest.description}
+            </Typography.Paragraph>
+            <Checkbox
+              checked={permissionRemember}
+              onChange={(e) => setPermissionRemember(e.target.checked)}
+            >
+              记住授权，以后不再询问该目录
+            </Checkbox>
+          </div>
+        )}
+      </Modal>
     </Flex>
   );
 }

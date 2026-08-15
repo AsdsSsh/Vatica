@@ -7,6 +7,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
 
+import com.example.vatica.config.AppStateProperties;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -24,7 +26,7 @@ class TodoToolsTest {
 
     @BeforeEach
     void setUp() {
-        todoTools = new TodoTools(new FileToolProperties(tempDir.toString(), 1024));
+        todoTools = new TodoTools(new AppStateProperties(tempDir.toString()));
     }
 
     /** 添加 → 列表可见，返回 id 且标题/状态正确 */
@@ -153,7 +155,7 @@ class TodoToolsTest {
     void persistsAcrossInstances() {
         todoTools.add("持久化任务", "2026-08-30");
 
-        TodoTools fresh = new TodoTools(new FileToolProperties(tempDir.toString(), 1024));
+        TodoTools fresh = new TodoTools(new AppStateProperties(tempDir.toString()));
         assertThat(fresh.list()).contains("持久化任务");
     }
 
@@ -171,7 +173,7 @@ class TodoToolsTest {
     @Test
     void add_createsMissingDataDirectory() {
         Path nested = tempDir.resolve("data");
-        TodoTools fresh = new TodoTools(new FileToolProperties(nested.toString(), 1024));
+        TodoTools fresh = new TodoTools(new AppStateProperties(nested.toString()));
 
         fresh.add("首个待办", "2026-08-30");
 

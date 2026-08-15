@@ -3,7 +3,7 @@ import {
   App,
   Badge,
   Button,
-  Collapse,
+  Checkbox,
   Empty,
   Flex,
   Input,
@@ -17,26 +17,26 @@ import {
   CheckCircleOutlined,
   ClockCircleOutlined,
   ExclamationCircleOutlined,
-  FolderOpenOutlined,
   PlusOutlined,
   ReloadOutlined,
   StopOutlined,
   UndoOutlined,
 } from "@ant-design/icons";
 import {
+  approvePermissionRequest,
   createTask,
-  fetchFiles,
+  denyPermissionRequest,
   fetchRecentTasks,
   fetchTaskDetail,
-  getApiBase,
   subscribeTaskEvents,
   taskAction,
-  type Artifact,
+  type FilePermissionRequest,
   type TaskDetail,
   type TaskSummary,
   type TaskEvent,
   type TaskStep,
 } from "../api";
+import { loadPermissionPolicy, rememberWorkspaceRoot } from "../permissions";
 
 const STATUS_COLOR: Record<string, string> = {
   PENDING: "default",
@@ -77,9 +77,12 @@ export default function StepPanel() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [goalInput, setGoalInput] = useState("");
+  const [workspaceInput, setWorkspaceInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [approvalOpen, setApprovalOpen] = useState(false);
-  const [files, setFiles] = useState<Artifact[]>([]);
+  const [permissionRequest, setPermissionRequest] = useState<FilePermissionRequest | null>(null);
+  const [permissionDeciding, setPermissionDeciding] = useState(false);
+  const [permissionRemember, setPermissionRemember] = useState(true);
   const prevStatus = useRef<string | null>(null);
 
   const refreshTasks = useCallback(async () => {
@@ -90,20 +93,11 @@ export default function StepPanel() {
     }
   }, []);
 
-  const refreshFiles = useCallback(async () => {
-    try {
-      setFiles(await fetchFiles());
-    } catch {
-      // 产物列表失败不打扰用户
-    }
-  }, []);
-
   useEffect(() => {
     refreshTasks();
-    refreshFiles();
-  }, [refreshTasks, refreshFiles]);
+  }, [refreshTasks]);
 
-  // 选中任务 → 拉详情 + 订阅 SSE 进度事件（含快照回放）
+  // 选中任务 → 拉详情 + 订阅 SSE 进度事件（含快照回放与权限请求）
   useEffect(() => {
     if (!selectedId) return;
     let disposed = false;
@@ -112,9 +106,18 @@ export default function StepPanel() {
         if (!disposed) setDetail(d);
       })
       .catch(() => message.error("任务详情加载失败"));
-    const close = subscribeTaskEvents(selectedId, (e: TaskEvent) => {
-      if (!disposed) setDetail(e);
-    });
+    const close = subscribeTaskEvents(
+      selectedId,
+      (e: TaskEvent) => {
+        if (!disposed) setDetail(e);
+      },
+      (permission) => {
+        if (!disposed) {
+          setPermissionRemember(true);
+          setPermissionRequest(permission);
+        }
+      },
+    );
     return () => {
       disposed = true;
       close();
@@ -138,8 +141,18 @@ export default function StepPanel() {
     if (!goal || busy) return;
     setBusy(true);
     try {
-      const created = await createTask(goal);
+      const policy = loadPermissionPolicy();
+      const taskWorkspace = workspaceInput.trim();
+      if (taskWorkspace) {
+        // WorkBuddy 式任务工作空间：本次任务把所选目录加为第一个工作区根
+        policy.workspaceRoots = [
+          { path: taskWorkspace, read: true, write: true },
+          ...policy.workspaceRoots.filter((r) => r.path.trim() !== taskWorkspace),
+        ];
+      }
+      const created = await createTask(goal, policy);
       setGoalInput("");
+      setWorkspaceInput("");
       setSelectedId(created.id);
       setDetail(created);
       prevStatus.current = null; // 让审批弹窗对新任务触发一次
@@ -148,6 +161,27 @@ export default function StepPanel() {
       message.error((e as Error).message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function decidePermission(approved: boolean) {
+    const request = permissionRequest;
+    if (!request) return;
+    setPermissionDeciding(true);
+    try {
+      if (approved && permissionRemember) {
+        rememberWorkspaceRoot(request.path, request.access);
+      }
+      if (approved) {
+        await approvePermissionRequest(request.requestId, permissionRemember);
+      } else {
+        await denyPermissionRequest(request.requestId);
+      }
+    } catch (e) {
+      message.error(`权限请求处理失败：${(e as Error).message}`);
+    } finally {
+      setPermissionDeciding(false);
+      setPermissionRequest(null);
     }
   }
 
@@ -160,22 +194,10 @@ export default function StepPanel() {
       const d = await taskAction(selectedId, action);
       setDetail(d); // 动作响应先落一次（SSE 事件随后持续更新）
       refreshTasks();
-      if (action === "cancel" || d.status === "DONE") refreshFiles();
     } catch (e) {
       message.error((e as Error).message);
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function openFile(f: Artifact) {
-    try {
-      // Tauri 桌面：用系统默认程序打开本地文件（Word/Excel 等）
-      const { openPath } = await import("@tauri-apps/plugin-opener");
-      await openPath(f.absolutePath);
-    } catch {
-      // 浏览器开发模式降级：走后端下载接口
-      window.open(`${getApiBase()}/api/files/${encodeURIComponent(f.name)}`, "_blank");
     }
   }
 
@@ -196,7 +218,7 @@ export default function StepPanel() {
       <div style={{ padding: 12, borderBottom: "1px solid #f0f0f0" }}>
         <Flex justify="space-between" align="center" style={{ marginBottom: 8 }}>
           <Typography.Text strong>任务面板</Typography.Text>
-          <Button size="small" icon={<ReloadOutlined />} onClick={() => { refreshTasks(); refreshFiles(); }} />
+          <Button size="small" icon={<ReloadOutlined />} onClick={() => refreshTasks()} />
         </Flex>
         <Flex gap={6}>
           <Input
@@ -216,6 +238,13 @@ export default function StepPanel() {
             创建
           </Button>
         </Flex>
+        <Input
+          size="small"
+          style={{ marginTop: 6 }}
+          placeholder="任务工作目录（可选，如 D:\\docs；不填用全局工作区）"
+          value={workspaceInput}
+          onChange={(e) => setWorkspaceInput(e.target.value)}
+        />
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "0 12px 12px" }}>
@@ -367,46 +396,6 @@ export default function StepPanel() {
           </div>
         )}
 
-        {/* 文件产物（I7-3） */}
-        {files.length > 0 && (
-          <Collapse
-            size="small"
-            ghost
-            style={{ marginTop: 8 }}
-            items={[
-              {
-                key: "artifacts",
-                label: <Typography.Text strong style={{ fontSize: 13 }}>文件产物（{files.length}）</Typography.Text>,
-                children: (
-                  <List
-                    size="small"
-                    dataSource={files}
-                    renderItem={(f) => (
-                      <List.Item
-                        style={{ padding: "4px 0" }}
-                        actions={[
-                          <Button
-                            key="open"
-                            size="small"
-                            type="link"
-                            icon={<FolderOpenOutlined />}
-                            onClick={() => openFile(f)}
-                          >
-                            打开
-                          </Button>,
-                        ]}
-                      >
-                        <Typography.Text ellipsis={{ tooltip: f.absolutePath }} style={{ fontSize: 12 }}>
-                          {f.name}
-                        </Typography.Text>
-                      </List.Item>
-                    )}
-                  />
-                ),
-              },
-            ]}
-          />
-        )}
       </div>
 
       {/* 审批弹窗（I7-2）：PENDING=计划审批；PENDING_APPROVAL=敏感步骤审批 */}
@@ -461,6 +450,47 @@ export default function StepPanel() {
                 </List.Item>
               )}
             />
+          </div>
+        )}
+      </Modal>
+
+      {/* 文件权限请求弹窗（迭代 11） */}
+      <Modal
+        open={permissionRequest !== null}
+        title="文件访问需要授权"
+        onCancel={() => decidePermission(false)}
+        footer={
+          <Space>
+            <Button danger onClick={() => decidePermission(false)}>
+              拒绝
+            </Button>
+            <Button
+              type="primary"
+              loading={permissionDeciding}
+              onClick={() => decidePermission(true)}
+            >
+              允许
+            </Button>
+          </Space>
+        }
+      >
+        {permissionRequest && (
+          <div>
+            <Typography.Paragraph>
+              Agent 请求<b>{permissionRequest.access === "WRITE" ? "写入" : "读取"}</b>以下路径：
+            </Typography.Paragraph>
+            <Typography.Paragraph code copyable style={{ wordBreak: "break-all" }}>
+              {permissionRequest.path}
+            </Typography.Paragraph>
+            <Typography.Paragraph type="secondary">
+              {permissionRequest.description}
+            </Typography.Paragraph>
+            <Checkbox
+              checked={permissionRemember}
+              onChange={(e) => setPermissionRemember(e.target.checked)}
+            >
+              记住授权，以后不再询问该目录
+            </Checkbox>
           </div>
         )}
       </Modal>

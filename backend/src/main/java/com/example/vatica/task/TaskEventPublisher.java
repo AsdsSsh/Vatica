@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import com.example.vatica.permission.PermissionEventPublisher;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
@@ -36,16 +37,19 @@ public class TaskEventPublisher {
 
     private final Map<String, Set<SseEmitter>> subscribers = new ConcurrentHashMap<>();
     private final ObjectMapper mapper;
+    private final PermissionEventPublisher permissionEvents;
 
-    public TaskEventPublisher(ObjectMapper mapper) {
+    public TaskEventPublisher(ObjectMapper mapper, PermissionEventPublisher permissionEvents) {
         this.mapper = mapper;
+        this.permissionEvents = permissionEvents;
     }
 
-    /** 订阅任务进度：立即回放当前快照，随后持续推送。 */
+    /** 订阅任务进度：立即回放当前快照，随后持续推送；同时订阅同 channel 的文件权限事件（迭代 11）。 */
     public SseEmitter subscribe(TaskRecord record) {
         SseEmitter emitter = new SseEmitter(SUBSCRIBER_TIMEOUT_MS);
         Set<SseEmitter> set = subscribers.computeIfAbsent(record.getId(), k -> ConcurrentHashMap.newKeySet());
         set.add(emitter);
+        permissionEvents.subscribe(record.getId(), emitter);
         emitter.onTimeout(() -> remove(record.getId(), emitter));
         emitter.onError(e -> remove(record.getId(), emitter));
         emitter.onCompletion(() -> remove(record.getId(), emitter));
@@ -109,5 +113,6 @@ public class TaskEventPublisher {
         if (set != null) {
             set.remove(emitter);
         }
+        permissionEvents.unsubscribe(taskId, emitter);
     }
 }

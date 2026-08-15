@@ -18,6 +18,8 @@ import org.apache.poi.xssf.streaming.SXSSFWorkbook;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.apache.poi.xwpf.usermodel.XWPFRun;
+import com.example.vatica.permission.FileSandboxPolicy;
+
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
@@ -55,10 +57,10 @@ public final class DocumentTools {
     /** Excel 工作表名非法字符（POI 约束，超长另行限制）。 */
     private static final Pattern ILLEGAL_SHEET_CHARS = Pattern.compile("[\\\\/\\[\\]*?:]");
 
-    private final Path workspaceRoot;
+    private final FileSandboxPolicy sandboxPolicy;
 
-    public DocumentTools(FileToolProperties props) {
-        this.workspaceRoot = Path.of(props.workspaceDir()).toAbsolutePath().normalize();
+    public DocumentTools(FileToolProperties props, FileSandboxPolicy sandboxPolicy) {
+        this.sandboxPolicy = sandboxPolicy;
     }
 
     // ══════════════════════════════ I3-1 Word 周报 ══════════════════════════════
@@ -83,7 +85,7 @@ public final class DocumentTools {
                     + MAX_WORD_CHARS + " 字符）。请精简内容或拆分为多份文档。");
         }
         String target = normalizeFilename(filename, WORD_EXT);
-        Path path = PathSecurityGuard.resolveForWrite(workspaceRoot, target);
+        Path path = sandboxPolicy.resolveForWrite(target, "create_word_report 需要写入该路径");
 
         int headingCount = 0;
         int paragraphCount = 0;
@@ -192,7 +194,7 @@ public final class DocumentTools {
                     + MAX_EXCEL_ROWS + " 行）。请精简数据或拆分表格。");
         }
         String target = normalizeFilename(filename, EXCEL_EXT);
-        Path path = PathSecurityGuard.resolveForWrite(workspaceRoot, target);
+        Path path = sandboxPolicy.resolveForWrite(target, "create_excel_stats 需要写入该路径");
 
         try (SXSSFWorkbook wb = new SXSSFWorkbook(100)) {
             Sheet sh = wb.createSheet(sheet);

@@ -7,11 +7,16 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import com.example.vatica.config.ChatProperties;
 import com.example.vatica.config.ModelRegistry;
+import com.example.vatica.permission.FilePermissionRequestService;
+import com.example.vatica.permission.PermissionBoundToolCallbacks;
+import com.example.vatica.permission.PermissionEventPublisher;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -46,14 +51,22 @@ public class ChatController {
     private final ModelRegistry registry;
     private final ChatProperties chatProperties;
     private final SessionMemory sessionMemory;
+    private final ToolCallbackProvider vaticaTools;
+    private final PermissionEventPublisher permissionEvents;
+    private final FilePermissionRequestService permissionRequests;
 
     /** 活跃流式连接注册表：可观测 + 断连清理（迭代 5 任务终止/迭代 7 前端联调可复用）。 */
     private final Set<SseEmitter> activeEmitters = ConcurrentHashMap.newKeySet();
 
-    public ChatController(ModelRegistry registry, ChatProperties chatProperties, SessionMemory sessionMemory) {
+    public ChatController(ModelRegistry registry, ChatProperties chatProperties, SessionMemory sessionMemory,
+            ToolCallbackProvider vaticaTools, PermissionEventPublisher permissionEvents,
+            FilePermissionRequestService permissionRequests) {
         this.registry = registry;
         this.chatProperties = chatProperties;
         this.sessionMemory = sessionMemory;
+        this.vaticaTools = vaticaTools;
+        this.permissionEvents = permissionEvents;
+        this.permissionRequests = permissionRequests;
     }
 
     /** 可用模型清单（迭代 7 模型选择器；迭代 8.5 起来自动态注册表；迭代 9 类型化 DTO）。 */
@@ -72,25 +85,34 @@ public class ChatController {
         return registry.clientFor(model);
     }
 
-    /** 非流式对话 */
+    /** 非流式对话（无 UI 权限弹窗：越界直接拒绝，由前端把权限快照先行送达） */
     @PostMapping
     public String chat(@RequestBody ChatRequest request) {
         ChatClient client = resolveClient(request.model());
+        ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
+                vaticaTools, request.permission(), null);
         String reply = client.prompt()
                 .messages(sessionMemory.history(request.sessionId()))
                 .user(request.message())
+                .toolCallbacks(callbacks)
                 .call()
                 .content();
         sessionMemory.append(request.sessionId(), request.message(), reply);
         return reply;
     }
 
-    /** SSE 流式对话（打字机效果） */
+    /** SSE 流式对话（打字机效果；迭代 11 增加权限请求事件） */
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@RequestBody ChatRequest request) {
         ChatClient client = resolveClient(request.model());
         SseEmitter emitter = new SseEmitter(chatProperties.sse().timeout().toMillis());
         activeEmitters.add(emitter);
+        String channel = "chat:" + (request.sessionId() == null || request.sessionId().isBlank()
+                ? "default" : request.sessionId());
+        permissionEvents.subscribe(channel, emitter);
+
+        ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
+                vaticaTools, request.permission(), channel);
 
         StringBuilder reply = new StringBuilder();
         Disposable[] subscription = new Disposable[1];
@@ -99,6 +121,8 @@ public class ChatController {
                 subscription[0].dispose();
             }
             activeEmitters.remove(emitter);
+            permissionEvents.unsubscribe(channel, emitter);
+            permissionRequests.cancelChannel(channel);
             log.debug("SSE 流式收尾：session={}，剩余活跃连接={}", request.sessionId(), activeEmitters.size());
         };
 
@@ -111,6 +135,7 @@ public class ChatController {
         subscription[0] = client.prompt()
                 .messages(sessionMemory.history(request.sessionId()))
                 .user(request.message())
+                .toolCallbacks(callbacks)
                 .stream()
                 .content()
                 .subscribe(

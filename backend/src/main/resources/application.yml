@@ -65,15 +65,17 @@ spring:
     # 直接平铺到 chat.* 层（model / temperature 等）。勿再写 options 嵌套块。
     # 第 7 周前端"模型选择器"(W7-5) 上线后，升级为运行时双模型 Bean 方案
 
-# ===== 工具层配置（迭代 2）=====
-# 文件工具白名单：workspace-dir 为已授权工作目录（相对路径以进程工作目录为基准，mvn spring-boot:run 时即 backend/）
-# 白名单外路径由工具拒绝并返回引导文案；完整"询问-授权"审批流在迭代 5（HITL）接入
+# ===== 工具层配置（迭代 2；迭代 11 改为 Codex workspace 语义）=====
+# workspace-dir = 默认工作区根（相对路径以进程工作目录为基准，即 Codex 的启动目录）
+# 内部状态（日历/待办/模型配置/H2）在 vatica.app.state-dir，取代旧 ./data
 vatica:
+  app:
+    state-dir: ./.vatica
   tool:
     # 迭代 2.5：单次请求工具调用次数上限（ToolCallLimitProvider 护栏），防模型死循环烧 token
     max-calls-per-request: 20
     file:
-      workspace-dir: ./data
+      workspace-dir: .
       max-read-size-bytes: 524288   # 512KB，防止大文件烧 token
   # ===== 邮件配置（迭代 3.5，环境变量注入，仿 DEEPSEEK_API_KEY 模式）=====
   # 未配置时 mail_query / mail_send 返回"未配置"指引，不影响其他工具

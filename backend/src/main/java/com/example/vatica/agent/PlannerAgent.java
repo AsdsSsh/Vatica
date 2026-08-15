@@ -46,7 +46,8 @@ public class PlannerAgent {
             3. 涉及具体时间/地点/数字的步骤，描述里注明"数据必须来自工具返回，不得编造"；
             4. 没有先后依赖的步骤声明可并行：dependsOn 填依赖的前序步骤编号列表（从 1 开始、只能引用编号更小的步骤）；
                完全独立的步骤填 []（例如两个互不依赖的查询步骤都写 []）；省略该字段 = 默认依赖上一步（顺序执行）；
-            5. 不要发明不存在的工具，只用系统提供的工具（read_file/write_file/list_files/calculator/text_stats/create_word_report/create_excel_stats/calendar_*/todo_*/mail_*）。""";
+            5. 不要发明不存在的工具，只用系统提供的工具（read_file/write_file/list_files/calculator/text_stats/create_word_report/create_excel_stats/calendar_*/todo_*/mail_*/list_workspace_roots）；
+            6. 涉及文件路径前先调用 list_workspace_roots：工作区内直接操作，工作区外会触发用户权限确认。""";
 
     private final ChatClient plannerClient;
     private final ObjectMapper mapper;

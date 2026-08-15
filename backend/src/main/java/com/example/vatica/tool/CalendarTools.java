@@ -16,6 +16,8 @@ import java.util.List;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
+import com.example.vatica.config.AppStateProperties;
+import com.example.vatica.permission.FileSandboxPolicy;
 import com.example.vatica.tool.IcsParser.CalendarEvent;
 import com.example.vatica.tool.IcsParser.ParseResult;
 import com.example.vatica.tool.IcsParser.Rrule;
@@ -23,7 +25,8 @@ import com.example.vatica.tool.IcsParser.Rrule;
 /**
  * 日历工具（calendar_query / calendar_create / calendar_import）——迭代 3.5 PIM：日历。
  *
- * <p>本地 ICS 存储：{@code data/calendar.ics}（复用文件工具白名单目录）；手写 RFC5545 子集解析见
+ * <p>迭代 11：本地 ICS 存储从 {@code data/calendar.ics} 迁至 {@code .vatica/calendar.ics}；
+ * calendar_import 的源文件走工作区沙盒（用户授权目录）。手写 RFC5545 子集解析见
  * {@link IcsParser}。时区一律按本地时间处理（无 TZID 支持——MVP 边界）。
  *
  * <p><b>幻觉控制（面试核心）</b>：查询结果以"键=值"结构化文本返回，工具描述要求模型
@@ -31,19 +34,19 @@ import com.example.vatica.tool.IcsParser.Rrule;
  */
 public final class CalendarTools {
 
-    /** 日历存储文件名（相对白名单目录）。 */
+    /** 日历存储文件名（相对内部状态目录）。 */
     public static final String CALENDAR_FILE = "calendar.ics";
 
     private static final DateTimeFormatter FLEX_DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter FLEX_DATETIME_T = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm");
     private static final DateTimeFormatter FLEX_DATETIME_SPACE = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
-    private final Path workspaceRoot;
     private final Path calendarFile;
+    private final FileSandboxPolicy sandboxPolicy;
 
-    public CalendarTools(FileToolProperties props) {
-        this.workspaceRoot = Path.of(props.workspaceDir()).toAbsolutePath().normalize();
-        this.calendarFile = workspaceRoot.resolve(CALENDAR_FILE);
+    public CalendarTools(AppStateProperties props, FileSandboxPolicy sandboxPolicy) {
+        this.calendarFile = Path.of(props.stateDir()).toAbsolutePath().normalize().resolve(CALENDAR_FILE);
+        this.sandboxPolicy = sandboxPolicy;
     }
 
     @Tool(name = "calendar_query", description = "查询日历在指定日期范围内的日程（含重复日程自动展开到具体日期）。"
@@ -130,7 +133,7 @@ public final class CalendarTools {
             + "复杂重复规则（INTERVAL/BYDAY 等）会降级为单次日程并在返回中说明。")
     public synchronized String importFrom(
             @ToolParam(description = "待导入的 .ics 文件路径，如 \"日程备份.ics\"；必须位于已授权工作目录内", required = true) String sourcePath) {
-        Path source = PathSecurityGuard.resolveForRead(workspaceRoot, sourcePath);
+        Path source = sandboxPolicy.resolveForRead(sourcePath);
         if (!Files.exists(source)) {
             throw new IllegalArgumentException("操作失败：文件不存在。请先调用 list_files 确认路径。");
         }

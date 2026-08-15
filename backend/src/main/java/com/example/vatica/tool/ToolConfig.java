@@ -1,5 +1,8 @@
 package com.example.vatica.tool;
 
+import com.example.vatica.config.AppStateProperties;
+import com.example.vatica.permission.FileSandboxPolicy;
+
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -19,12 +22,13 @@ import org.springframework.context.annotation.Configuration;
  * 两者缺一不可：defaultTools 喂定义，Bean 收集留兜底。
  */
 @Configuration
-@EnableConfigurationProperties({FileToolProperties.class, ToolProperties.class, MailProperties.class})
+@EnableConfigurationProperties({FileToolProperties.class, ToolProperties.class, MailProperties.class,
+        AppStateProperties.class})
 public class ToolConfig {
 
     @Bean
-    FileTools fileTools(FileToolProperties props) {
-        return new FileTools(props);
+    FileTools fileTools(FileToolProperties props, FileSandboxPolicy sandboxPolicy) {
+        return new FileTools(props, sandboxPolicy);
     }
 
     @Bean
@@ -32,21 +36,21 @@ public class ToolConfig {
         return new TextTools();
     }
 
-    /** 迭代 3：文档生成工具（POI），落盘目录复用文件工具白名单。 */
+    /** 迭代 3：文档生成工具（POI）；迭代 11 起落盘走工作区沙盒。 */
     @Bean
-    DocumentTools documentTools(FileToolProperties props) {
-        return new DocumentTools(props);
+    DocumentTools documentTools(FileToolProperties props, FileSandboxPolicy sandboxPolicy) {
+        return new DocumentTools(props, sandboxPolicy);
     }
 
-    /** 迭代 3.5：PIM 日历/待办工具，本地 ICS/JSON 存储在文件工具白名单目录内。 */
+    /** 迭代 3.5：PIM 日历工具；迭代 11 起日历文件存 .vatica，导入源走工作区沙盒。 */
     @Bean
-    CalendarTools calendarTools(FileToolProperties props) {
-        return new CalendarTools(props);
+    CalendarTools calendarTools(AppStateProperties props, FileSandboxPolicy sandboxPolicy) {
+        return new CalendarTools(props, sandboxPolicy);
     }
 
-    /** 迭代 3.5：PIM 待办工具。 */
+    /** 迭代 3.5：PIM 待办工具；迭代 11 起存 .vatica。 */
     @Bean
-    TodoTools todoTools(FileToolProperties props) {
+    TodoTools todoTools(AppStateProperties props) {
         return new TodoTools(props);
     }
 
@@ -56,12 +60,19 @@ public class ToolConfig {
         return new MailTools(props);
     }
 
+    /** 迭代 11：工作区根查询工具。 */
+    @Bean
+    WorkspaceTools workspaceTools(FileSandboxPolicy sandboxPolicy) {
+        return new WorkspaceTools(sandboxPolicy);
+    }
+
     /** 把 @Tool 注解方法自动生成为 ToolCallback（任务清单 I2-2 的"ToolCallback Bean 显式注册"）。 */
     @Bean
     ToolCallbackProvider vaticaTools(FileTools fileTools, TextTools textTools, DocumentTools documentTools,
-            CalendarTools calendarTools, TodoTools todoTools, MailTools mailTools, ToolProperties props) {
+            CalendarTools calendarTools, TodoTools todoTools, MailTools mailTools, WorkspaceTools workspaceTools,
+            ToolProperties props) {
         ToolCallbackProvider provider = MethodToolCallbackProvider.builder()
-                .toolObjects(fileTools, textTools, documentTools, calendarTools, todoTools, mailTools)
+                .toolObjects(fileTools, textTools, documentTools, calendarTools, todoTools, mailTools, workspaceTools)
                 .build();
         return new ToolCallLimitProvider(provider, props.maxCallsPerRequest());
     }

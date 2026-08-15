@@ -6,6 +6,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import com.example.vatica.config.AppStateProperties;
+import com.example.vatica.permission.TestFileSandbox;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -23,7 +26,8 @@ class CalendarToolsTest {
 
     @BeforeEach
     void setUp() {
-        calendarTools = new CalendarTools(new FileToolProperties(tempDir.toString(), 1024));
+        calendarTools = new CalendarTools(new AppStateProperties(tempDir.toString()),
+                TestFileSandbox.policy(tempDir));
     }
 
     // ══════════════ 创建与查询 ══════════════
@@ -246,7 +250,8 @@ class CalendarToolsTest {
     @Test
     void create_createsMissingDataDirectory() {
         Path nested = tempDir.resolve("data");
-        CalendarTools fresh = new CalendarTools(new FileToolProperties(nested.toString(), 1024));
+        CalendarTools fresh = new CalendarTools(new AppStateProperties(nested.toString()),
+                TestFileSandbox.policy(nested));
 
         fresh.create("新建目录首条日程", "2026-08-17", "2026-08-17", null);
 

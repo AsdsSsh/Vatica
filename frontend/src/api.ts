@@ -76,25 +76,53 @@ async function getJson(path: string): Promise<Response> {
 // ═══ 会话 ═══
 
 /**
- * SSE 流式对话（迭代 6 I6-5）：fetch + ReadableStream 逐行解析 `data:` 事件，
- * 逐块产出文本增量（打字机渲染）。支持 AbortSignal 中断与模型选择（迭代 7）。
- *
- * 注：后端 SSE 用 POST（要带请求体），浏览器 EventSource 只支持 GET，
- * 所以这里用 fetch 流式读（项目讲解稿 7-01 的既定结论）。
+ * 文件权限快照（迭代 11，前端 permissions.ts 为事实来源）。
+ */
+export interface WorkspaceRoot {
+  path: string;
+  read: boolean;
+  write: boolean;
+}
+
+export interface FilePermissionPolicy {
+  mode: "READ_ONLY" | "WORKSPACE_WRITE" | "DANGER_FULL_ACCESS";
+  workspaceRoots: WorkspaceRoot[];
+}
+
+/** 后端经 SSE 推送的一次文件权限请求。 */
+export interface FilePermissionRequest {
+  requestId: string;
+  channel: string;
+  path: string;
+  access: "READ" | "WRITE";
+  mode: string;
+  description: string;
+  createdAt: string;
+}
+
+export type ChatStreamEvent =
+  | { kind: "text"; content: string }
+  | { kind: "permission"; request: FilePermissionRequest };
+
+/**
+ * SSE 流式对话（迭代 6 I6-5；迭代 11 支持权限请求事件）：
+ * 文本事件逐块产出打字机内容；`event: permission_request` 产出权限请求，由调用方弹窗决定。
  */
 export async function* streamChat(
   message: string,
   sessionId: string,
+  permission: FilePermissionPolicy,
   model?: string,
   signal?: AbortSignal,
-): AsyncGenerator<string> {
-  const res = await post("/api/chat/stream", { message, sessionId, model }, signal);
+): AsyncGenerator<ChatStreamEvent> {
+  const res = await post("/api/chat/stream", { message, sessionId, model, permission }, signal);
   if (!res.body) {
     throw new Error(`请求失败（HTTP ${res.status}）`);
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let eventName = "message";
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -104,14 +132,36 @@ export async function* streamChat(
       while ((idx = buffer.indexOf("\n")) >= 0) {
         const line = buffer.slice(0, idx).trimEnd();
         buffer = buffer.slice(idx + 1);
-        if (line.startsWith("data:")) {
-          yield line.slice(5).replace(/^ /, "");
+        if (line.startsWith("event:")) {
+          eventName = line.slice(6).trim();
+        } else if (line.startsWith("data:")) {
+          const payload = line.slice(5).replace(/^ /, "");
+          if (eventName === "permission_request") {
+            try {
+              yield { kind: "permission", request: JSON.parse(payload) as FilePermissionRequest };
+            } catch {
+              // 忽略坏帧
+            }
+          } else {
+            yield { kind: "text", content: payload };
+          }
+          eventName = "message";
         }
       }
     }
   } finally {
     reader.releaseLock();
   }
+}
+
+/** 批准文件权限请求；remember=true 表示前端已写入 localStorage。 */
+export async function approvePermissionRequest(requestId: string, remember: boolean): Promise<void> {
+  await post(`/api/permissions/requests/${requestId}/approve`, { remember });
+}
+
+/** 拒绝文件权限请求。 */
+export async function denyPermissionRequest(requestId: string): Promise<void> {
+  await post(`/api/permissions/requests/${requestId}/deny`, {});
 }
 
 // ═══ 模型（与 OpenAPI schema 对齐：/api/chat/models、/api/models）═══
@@ -217,8 +267,8 @@ export async function fetchRecentTasks(): Promise<TaskSummary[]> {
   return (await getJson("/api/task")).json();
 }
 
-export async function createTask(goal: string): Promise<TaskDetail> {
-  return (await post("/api/task", { goal })).json();
+export async function createTask(goal: string, permission?: FilePermissionPolicy): Promise<TaskDetail> {
+  return (await post("/api/task", { goal, permission })).json();
 }
 
 export async function fetchTaskDetail(id: string): Promise<TaskDetail> {
@@ -232,9 +282,14 @@ export async function taskAction(id: string, action: "approve" | "rework" | "can
 
 /**
  * 订阅任务进度事件（迭代 7 I7-1）：EventSource + `task` 事件；
- * 订阅即收到后端回放的当前快照。返回取消订阅函数。
+ * 订阅即收到后端回放的当前快照。迭代 11 增加 `permission_request` 事件。
+ * 返回取消订阅函数。
  */
-export function subscribeTaskEvents(id: string, onEvent: (e: TaskEvent) => void): () => void {
+export function subscribeTaskEvents(
+  id: string,
+  onEvent: (e: TaskEvent) => void,
+  onPermission?: (e: FilePermissionRequest) => void,
+): () => void {
   const source = new EventSource(`${getApiBase()}/api/task/${id}/events`);
   source.addEventListener("task", (ev: MessageEvent<string>) => {
     try {
@@ -243,19 +298,12 @@ export function subscribeTaskEvents(id: string, onEvent: (e: TaskEvent) => void)
       // 忽略坏帧（连接抖动时 EventSource 会自动重连）
     }
   });
+  source.addEventListener("permission_request", (ev: MessageEvent<string>) => {
+    try {
+      onPermission?.(JSON.parse(ev.data) as FilePermissionRequest);
+    } catch {
+      // 忽略坏帧
+    }
+  });
   return () => source.close();
-}
-
-// ═══ 文件产物（与 OpenAPI schema 对齐：/api/files，后端 FileArtifactDto）═══
-
-/** 文件产物（迭代 7 I7-3）。 */
-export interface Artifact {
-  name: string;
-  size: number;
-  modifiedAt: string;
-  absolutePath: string;
-}
-
-export async function fetchFiles(): Promise<Artifact[]> {
-  return (await getJson("/api/files")).json();
 }
