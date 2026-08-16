@@ -17,6 +17,7 @@ import {
   CheckCircleOutlined,
   CopyOutlined,
   ExclamationCircleOutlined,
+  GlobalOutlined,
   LoadingOutlined,
   MoonOutlined,
   PicLeftOutlined,
@@ -53,6 +54,7 @@ import FilePermissionSettings from "./FilePermissionSettings";
 import PermissionRequestModal from "./PermissionRequestModal";
 import AuthPanel from "./AuthPanel";
 import UserModelsPanel from "./UserModelsPanel";
+import IntegrationSettingsPanel from "./IntegrationSettingsPanel";
 
 /**
  * 中栏：对话区（迭代 6 I6-4/I6-5；迭代 12 I12-2/I12-3 体验升级）——
@@ -118,6 +120,7 @@ export default function ChatPanel({
   const [permissionSettingsOpen, setPermissionSettingsOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [userModelsOpen, setUserModelsOpen] = useState(false);
+  const [integrationOpen, setIntegrationOpen] = useState(false);
   const [permissionRequest, setPermissionRequest] = useState<FilePermissionRequest | null>(null);
   const [permissionDeciding, setPermissionDeciding] = useState(false);
   const [permissionRemember, setPermissionRemember] = useState(true);
@@ -391,6 +394,15 @@ export default function ChatPanel({
               onClick={() => setPermissionSettingsOpen(true)}
             />
           </Tooltip>
+          <Tooltip title="外部服务（AMAP / 邮件 / 数据库）">
+            <Button
+              size="small"
+              type="text"
+              aria-label="外部服务设置"
+              icon={<GlobalOutlined />}
+              onClick={() => setIntegrationOpen(true)}
+            />
+          </Tooltip>
           <Tooltip title="服务设置（后端接口地址）">
             <Button
               size="small"
@@ -421,6 +433,10 @@ export default function ChatPanel({
       <ServerSettings
         open={serverSettingsOpen}
         onClose={() => setServerSettingsOpen(false)}
+      />
+      <IntegrationSettingsPanel
+        open={integrationOpen}
+        onClose={() => setIntegrationOpen(false)}
       />
       <FilePermissionSettings
         open={permissionSettingsOpen}

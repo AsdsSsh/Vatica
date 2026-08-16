@@ -41,16 +41,14 @@ spring:
       #   1) 参数名是 ?key=（官方文档写 api_key，但网关只认 key，api_key 会返回 INVALID_USER_KEY）
       #   2) 网关只接受 POST（GET 返回 405），SDK 客户端自动降级为请求-响应模式（onErrorComplete 实测路径）
       #   3) 服务端无 Mcp-Session-Id（无状态按请求校验），SDK 按无会话模式工作
-      # 凭据走环境变量、不进 git（仿 DEEPSEEK_API_KEY 模式）：setx AMAP_MCP_KEY <高德Web服务Key>
-      # 迭代 8 实测补充：无 key 时启动握手会 20 秒超时并炸掉启动（空 key 网关不响应）→ 改懒初始化，
-      # 首次真正用到 MCP 工具时才连接（SDK LifecycleInitializer 自动补握手），失败由 McpToolProviderGuard 兜底
+      # 凭据不再走环境变量：AMAP key 从外部服务设置页加密配置（保存后重启生效）
       client:
         initialized: false
         streamable-http:
           connections:
             amap:
               url: https://mcp.amap.com
-              endpoint: /mcp?key=${AMAP_MCP_KEY:}
+              endpoint: /mcp
     # ═══ 多模型切换（只改配置，不动代码）═══
     # DeepSeek 与通义千问都兼容 OpenAI 协议：换模型 = 换 base-url + model + api-key
     # 旧别名 deepseek-chat/deepseek-reasoner 已于 2026-07-24 弃用，改用 v4 系列 ID：deepseek-v4-flash / deepseek-v4-pro
@@ -84,20 +82,15 @@ vatica:
     file:
       workspace-dir: .
       max-read-size-bytes: 524288   # 512KB，防止大文件烧 token
-  # ===== 邮件配置（迭代 3.5，环境变量注入，仿 DEEPSEEK_API_KEY 模式）=====
+  # ===== 邮件配置（迭代 3.5；迭代 13 改为外部服务设置页加密配置，保存后重启生效）=====
   # 未配置时 mail_query / mail_send 返回"未配置"指引，不影响其他工具
-  # 示例（QQ 邮箱，授权码在邮箱设置中生成）：
-  #   setx MAIL_IMAP_HOST imap.qq.com
-  #   setx MAIL_SMTP_HOST smtp.qq.com
-  #   setx MAIL_USERNAME yourname@qq.com
-  #   setx MAIL_PASSWORD 你的授权码
   mail:
-    imap-host: ${MAIL_IMAP_HOST:}
-    imap-port: ${MAIL_IMAP_PORT:993}    # 993=IMAP SSL；其他端口按明文处理（GreenMail 测试用）
-    smtp-host: ${MAIL_SMTP_HOST:}
-    smtp-port: ${MAIL_SMTP_PORT:465}    # 465=SMTP SSL；587=STARTTLS；其他端口按明文处理
-    username: ${MAIL_USERNAME:}
-    password: ${MAIL_PASSWORD:}
+    imap-host: ""
+    imap-port: 993    # 993=IMAP SSL；其他端口按明文处理（GreenMail 测试用）
+    smtp-host: ""
+    smtp-port: 465    # 465=SMTP SSL；587=STARTTLS；其他端口按明文处理
+    username: ""
+    password: ""
 
 # ===== 对话层配置（迭代 2.5）=====
 # SSE 超时保护：上游挂起/客户端假死时主动收尾，避免连接无限期挂起（默认 5 分钟）

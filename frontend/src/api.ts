@@ -370,6 +370,37 @@ export async function deleteUserModelSlot(id: string): Promise<void> {
   await deleteJson(`/api/models/user-slots/${id}`);
 }
 
+// ═══ 外部服务设置（迭代 13 I13-9：AMAP / 邮件 / 数据库，密钥掩码）═══
+
+export interface IntegrationSettingsView {
+  amapKeySet: boolean;
+  amapKeyHint: string | null;
+  imapHost: string;
+  imapPort: number;
+  smtpHost: string;
+  smtpPort: number;
+  mailUsername: string;
+  mailPasswordSet: boolean;
+  mailPasswordHint: string | null;
+  dbMode: "H2" | "MYSQL";
+  dbHost: string;
+  dbPort: number;
+  dbDatabase: string;
+  dbUsername: string;
+  dbPasswordSet: boolean;
+  dbPasswordHint: string | null;
+}
+
+export async function fetchIntegrationSettings(): Promise<IntegrationSettingsView> {
+  return (await getJson("/api/settings/integrations")).json();
+}
+
+export async function saveIntegrationSettings(
+  body: unknown,
+): Promise<IntegrationSettingsView> {
+  return (await putJson("/api/settings/integrations", body)).json();
+}
+
 /** 连通性测试结果（POST /api/models/test，失败时 error 为根因消息）。 */
 export interface ModelTestResult {
   ok: boolean;
