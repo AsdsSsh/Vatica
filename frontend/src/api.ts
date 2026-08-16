@@ -44,6 +44,60 @@ export function setApiBase(base: string): void {
 
 // ═══ 请求与错误契约（迭代 9 I9-3）═══
 
+// ═══ 鉴权（迭代 13 I13-7）：JWT 存 localStorage，请求统一带 Authorization ═══
+
+const AUTH_TOKEN_KEY = "vatica.authToken";
+
+export function getAuthToken(): string | null {
+  try {
+    return localStorage.getItem(AUTH_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setAuthToken(token: string | null): void {
+  try {
+    if (token) localStorage.setItem(AUTH_TOKEN_KEY, token);
+    else localStorage.removeItem(AUTH_TOKEN_KEY);
+  } catch {
+    // 隐私模式忽略
+  }
+}
+
+export interface AuthResponse {
+  token: string;
+  userId: number;
+  username: string;
+  orgId: number;
+  role: string;
+}
+
+export async function registerUser(username: string, password: string, orgName?: string): Promise<AuthResponse> {
+  const res = await fetch(`${getApiBase()}/api/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password, orgName }),
+  });
+  if (!res.ok) throw await toRequestError(res, "注册失败");
+  return res.json();
+}
+
+export async function loginUser(username: string, password: string): Promise<AuthResponse> {
+  const res = await fetch(`${getApiBase()}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) throw await toRequestError(res, "登录失败");
+  return res.json();
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getAuthToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 /** 后端统一错误响应 {message}；解析失败（网关/网络层非 JSON 体）时回退兜底文案。 */
 async function toRequestError(res: Response, fallback: string): Promise<Error> {
   let message = "";
@@ -59,7 +113,7 @@ async function toRequestError(res: Response, fallback: string): Promise<Error> {
 async function post(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
   const res = await fetch(`${getApiBase()}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(body),
     signal,
   });
@@ -68,7 +122,7 @@ async function post(path: string, body: unknown, signal?: AbortSignal): Promise<
 }
 
 async function getJson(path: string): Promise<Response> {
-  const res = await fetch(`${getApiBase()}${path}`);
+  const res = await fetch(`${getApiBase()}${path}`, { headers: authHeaders() });
   if (!res.ok) throw await toRequestError(res, `请求失败（HTTP ${res.status}）`);
   return res;
 }
@@ -218,7 +272,7 @@ export async function fetchModelSlots(): Promise<ModelSlot[]> {
 export async function saveModelSlots(slots: ModelSlot[]): Promise<ModelSlot[]> {
   const res = await fetch(`${getApiBase()}/api/models`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(slots),
   });
   if (!res.ok) throw await toRequestError(res, `请求失败（HTTP ${res.status}）`);

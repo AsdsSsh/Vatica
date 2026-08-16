@@ -26,6 +26,7 @@ import {
   SettingOutlined,
   StopOutlined,
   SunOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
 import type { TextAreaRef } from "antd/es/input/TextArea";
 import type { ChatMessage, ChatSession } from "../types";
@@ -47,6 +48,7 @@ import ModelSettings from "./ModelSettings";
 import ServerSettings from "./ServerSettings";
 import FilePermissionSettings from "./FilePermissionSettings";
 import PermissionRequestModal from "./PermissionRequestModal";
+import AuthPanel from "./AuthPanel";
 
 /**
  * 中栏：对话区（迭代 6 I6-4/I6-5；迭代 12 I12-2/I12-3 体验升级）——
@@ -109,6 +111,7 @@ export default function ChatPanel({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
   const [permissionSettingsOpen, setPermissionSettingsOpen] = useState(false);
+  const [authOpen, setAuthOpen] = useState(false);
   const [permissionRequest, setPermissionRequest] = useState<FilePermissionRequest | null>(null);
   const [permissionDeciding, setPermissionDeciding] = useState(false);
   const [permissionRemember, setPermissionRemember] = useState(true);
@@ -328,6 +331,15 @@ export default function ChatPanel({
               onClick={() => setMode(isDark ? "light" : "dark")}
             />
           </Tooltip>
+          <Tooltip title="账号（登录/注册）">
+            <Button
+              size="small"
+              type="text"
+              aria-label="账号"
+              icon={<UserOutlined />}
+              onClick={() => setAuthOpen(true)}
+            />
+          </Tooltip>
           <Tooltip title="模型设置">
             <Button
               size="small"
@@ -380,6 +392,11 @@ export default function ChatPanel({
       <FilePermissionSettings
         open={permissionSettingsOpen}
         onClose={() => setPermissionSettingsOpen(false)}
+      />
+      <AuthPanel
+        open={authOpen}
+        onClose={() => setAuthOpen(false)}
+        onAuthChanged={loadModels}
       />
 
       {/* 消息区 */}
