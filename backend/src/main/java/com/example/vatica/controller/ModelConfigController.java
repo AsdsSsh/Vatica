@@ -6,6 +6,7 @@ import java.util.Map;
 import com.example.vatica.config.ModelConfigService;
 import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.config.ModelSlot;
+import com.example.vatica.config.ModelSlotView;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -35,13 +36,23 @@ public class ModelConfigController {
     }
 
     @GetMapping
-    public List<ModelSlot> list() {
-        return config.slots();
+    public List<ModelSlotView> list() {
+        return config.slots().stream().map(this::view).toList();
     }
 
     @PutMapping
-    public List<ModelSlot> save(@RequestBody List<ModelSlot> slots) {
-        return config.save(slots);
+    public List<ModelSlotView> save(@RequestBody List<ModelSlot> slots) {
+        return config.save(slots).stream().map(this::view).toList();
+    }
+
+    private ModelSlotView view(ModelSlot slot) {
+        String key = slot.apiKey() == null ? "" : slot.apiKey();
+        boolean set = !key.isBlank();
+        String hint = set
+                ? "…" + (key.length() <= 4 ? key : key.substring(key.length() - 4))
+                : null;
+        return new ModelSlotView(slot.id(), slot.name(), slot.protocol(), slot.baseUrl(), slot.model(),
+                slot.temperature(), slot.enabled(), set, hint);
     }
 
     /** 连通性测试：测试的是界面当前编辑的槽位内容，不要求先保存。 */

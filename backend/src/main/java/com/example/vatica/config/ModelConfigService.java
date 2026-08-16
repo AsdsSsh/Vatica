@@ -37,50 +37,87 @@ public class ModelConfigService {
     private final ObjectMapper objectMapper;
     private final OpenAiDefaultsProperties openAiDefaults;
     private final ModelProperties modelProps;
+    private final ModelCredentialStore credentials;
 
     public ModelConfigService(AppStateProperties appProps, ObjectMapper objectMapper,
-            OpenAiDefaultsProperties openAiDefaults, ModelProperties modelProps) {
+            OpenAiDefaultsProperties openAiDefaults, ModelProperties modelProps,
+            ModelCredentialStore credentials) {
         this.appProps = appProps;
         this.objectMapper = objectMapper;
         this.openAiDefaults = openAiDefaults;
         this.modelProps = modelProps;
+        this.credentials = credentials;
     }
 
-    /** 当前生效的槽位列表（界面配置优先，回退默认）。 */
+    /** 当前生效的槽位列表（界面配置优先，回退默认）；apiKey 从密文库解密填充。 */
     public List<ModelSlot> slots() {
         Path file = resolveFile();
         if (!Files.exists(file)) {
-            return defaults();
+            return withCredentials(defaults());
         }
         try {
             ConfigFile config = objectMapper.readValue(Files.readString(file, StandardCharsets.UTF_8),
                     ConfigFile.class);
             List<ModelSlot> models = config.models();
             if (models == null || models.isEmpty()) {
-                return defaults();   // 空配置视为未配置（保留文件不动，等用户保存修复）
+                return withCredentials(defaults());   // 空配置视为未配置（保留文件不动，等用户保存修复）
             }
             // 迭代 10 I10-4：读取路径与保存共用同一套归一化——手工改坏的配置同样回退默认而非带病运行
-            return validate(models);
+            return withCredentials(validate(models));
         }
         catch (Exception e) {
             log.error("模型配置 {} 读取失败，本次回退默认配置：{}", file, e.getMessage());
-            return defaults();
+            return withCredentials(defaults());
         }
     }
 
-    /** 保存（校验通过后写盘，写入即生效）。 */
+    /**
+     * 保存（迭代 13 I13-3）：元数据写 models.json（apiKey 字段剥除），
+     * key 走密文库——非空 = set、空串 = clear、null = keep。
+     */
     public List<ModelSlot> save(List<ModelSlot> slots) {
         List<ModelSlot> normalized = validate(slots);
+        for (ModelSlot slot : normalized) {
+            if (slot.apiKey() == null) {
+                continue;   // keep：未提供新 key，保留密文库现值
+            }
+            if (slot.apiKey().isBlank()) {
+                credentials.clear(slot.id());
+            } else {
+                credentials.put(slot.id(), slot.apiKey());
+            }
+        }
+        List<ModelSlot> metadata = normalized.stream()
+                .map(s -> new ModelSlot(s.id(), s.name(), s.protocol(), s.baseUrl(), null,
+                        s.model(), s.temperature(), s.enabled()))
+                .toList();
         Path file = resolveFile();
         try {
             Files.writeString(file,
-                    objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(new ConfigFile(1, normalized)),
+                    objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(new ConfigFile(1, metadata)),
                     StandardCharsets.UTF_8);
         }
         catch (IOException e) {
             throw new IllegalStateException("操作失败：无法保存模型配置。" + e.getMessage(), e);
         }
-        return normalized;
+        return withCredentials(metadata);
+    }
+
+    /** 从密文库解密各槽位 key；旧 models.json 明文 key 在密文库无记录时自动迁移并覆盖。 */
+    private List<ModelSlot> withCredentials(List<ModelSlot> slots) {
+        return slots.stream().map(slot -> {
+            ModelCredentialStore.Resolved resolved = credentials.resolve(slot.id()).orElse(null);
+            if (resolved != null) {
+                return new ModelSlot(slot.id(), slot.name(), slot.protocol(), slot.baseUrl(),
+                        resolved.apiKey(), slot.model(), slot.temperature(), slot.enabled());
+            }
+            if (slot.apiKey() != null && !slot.apiKey().isBlank()) {
+                credentials.put(slot.id(), slot.apiKey());   // 旧明文一次性迁移
+                return slot;
+            }
+            return new ModelSlot(slot.id(), slot.name(), slot.protocol(), slot.baseUrl(), "",
+                    slot.model(), slot.temperature(), slot.enabled());
+        }).toList();
     }
 
     /**
@@ -100,7 +137,7 @@ public class ModelConfigService {
             String name = s.name() == null ? "" : s.name().trim();
             String protocol = s.protocol() == null ? "" : s.protocol().toLowerCase(Locale.ROOT);
             String baseUrl = s.baseUrl() == null ? "" : s.baseUrl().trim();
-            String apiKey = s.apiKey() == null ? "" : s.apiKey().trim();
+            String apiKey = s.apiKey() == null ? null : s.apiKey().trim();
             String model = s.model() == null ? "" : s.model().trim();
             Double temperature = s.temperature() == null ? 0.7 : s.temperature();
 

@@ -2,11 +2,15 @@ package com.example.vatica.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -26,12 +30,15 @@ class ModelConfigServiceTest {
     @BeforeEach
     void setUp() {
         modelsFile = tempDir.resolve("models.json");
+        ModelCredentialStore credentials = mock(ModelCredentialStore.class);
+        when(credentials.resolve(anyString())).thenReturn(Optional.empty());
         service = new ModelConfigService(
                 new AppStateProperties(tempDir.toString()),
                 new ObjectMapper(),
                 new OpenAiDefaultsProperties("deep-key", "https://api.deepseek.com",
                         new OpenAiDefaultsProperties.Chat("deepseek-v4-flash", 0.7)),
-                new ModelProperties(new ModelProperties.Qwen("", "", "", null)));
+                new ModelProperties(new ModelProperties.Qwen("", "", "", null)),
+                credentials);
     }
 
     private ModelSlot slot(String id, boolean enabled) {

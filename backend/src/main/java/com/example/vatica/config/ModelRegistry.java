@@ -41,15 +41,17 @@ import org.springframework.stereotype.Component;
 public class ModelRegistry {
 
     private final ModelConfigService config;
+    private final ModelCredentialStore credentials;
     private final ObjectProvider<SyncMcpToolCallbackProvider> mcpToolProvider;
     private final ToolCallingManager toolCallingManager;
 
     /** 客户端缓存：key = slotId + 配置指纹。 */
     private final ConcurrentHashMap<String, ChatClient> clients = new ConcurrentHashMap<>();
 
-    public ModelRegistry(ModelConfigService config,
+    public ModelRegistry(ModelConfigService config, ModelCredentialStore credentials,
             ObjectProvider<SyncMcpToolCallbackProvider> mcpToolProvider, ToolCallingManager toolCallingManager) {
         this.config = config;
+        this.credentials = credentials;
         this.mcpToolProvider = mcpToolProvider;
         this.toolCallingManager = toolCallingManager;
     }
@@ -97,9 +99,10 @@ public class ModelRegistry {
         return cached(defaultSlot(), false);
     }
 
-    /** 连通性测试（不带工具）：发一句最短指令，成功即返回模型回复。 */
+    /** 连通性测试（不带工具）：发一句最短指令，成功即返回模型回复。
+     *  迭代 13：请求体 apiKey 为空时回退密文库中已保存的 key。 */
     public String testConnection(ModelSlot slot) {
-        ChatClient client = ChatClient.builder(buildModel(slot)).build();
+        ChatClient client = ChatClient.builder(buildModel(withStoredKey(slot))).build();
         return client.prompt("请只回复两个字：正常").call().content();
     }
 
@@ -173,6 +176,17 @@ public class ModelRegistry {
                 .toolCallingManager(toolCallingManager)
                 .observationRegistry(ObservationRegistry.NOOP)
                 .build();
+    }
+
+    /** 迭代 13：槽位 apiKey 为空时从密文库解密回填（测试连接 / 兼容旧调用方）。 */
+    private ModelSlot withStoredKey(ModelSlot slot) {
+        if (slot.apiKey() != null && !slot.apiKey().isBlank()) {
+            return slot;
+        }
+        return credentials.resolve(slot.id())
+                .map(resolved -> new ModelSlot(slot.id(), slot.name(), slot.protocol(), slot.baseUrl(),
+                        resolved.apiKey(), slot.model(), slot.temperature(), slot.enabled()))
+                .orElse(slot);
     }
 
     private static String blankToNull(String s) {

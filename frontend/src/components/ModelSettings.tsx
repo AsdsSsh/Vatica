@@ -41,6 +41,8 @@ function blankSlot(protocol: ModelSlot["protocol"]): ModelSlot {
     model: "",
     temperature: 0.7,
     enabled: true,
+    apiKeySet: false,
+    apiKeyHint: null,
   };
 }
 
@@ -84,7 +86,8 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
 
   function openEditor(slot: ModelSlot | null, index: number | null) {
     // 新增时 slot 为 null：必须写入空槽位模板，编辑弹窗的 open 条件才成立（迭代 10 I10-1）
-    const next = slot ?? blankSlot("openai");
+    // 迭代 13：编辑已有槽位时表单 apiKey 置空 = "留空保持不变"，不显示完整 key
+    const next = slot ? { ...slot, apiKey: "" } : blankSlot("openai");
     setEditing(next);
     setEditingIndex(index);
   }
@@ -99,7 +102,15 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
     form
       .validateFields()
       .then((values) => {
-        const next = { ...editing, ...values } as ModelSlot;
+        const merged = { ...editing, ...values } as ModelSlot;
+        // 迭代 13：编辑已有槽位且 key 留空 = 保持现有 key（null）；新增留空 = 未配置（""）
+        const next = {
+          ...merged,
+          apiKey:
+            editingIndex !== null && (merged.apiKey == null || merged.apiKey === "")
+              ? null
+              : (merged.apiKey ?? ""),
+        };
         if (editingIndex === null) {
           setSlots((prev) => [...prev, next]);
         } else {
@@ -219,6 +230,20 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
                 ),
               },
               { title: "模型 ID", dataIndex: "model", width: 160, ellipsis: true },
+              {
+                title: "密钥",
+                width: 120,
+                render: (_, s) =>
+                  s.apiKeySet ? (
+                    <Typography.Text type="secondary" className="vatica-mono" style={{ fontSize: 12 }}>
+                      已配置 {s.apiKeyHint}
+                    </Typography.Text>
+                  ) : (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      未配置
+                    </Typography.Text>
+                  ),
+              },
               { title: "温度", dataIndex: "temperature", width: 60 },
               {
                 title: "启用",
@@ -358,9 +383,12 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
           <Form.Item
             name="apiKey"
             label="API Key"
-            tooltip="本地端点（如 Ollama）可留空"
+            tooltip="本地端点（如 Ollama）可留空；编辑已有模型时留空 = 保持原 Key"
           >
-            <Input.Password placeholder="sk-…（本地端点可留空）" autoComplete="new-password" />
+            <Input.Password
+              placeholder={editing?.apiKeySet ? `已配置（${editing.apiKeyHint}），留空保持不变` : "sk-…（本地端点可留空）"}
+              autoComplete="new-password"
+            />
           </Form.Item>
           <Form.Item name="enabled" label="启用" valuePropName="checked">
             <Switch />

@@ -2,6 +2,9 @@ package com.example.vatica.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -30,13 +33,16 @@ class ModelRegistryTest {
 
     @BeforeEach
     void setUp() {
+        ModelCredentialStore credentials = mock(ModelCredentialStore.class);
+        when(credentials.resolve(anyString())).thenReturn(java.util.Optional.empty());
         config = new ModelConfigService(
                 new AppStateProperties(tempDir.toString()),
                 new ObjectMapper(),
                 new OpenAiDefaultsProperties("deep-key", "https://api.deepseek.com",
                         new OpenAiDefaultsProperties.Chat("deepseek-v4-flash", 0.7)),
-                new ModelProperties(new ModelProperties.Qwen("", "", "", null)));
-        registry = new ModelRegistry(config,
+                new ModelProperties(new ModelProperties.Qwen("", "", "", null)),
+                credentials);
+        registry = new ModelRegistry(config, credentials,
                 mcpProvider(null),
                 ToolCallingManager.builder().build());
     }

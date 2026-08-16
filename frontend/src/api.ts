@@ -192,17 +192,23 @@ export async function fetchModels(): Promise<ModelInfo[]> {
   return (await getJson("/api/chat/models")).json();
 }
 
-/** 模型槽位（后端 ModelSlot，迭代 8.5 模型配置中心：GET/PUT /api/models）。 */
+/** 模型槽位（迭代 13 I13-3 掩码契约：apiKey 只用于提交，响应为 null）。 */
 export interface ModelSlot {
   id: string;
   name: string;
   /** 协议：openai = OpenAI 兼容端点；anthropic = Anthropic Messages 协议。 */
   protocol: "openai" | "anthropic";
   baseUrl: string;
-  apiKey: string;
+  /**
+   * 提交语义：非空 = 设置新 key；空串 = 清除；null = 保持现有 key。
+   * 后端响应永远不回传完整 key。
+   */
+  apiKey: string | null;
   model: string;
   temperature: number;
   enabled: boolean;
+  apiKeySet: boolean;
+  apiKeyHint: string | null;
 }
 
 export async function fetchModelSlots(): Promise<ModelSlot[]> {
