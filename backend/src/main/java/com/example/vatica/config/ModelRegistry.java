@@ -99,6 +99,11 @@ public class ModelRegistry {
         return cached(defaultSlot(), false);
     }
 
+    /** 迭代 13 I13-5：请求级临时凭据客户端——每次新建，不查库、不写库、不进缓存。 */
+    public ChatClient ephemeralClient(EphemeralCredential credential, boolean withTools) {
+        return build(credential.toSlot(), withTools);
+    }
+
     /** 连通性测试（不带工具）：发一句最短指令，成功即返回模型回复。
      *  迭代 13：请求体 apiKey 为空时回退密文库中已保存的 key。 */
     public String testConnection(ModelSlot slot) {

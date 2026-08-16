@@ -96,10 +96,21 @@ public class ChatController {
         return registry.clientFor(model);
     }
 
+    /** 迭代 13 I13-5：有 credential 走请求级临时客户端；两者同时出现快速失败。 */
+    private ChatClient resolveClient(ChatRequest request) {
+        if (request.credential() != null) {
+            if (request.model() != null && !request.model().isBlank()) {
+                throw new IllegalArgumentException("操作失败：临时凭据与 modelId 不能同时使用。");
+            }
+            return registry.ephemeralClient(request.credential(), true);
+        }
+        return resolveClient(request.model());
+    }
+
     /** 非流式对话（无 UI 权限弹窗：越界直接拒绝，由前端把权限快照先行送达） */
     @PostMapping
     public String chat(@RequestBody ChatRequest request) {
-        ChatClient client = resolveClient(request.model());
+        ChatClient client = resolveClient(request);
         ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
                 vaticaTools, request.permission(), null);
         String reply = client.prompt()
@@ -116,7 +127,7 @@ public class ChatController {
     /** SSE 流式对话（打字机效果；迭代 11 增加权限请求事件） */
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@RequestBody ChatRequest request) {
-        ChatClient client = resolveClient(request.model());
+        ChatClient client = resolveClient(request);
         SseEmitter emitter = new SseEmitter(chatProperties.sse().timeout().toMillis());
         activeEmitters.add(emitter);
         String channel = "chat:" + (request.sessionId() == null || request.sessionId().isBlank()

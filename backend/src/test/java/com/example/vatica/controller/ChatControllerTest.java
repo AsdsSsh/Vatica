@@ -2,8 +2,10 @@ package com.example.vatica.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -222,6 +224,43 @@ class ChatControllerTest {
                 .andExpect(status().isOk());
 
         verify(qwenChatClient).prompt();
+    }
+
+    /** 迭代 13 I13-5：请求级临时凭据路由到 ephemeralClient，不与共享缓存混用。 */
+    @Test
+    void ephemeralCredentialRoutesToRequestClient() throws Exception {
+        when(registry.ephemeralClient(any(), anyBoolean())).thenReturn(qwenChatClient);
+        when(qwenChatClient.prompt()).thenReturn(qwenSpec);
+        when(qwenSpec.system(anyString())).thenReturn(qwenSpec);
+        when(qwenSpec.messages(anyList())).thenReturn(qwenSpec);
+        when(qwenSpec.user(anyString())).thenReturn(qwenSpec);
+        when(qwenSpec.toolCallbacks(any(ToolCallback[].class))).thenReturn(qwenSpec);
+        when(qwenSpec.call()).thenReturn(callSpec);
+        when(callSpec.content()).thenReturn("临时回复");
+        ChatController controller = newController(defaultProps(), new InMemorySessionMemory(20, 64, 16000));
+        MockMvc mockMvc = mockMvcFor(controller);
+
+        mockMvc.perform(post("/api/chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"message\":\"你好\",\"credential\":{\"protocol\":\"openai\","
+                                + "\"baseUrl\":\"https://api.deepseek.com\",\"model\":\"deepseek-v4-flash\","
+                                + "\"temperature\":0.7,\"apiKey\":\"sk-ephemeral\"}}"))
+                .andExpect(status().isOk());
+
+        verify(registry).ephemeralClient(any(), eq(true));
+    }
+
+    /** 迭代 13 I13-5：临时凭据与 modelId 同时出现 → 400，避免路由歧义。 */
+    @Test
+    void ephemeralCredentialWithModelIdRejected() {
+        ChatController controller = newController(defaultProps(), new InMemorySessionMemory(20, 64, 16000));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.chat(new ChatRequest(
+                "你好", null, "deepseek", null,
+                new com.example.vatica.config.EphemeralCredential("openai", "https://api.deepseek.com",
+                        "deepseek-v4-flash", 0.7, "sk-x"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("不能同时使用");
     }
 
     /** 迭代 8.5：模型清单来自动态注册表（configured = 槽位启用开关）。 */
