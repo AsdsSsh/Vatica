@@ -348,11 +348,11 @@ curl localhost:8080/api/task/不存在   # {"message":"操作失败：任务不�
 - **性能**：Markdown 预览直连 + manualChunks 拆包（单 chunk 2066KB → 主 chunk 51.4KB）
 - 回归：mvn test 237 → **241** 全绿 + npm run build + cargo check + headless Chrome（会话恢复 / IME composition 守卫 / 离线横幅）冒烟通过
 
-### 迭代 12.5：体验热修（Markdown 规范化 + 中性黑灰配色）
+### 迭代 12.5：体验热修（Markdown 规范化 + skills.sh 配色风格）
 
 - **Markdown 规范化**：模型输出 `###标题`、`1.步骤`、`-要点`、`>引用` 等缺少空格的语法时自动补齐后再渲染，界面不再残留 `###` 符号
-- **中性黑灰配色 V2.1**：暗色表面改为纯黑灰（背景 `#0f0f10` / 面板 `#171719` / 气泡 `#202024`），靛蓝/青蓝只保留为主按钮、选中条、状态灯的小面积点缀
-- 验证：`npm run build` 通过 + headless Chrome 断言（`###标题` 渲染为 `<h3>`、暗色背景/表面/文字计算样式正确）
+- **skills.sh 配色 V2.2**：暗色纯黑背景 `#000` + 面板 `#171717` + 气泡 `#1f1f1f/#292929` + 边框 `#292929`，强调色琥珀橙 `#f99c00/#ffb200`；浅色 `#fff/#fafafa/#f2f2f2/#ebebeb`；靛蓝/青蓝品牌色退役，logo/状态灯/主按钮/选中条统一琥珀橙
+- 验证：`npm run build` 通过 + headless Chrome 断言（`###标题` 渲染为 `<h3>`、暗色背景/面板/气泡/文字与主按钮计算样式符合 tokens）
 
 ### 迭代 2.5 新增配置（application.yml，均可调）
 

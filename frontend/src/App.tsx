@@ -112,14 +112,16 @@ function App() {
       theme={{
         algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm,
         token: {
-          colorPrimary: "#4F5BE8",
-          colorInfo: "#4F5BE8",
-          colorSuccess: "#22C55E",
-          colorWarning: "#F59E0B",
-          colorError: "#E5484D",
-          borderRadius: 10,
+          colorPrimary: "#F99C00",
+          colorInfo: "#F99C00",
+          colorSuccess: "#00BB7F",
+          colorWarning: "#F99C00",
+          colorError: "#FB2C36",
+          colorBgBase: isDark ? "#000000" : "#FFFFFF",
+          colorTextBase: isDark ? "#EDEDED" : "#171717",
+          borderRadius: 6,
           fontFamily:
-            '"Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+            '"Geist", "Inter", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif',
         },
         components: {
           Layout: {

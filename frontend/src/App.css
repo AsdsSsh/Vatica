@@ -1,76 +1,76 @@
-/* Vatica 视觉体系（迭代 12 I12-1 初版；迭代 12.5 V2.1 中性黑灰）：
-   语义 tokens：画布/表面/文字三级/状态色全部在此定义，
-   组件不再写死任何 AntD 默认蓝或固定浅色，保证亮暗主题真正联动。
-   V2.1：表面全部收敛为中性黑灰（#0f/#17/#1d/#20），靛蓝/青蓝只保留为
-   小面积品牌点缀（选中条、状态灯、主按钮），不再铺满整个暗色界面。 */
+/* Vatica 视觉体系（迭代 12 I12-1 初版；迭代 12.5 V2.2 对齐 skills.sh）：
+   skills.sh 风格 = 纯黑背景 + 中性灰层级（#000/#171717/#1f1f1f/#292929）
+   + 琥珀橙强调（#f99c00/#ffb200）。靛蓝/青蓝品牌色退役。 */
 
 :root {
-  /* ── 品牌点缀（仅小面积使用） ── */
-  --vatica-indigo: #4f5be8;
-  --vatica-indigo-bright: #7b86f6;
-  --vatica-cyan: #38bdf8;
-  --vatica-amber: #f59e0b;
-  --vatica-green: #22c55e;
-  --vatica-red: #e5484d;
+  /* ── 强调色（skills.sh amber） ── */
+  --vatica-indigo: #f99c00;   /* 保留变量名兼容旧引用，语义 = accent */
+  --vatica-indigo-bright: #ffb200;
+  --vatica-cyan: #f99c00;     /* 呼吸/活动色同样收口到 amber */
+  --vatica-amber: #f99c00;
+  --vatica-green: #00bb7f;
+  --vatica-red: #fb2c36;
 
-  /* ── 中性画布与表面（浅色） ── */
-  --vatica-paper: #f4f4f5;
+  /* ── 浅色：中性灰（skills.sh light scale） ── */
+  --vatica-paper: #fafafa;
   --vatica-ink: #171717;
-  --vatica-bg: #f4f4f5;
-  --vatica-surface: #ffffff;
+  --vatica-bg: #ffffff;
+  --vatica-surface: #fafafa;
   --vatica-surface-raised: #ffffff;
-  --vatica-assistant-bubble: #f0f0f1;
+  --vatica-assistant-bubble: #f2f2f2;
+  --vatica-user-bubble: #171717;
+  --vatica-user-bubble-text: #ffffff;
 
-  /* ── 文字三级 ── */
-  --vatica-text: #18181b;
-  --vatica-text-secondary: #52525b;
-  --vatica-text-tertiary: #8e8e96;
+  --vatica-text: #171717;
+  --vatica-text-secondary: #666666;
+  --vatica-text-tertiary: #a0a0a0;
 
-  /* ── 线与状态 ── */
-  --vatica-border: #e4e4e7;
-  --vatica-border-strong: #d4d4d8;
-  --vatica-hover: rgba(24, 24, 27, 0.05);
-  --vatica-selected: rgba(24, 24, 27, 0.08);
-  --vatica-warning-bg: #fff7e6;
-  --vatica-danger-bg: #fff1f0;
+  --vatica-border: #ebebeb;
+  --vatica-border-strong: #e6e6e6;
+  --vatica-hover: #f2f2f2;
+  --vatica-selected: #ebebeb;
+  --vatica-warning-bg: #fff4d4;
+  --vatica-danger-bg: #ffecec;
 
-  --vatica-active-bar: linear-gradient(180deg, #4f5be8, #38bdf8);
-  --vatica-shadow-pop: 0 8px 28px rgba(24, 24, 27, 0.16);
+  --vatica-active-bar: linear-gradient(180deg, #ffb200, #f99c00);
+  --vatica-shadow-pop: 0 8px 28px rgba(0, 0, 0, 0.16);
 
   --vatica-titlebar-bg: var(--vatica-bg);
   --vatica-titlebar-text: var(--vatica-text);
-  --vatica-titlebar-control-hover: rgba(24, 24, 27, 0.06);
+  --vatica-titlebar-control-hover: rgba(0, 0, 0, 0.06);
   --vatica-titlebar-control-close-hover: #e81123;
 
-  /* ── 字体与圆角 ── */
-  --vatica-sans: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --vatica-mono: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
-  --vatica-radius-sm: 8px;
-  --vatica-radius-md: 10px;
-  --vatica-radius-lg: 12px;
+  /* ── 字体与圆角（Geist 优先，离线桌面回退系统栈） ── */
+  --vatica-sans: "Geist", "Inter", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  --vatica-mono: "Geist Mono", "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+  --vatica-radius-sm: 6px;
+  --vatica-radius-md: 8px;
+  --vatica-radius-lg: 10px;
 }
 
 [data-theme="dark"] {
-  --vatica-paper: #171719;
-  --vatica-ink: #0f0f10;
-  --vatica-bg: #0f0f10;
-  --vatica-surface: #171719;
-  --vatica-surface-raised: #1d1d20;
-  --vatica-assistant-bubble: #202024;
+  --vatica-paper: #171717;
+  --vatica-ink: #000000;
+  --vatica-bg: #000000;
+  --vatica-surface: #171717;
+  --vatica-surface-raised: #1f1f1f;
+  --vatica-assistant-bubble: #1f1f1f;
+  --vatica-user-bubble: #292929;
+  --vatica-user-bubble-text: #ededed;
 
-  --vatica-text: #e7e7e9;
-  --vatica-text-secondary: #9f9fa7;
-  --vatica-text-tertiary: #6d6d75;
+  --vatica-text: #ededed;
+  --vatica-text-secondary: #8f8f8f;
+  --vatica-text-tertiary: #666666;
 
-  --vatica-border: #2a2a2e;
-  --vatica-border-strong: #36363b;
-  --vatica-hover: rgba(255, 255, 255, 0.06);
-  --vatica-selected: rgba(255, 255, 255, 0.09);
-  --vatica-warning-bg: #2a2519;
-  --vatica-danger-bg: #2b1c1e;
+  --vatica-border: #292929;
+  --vatica-border-strong: #2e2e2e;
+  --vatica-hover: #1f1f1f;
+  --vatica-selected: #292929;
+  --vatica-warning-bg: #331b00;
+  --vatica-danger-bg: #2c0f12;
 
-  --vatica-shadow-pop: 0 10px 32px rgba(0, 0, 0, 0.45);
-  --vatica-titlebar-control-hover: rgba(255, 255, 255, 0.08);
+  --vatica-shadow-pop: 0 10px 32px rgba(0, 0, 0, 0.55);
+  --vatica-titlebar-control-hover: rgba(237, 237, 237, 0.08);
 }
 
 * {
@@ -218,44 +218,44 @@ body {
 }
 
 .vatica-dot.online {
-  background: radial-gradient(circle at 35% 35%, #8f96f5, var(--vatica-indigo));
-  box-shadow: 0 0 6px rgba(79, 91, 232, 0.55);
+  background: radial-gradient(circle at 35% 35%, #ffd27a, var(--vatica-indigo));
+  box-shadow: 0 0 6px rgba(249, 156, 0, 0.55);
 }
 
 .vatica-dot.checking {
-  background: radial-gradient(circle at 35% 35%, #fbd38d, var(--vatica-amber));
-  box-shadow: 0 0 6px rgba(245, 158, 11, 0.5);
+  background: radial-gradient(circle at 35% 35%, #ffe0a3, var(--vatica-amber));
+  box-shadow: 0 0 6px rgba(249, 156, 0, 0.5);
   animation: vatica-breathe 1.6s ease-in-out infinite;
 }
 
 .vatica-dot.checking::after {
-  border-color: rgba(245, 158, 11, 0.35);
+  border-color: rgba(249, 156, 0, 0.35);
   animation: vatica-ring 1.6s ease-in-out infinite;
 }
 
 .vatica-dot.offline {
-  background: #9ca3af;
+  background: #666666;
 }
 
 .vatica-dot.working {
-  background: radial-gradient(circle at 35% 35%, #a5f3fc, var(--vatica-cyan));
-  box-shadow: 0 0 8px rgba(56, 189, 248, 0.65);
+  background: radial-gradient(circle at 35% 35%, #ffe0a3, var(--vatica-cyan));
+  box-shadow: 0 0 8px rgba(249, 156, 0, 0.65);
   animation: vatica-breathe 1.6s ease-in-out infinite;
 }
 
 .vatica-dot.working::after {
-  border-color: rgba(56, 189, 248, 0.4);
+  border-color: rgba(249, 156, 0, 0.4);
   animation: vatica-ring 1.6s ease-in-out infinite;
 }
 
 @keyframes vatica-breathe {
   0%,
   100% {
-    box-shadow: 0 0 4px rgba(56, 189, 248, 0.35);
+    box-shadow: 0 0 4px rgba(249, 156, 0, 0.35);
     transform: scale(1);
   }
   50% {
-    box-shadow: 0 0 11px rgba(56, 189, 248, 0.8);
+    box-shadow: 0 0 11px rgba(249, 156, 0, 0.8);
     transform: scale(1.18);
   }
 }
@@ -354,7 +354,7 @@ body {
 }
 
 .empty-mark svg {
-  filter: drop-shadow(0 10px 24px rgba(79, 91, 232, 0.35));
+  filter: drop-shadow(0 10px 24px rgba(249, 156, 0, 0.35));
 }
 
 .chat-eyebrow {
@@ -434,10 +434,11 @@ body {
 }
 
 .msg-bubble.user {
-  background: var(--vatica-indigo);
-  color: #fff;
+  background: var(--vatica-user-bubble);
+  color: var(--vatica-user-bubble-text);
+  border: 1px solid var(--vatica-border-strong);
   border-bottom-right-radius: 4px;
-  box-shadow: 0 2px 10px rgba(79, 91, 232, 0.22);
+  box-shadow: none;
 }
 
 .msg-bubble.assistant {
