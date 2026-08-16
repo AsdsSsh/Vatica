@@ -39,6 +39,24 @@ export default function IntegrationSettingsPanel({ open, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  // 迭代 13.5：initialValues 只在首次渲染生效，异步拉到的 view 到达后必须显式回填，否则打开时始终显示默认值
+  useEffect(() => {
+    if (open && view) {
+      form.setFieldsValue({
+        imapHost: view.imapHost,
+        imapPort: view.imapPort,
+        smtpHost: view.smtpHost,
+        smtpPort: view.smtpPort,
+        mailUsername: view.mailUsername,
+        dbMode: view.dbMode,
+        dbHost: view.dbHost,
+        dbPort: view.dbPort,
+        dbDatabase: view.dbDatabase,
+        dbUsername: view.dbUsername,
+      });
+    }
+  }, [open, view, form]);
+
   async function save() {
     const values = await form.validateFields();
     setBusy(true);

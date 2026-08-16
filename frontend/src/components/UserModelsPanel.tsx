@@ -21,6 +21,7 @@ import {
   createUserModelSlot,
   deleteUserModelSlot,
   fetchUserModelSlots,
+  saveEphemeralUserModelKey,
   setUserModelCredentialMode,
   updateUserModelSlot,
   type UserModelSlotSaveRequest,
@@ -98,10 +99,22 @@ export default function UserModelsPanel({ open, onClose, onChanged }: Props) {
         // 编辑已有槽位且 key 留空 = 保持原 key
         apiKey: values.apiKey || null,
       };
+      const mode = request.credentialMode;
+      const enteredKey = request.apiKey?.trim() || null;
       if (isNew || !editing) {
-        await createUserModelSlot(request);
+        const created = await createUserModelSlot(request);
+        // 迭代 13.5：EPHEMERAL 槽位的 key 保存在本机，聊天/任务请求时随请求发出
+        if (created.credentialMode === "EPHEMERAL" && enteredKey) {
+          saveEphemeralUserModelKey(created.id, enteredKey);
+        }
       } else {
         await updateUserModelSlot(editing.id, request);
+        if (mode === "EPHEMERAL" && enteredKey) {
+          saveEphemeralUserModelKey(editing.id, enteredKey);
+        } else if (mode === "ENCRYPTED_AT_REST") {
+          // key 已转到云端加密保存，本机副本不再需要
+          saveEphemeralUserModelKey(editing.id, null);
+        }
       }
       message.success(isNew ? "已添加我的模型" : "已保存我的模型");
       setEditing(null);
@@ -118,6 +131,10 @@ export default function UserModelsPanel({ open, onClose, onChanged }: Props) {
     setBusy(true);
     try {
       await setUserModelCredentialMode(slot.id, next, apiKey);
+      // 迭代 13.5：转入云端加密保存后删除本机副本；转回 EPHEMERAL 时保留本机已有副本（如有）
+      if (next === "ENCRYPTED_AT_REST") {
+        saveEphemeralUserModelKey(slot.id, null);
+      }
       message.success(next === "ENCRYPTED_AT_REST" ? "已开启云端加密保存" : "已关闭云端保存，云端密文已删除");
       await reload();
       onChanged?.();
@@ -229,6 +246,7 @@ export default function UserModelsPanel({ open, onClose, onChanged }: Props) {
                       onConfirm={async () => {
                         try {
                           await deleteUserModelSlot(s.id);
+                          saveEphemeralUserModelKey(s.id, null);
                           message.success("已删除");
                           await reload();
                           onChanged?.();

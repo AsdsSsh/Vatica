@@ -97,7 +97,7 @@ export default function StepPanel() {
   const [workspaceInput, setWorkspaceInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [approvalOpen, setApprovalOpen] = useState(false);
-  const [permissionRequest, setPermissionRequest] = useState<FilePermissionRequest | null>(null);
+  const [permissionRequests, setPermissionRequests] = useState<FilePermissionRequest[]>([]);
   const [permissionDeciding, setPermissionDeciding] = useState(false);
   const [permissionRemember, setPermissionRemember] = useState(true);
   const prevStatus = useRef<string | null>(null);
@@ -119,9 +119,12 @@ export default function StepPanel() {
         }
       },
       (permission) => {
-        // 权限请求是全局弹窗，即使该任务未被选中也必须展示
+        // 权限请求是全局弹窗，即使该任务未被选中也必须展示；
+        // 迭代 13.5：并行任务可能同时请求权限，入队而不是互相覆盖
         setPermissionRemember(true);
-        setPermissionRequest(permission);
+        setPermissionRequests((prev) =>
+          prev.some((p) => p.requestId === permission.requestId) ? prev : [...prev, permission],
+        );
       },
     );
     taskSubscriptions.current.set(id, close);
@@ -224,7 +227,8 @@ export default function StepPanel() {
   }
 
   async function decidePermission(approved: boolean) {
-    const request = permissionRequest;
+    // 迭代 13.5：一次只处理队首请求，处理完自动轮到下一条
+    const request = permissionRequests[0];
     if (!request) return;
     setPermissionDeciding(true);
     try {
@@ -240,7 +244,7 @@ export default function StepPanel() {
       message.error(`权限请求处理失败：${(e as Error).message}`);
     } finally {
       setPermissionDeciding(false);
-      setPermissionRequest(null);
+      setPermissionRequests((prev) => prev.filter((p) => p.requestId !== request.requestId));
     }
   }
 
@@ -542,7 +546,7 @@ export default function StepPanel() {
 
       {/* 文件权限请求弹窗（迭代 11 引入；迭代 12 I12-6 统一为共享组件） */}
       <PermissionRequestModal
-        request={permissionRequest}
+        request={permissionRequests[0] ?? null}
         deciding={permissionDeciding}
         remember={permissionRemember}
         onRememberChange={setPermissionRemember}

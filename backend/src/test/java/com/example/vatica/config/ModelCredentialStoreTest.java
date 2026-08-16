@@ -44,4 +44,16 @@ class ModelCredentialStoreTest {
         store.clear("ds");
         assertThat(repository.existsById("ds")).isFalse();
     }
+
+    /** 迭代 13.5：槽位列表保存后，被删除槽位的密钥密文一并清理。 */
+    @Test
+    void clearAllExceptRemovesOrphanCredentials() {
+        store.put("keep", "sk-keep");
+        store.put("deleted", "sk-orphan");
+
+        store.clearAllExcept(java.util.List.of("keep"));
+
+        assertThat(repository.existsById("keep")).isTrue();
+        assertThat(repository.existsById("deleted")).isFalse();
+    }
 }

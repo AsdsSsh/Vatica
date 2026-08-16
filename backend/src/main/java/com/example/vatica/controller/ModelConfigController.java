@@ -3,6 +3,7 @@ package com.example.vatica.controller;
 import java.util.List;
 import java.util.Map;
 
+import com.example.vatica.auth.AdminGuard;
 import com.example.vatica.config.ModelConfigService;
 import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.config.ModelSlot;
@@ -35,13 +36,16 @@ public class ModelConfigController {
         this.registry = registry;
     }
 
+    /** 迭代 13.5：模型配置属于平台级敏感设置，仅平台管理员可读可改；连通性测试对登录用户开放。 */
     @GetMapping
     public List<ModelSlotView> list() {
+        AdminGuard.requirePlatformAdmin();
         return config.slots().stream().map(this::view).toList();
     }
 
     @PutMapping
     public List<ModelSlotView> save(@RequestBody List<ModelSlot> slots) {
+        AdminGuard.requirePlatformAdmin();
         return config.save(slots).stream().map(this::view).toList();
     }
 

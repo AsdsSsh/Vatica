@@ -164,6 +164,38 @@ export interface FilePermissionPolicy {
   workspaceRoots: WorkspaceRoot[];
 }
 
+/** 请求级临时模型凭据（迭代 13 I13-5；迭代 13.5 供 EPHEMERAL 用户模型使用）。 */
+export interface EphemeralCredential {
+  protocol: "openai" | "anthropic";
+  baseUrl: string;
+  model: string;
+  temperature: number;
+  apiKey: string;
+}
+
+// ═══ EPHEMERAL 用户模型的客户端密钥（迭代 13.5）═══
+// 后端永不回传完整 key；"仅本机"模式的 key 由前端保存在 localStorage，
+// 发消息时以请求级 credential 随请求发出，云端不落库。
+
+const USER_MODEL_KEY_PREFIX = "vatica.userModelKey.";
+
+export function saveEphemeralUserModelKey(slotId: string, apiKey: string | null): void {
+  try {
+    if (apiKey) localStorage.setItem(USER_MODEL_KEY_PREFIX + slotId, apiKey);
+    else localStorage.removeItem(USER_MODEL_KEY_PREFIX + slotId);
+  } catch {
+    // 隐私模式忽略
+  }
+}
+
+export function getEphemeralUserModelKey(slotId: string): string | null {
+  try {
+    return localStorage.getItem(USER_MODEL_KEY_PREFIX + slotId);
+  } catch {
+    return null;
+  }
+}
+
 /** 后端经 SSE 推送的一次文件权限请求。 */
 export interface FilePermissionRequest {
   requestId: string;
@@ -198,8 +230,14 @@ export async function* streamChat(
   permission: FilePermissionPolicy,
   model?: string,
   signal?: AbortSignal,
+  credential?: EphemeralCredential,
 ): AsyncGenerator<ChatStreamEvent> {
-  const res = await post("/api/chat/stream", { message, sessionId, model, permission }, signal);
+  // 迭代 13.5：credential 与 model 二选一（后端约定两者同时出现快速失败）
+  const res = await post(
+    "/api/chat/stream",
+    { message, sessionId, permission, ...(credential ? { credential } : { model }) },
+    signal,
+  );
   if (!res.body) {
     throw new Error(`请求失败（HTTP ${res.status}）`);
   }
@@ -466,8 +504,12 @@ export async function fetchRecentTasks(): Promise<TaskSummary[]> {
   return (await getJson("/api/task")).json();
 }
 
-export async function createTask(goal: string, permission?: FilePermissionPolicy): Promise<TaskDetail> {
-  return (await post("/api/task", { goal, permission })).json();
+export async function createTask(
+  goal: string,
+  permission?: FilePermissionPolicy,
+  credential?: EphemeralCredential,
+): Promise<TaskDetail> {
+  return (await post("/api/task", { goal, permission, credential })).json();
 }
 
 export async function fetchTaskDetail(id: string): Promise<TaskDetail> {
@@ -480,29 +522,70 @@ export async function taskAction(id: string, action: "approve" | "rework" | "can
 }
 
 /**
- * 订阅任务进度事件（迭代 7 I7-1）：EventSource + `task` 事件；
- * 订阅即收到后端回放的当前快照。迭代 11 增加 `permission_request` 事件。
- * 返回取消订阅函数。
+ * 订阅任务进度事件（迭代 7 I7-1；迭代 13.5 改为 fetch-SSE）：
+ * EventSource 无法带 Authorization 头，云端后端开启 JWT 鉴权后 401 永远连不上；
+ * 这里用 fetch 读取 SSE 流并统一解析 `task` / `permission_request` 事件。
+ * 订阅即收到后端回放的当前快照。返回取消订阅函数（abort 请求）。
  */
 export function subscribeTaskEvents(
   id: string,
   onEvent: (e: TaskEvent) => void,
   onPermission?: (e: FilePermissionRequest) => void,
 ): () => void {
-  const source = new EventSource(`${getApiBase()}/api/task/${id}/events`);
-  source.addEventListener("task", (ev: MessageEvent<string>) => {
+  const controller = new AbortController();
+  let cancelled = false;
+  void (async () => {
     try {
-      onEvent(JSON.parse(ev.data));
-    } catch {
-      // 忽略坏帧（连接抖动时 EventSource 会自动重连）
+      const res = await fetch(`${getApiBase()}/api/task/${id}/events`, {
+        headers: { Accept: "text/event-stream", ...authHeaders() },
+        signal: controller.signal,
+      });
+      if (!res.ok) throw await toRequestError(res, `订阅任务进度失败（HTTP ${res.status}）`);
+      if (!res.body) throw new Error(`请求失败（HTTP ${res.status}）`);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let eventName = "task";
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let idx: number;
+          while ((idx = buffer.indexOf("\n")) >= 0) {
+            const line = buffer.slice(0, idx).trimEnd();
+            buffer = buffer.slice(idx + 1);
+            if (line.startsWith("event:")) {
+              eventName = line.slice(6).trim();
+            } else if (line.startsWith("data:")) {
+              const payload = line.slice(5).replace(/^ /, "");
+              if (eventName === "permission_request") {
+                try {
+                  onPermission?.(JSON.parse(payload) as FilePermissionRequest);
+                } catch {
+                  // 忽略坏帧
+                }
+              } else {
+                try {
+                  onEvent(JSON.parse(payload) as TaskEvent);
+                } catch {
+                  // 忽略坏帧（连接抖动时重新订阅即可拿到完整快照）
+                }
+              }
+              eventName = "task";
+            }
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    } catch (e) {
+      if (cancelled || controller.signal.aborted) return;   // 主动取消不告警
+      console.warn("任务进度订阅中断", e);
     }
-  });
-  source.addEventListener("permission_request", (ev: MessageEvent<string>) => {
-    try {
-      onPermission?.(JSON.parse(ev.data) as FilePermissionRequest);
-    } catch {
-      // 忽略坏帧
-    }
-  });
-  return () => source.close();
+  })();
+  return () => {
+    cancelled = true;
+    controller.abort();
+  };
 }

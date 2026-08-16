@@ -87,6 +87,8 @@ public class ModelConfigService {
                 credentials.put(slot.id(), slot.apiKey());
             }
         }
+        // 迭代 13.5：用户删除的槽位，其密钥密文一并清理
+        credentials.clearAllExcept(normalized.stream().map(ModelSlot::id).toList());
         List<ModelSlot> metadata = normalized.stream()
                 .map(s -> new ModelSlot(s.id(), s.name(), s.protocol(), s.baseUrl(), null,
                         s.model(), s.temperature(), s.enabled()))

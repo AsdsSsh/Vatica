@@ -72,4 +72,42 @@ class UserModelServiceTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("无权访问");
     }
+
+    /** 迭代 13.5：编辑时把模式切回 EPHEMERAL，即使 apiKey 留空也必须删除云端密文。 */
+    @Test
+    void updateToEphemeralAlwaysClearsCloudCredential() {
+        UserModelService.View slot = service.create(7L,
+                request(UserModelSlot.MODE_ENCRYPTED_AT_REST, "sk-live-12345678"));
+
+        UserModelService.View updated = service.update(7L, slot.id(),
+                request(UserModelSlot.MODE_EPHEMERAL, null));
+
+        assertThat(updated.credentialMode()).isEqualTo(UserModelSlot.MODE_EPHEMERAL);
+        assertThat(credentials.existsById(slot.id())).isFalse();
+    }
+
+    /** 迭代 13.5：编辑时切到 ENCRYPTED_AT_REST 但既没填新 key 也没有旧密文 → 快速失败。 */
+    @Test
+    void updateToEncryptedWithoutAnyKeyFails() {
+        UserModelService.View slot = service.create(7L,
+                request(UserModelSlot.MODE_EPHEMERAL, "sk-temp"));
+
+        assertThatThrownBy(() -> service.update(7L, slot.id(),
+                request(UserModelSlot.MODE_ENCRYPTED_AT_REST, null)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("必须提供 API Key");
+    }
+
+    /** 迭代 13.5：ENCRYPTED_AT_REST 槽位只改名字（apiKey null）不应把旧密文丢掉。 */
+    @Test
+    void updateEncryptedWithNullKeyKeepsExistingCredential() {
+        UserModelService.View slot = service.create(7L,
+                request(UserModelSlot.MODE_ENCRYPTED_AT_REST, "sk-live-12345678"));
+
+        UserModelService.View updated = service.update(7L, slot.id(),
+                request(UserModelSlot.MODE_ENCRYPTED_AT_REST, null));
+
+        assertThat(updated.apiKeySet()).isTrue();
+        assertThat(service.resolveApiKey(7L, slot.id())).isEqualTo("sk-live-12345678");
+    }
 }

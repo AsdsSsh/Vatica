@@ -37,7 +37,9 @@ import {
   denyPermissionRequest,
   fetchModels,
   fetchUserModelSlots,
+  getEphemeralUserModelKey,
   streamChat,
+  type EphemeralCredential,
   type FilePermissionRequest,
   type ModelInfo,
   type ToolActivity,
@@ -121,13 +123,14 @@ export default function ChatPanel({
   const [authOpen, setAuthOpen] = useState(false);
   const [userModelsOpen, setUserModelsOpen] = useState(false);
   const [integrationOpen, setIntegrationOpen] = useState(false);
-  const [permissionRequest, setPermissionRequest] = useState<FilePermissionRequest | null>(null);
+  const [permissionRequests, setPermissionRequests] = useState<FilePermissionRequest[]>([]);
   const [permissionDeciding, setPermissionDeciding] = useState(false);
   const [permissionRemember, setPermissionRemember] = useState(true);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const [toolActivity, setToolActivity] = useState<ToolActivity | null>(null);
 
-  const permissionResolveRef = useRef<((approved: boolean) => void) | null>(null);
+  /** 迭代 13.5：并行流可能同时提出多个权限请求，按 requestId 保存每个等待决定。 */
+  const permissionResolveRef = useRef<Map<string, (approved: boolean) => void>>(new Map());
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<TextAreaRef>(null);
@@ -182,14 +185,16 @@ export default function ChatPanel({
   /** 展示权限弹窗并等待用户决定（streamChat 暂停在此处，后端工具同步等待）。 */
   function askPermission(request: FilePermissionRequest): Promise<boolean> {
     setPermissionRemember(true);
-    setPermissionRequest(request);
+    setPermissionRequests((prev) =>
+      prev.some((p) => p.requestId === request.requestId) ? prev : [...prev, request],
+    );
     return new Promise((resolve) => {
-      permissionResolveRef.current = resolve;
+      permissionResolveRef.current.set(request.requestId, resolve);
     });
   }
 
   async function decidePermission(approved: boolean) {
-    const request = permissionRequest;
+    const request = permissionRequests[0];
     if (!request) return;
     setPermissionDeciding(true);
     try {
@@ -201,13 +206,13 @@ export default function ChatPanel({
       } else {
         await denyPermissionRequest(request.requestId);
       }
-      permissionResolveRef.current?.(approved);
+      permissionResolveRef.current.get(request.requestId)?.(approved);
     } catch (e) {
       message.error(`权限请求处理失败：${(e as Error).message}`);
-      permissionResolveRef.current?.(false);
+      permissionResolveRef.current.get(request.requestId)?.(false);
     } finally {
-      permissionResolveRef.current = null;
-      setPermissionRequest(null);
+      permissionResolveRef.current.delete(request.requestId);
+      setPermissionRequests((prev) => prev.filter((p) => p.requestId !== request.requestId));
       setPermissionDeciding(false);
     }
   }
@@ -221,9 +226,45 @@ export default function ChatPanel({
     }
   }
 
+  /** 迭代 13.5：选中"仅本机"用户模型时，从本机取 key 组装请求级 credential（后端与 model 二选一）。 */
+  function ephemeralCredentialFor(modelId: string | undefined): {
+    credential: EphemeralCredential | undefined;
+    requestModel: string | undefined;
+  } {
+    if (!modelId?.startsWith("user:")) {
+      return { credential: undefined, requestModel: modelId };
+    }
+    const slot = userSlots.find((s) => `user:${s.id}` === modelId);
+    if (!slot || slot.credentialMode !== "EPHEMERAL") {
+      return { credential: undefined, requestModel: modelId };
+    }
+    const apiKey = getEphemeralUserModelKey(slot.id);
+    if (!apiKey) {
+      return { credential: undefined, requestModel: modelId };
+    }
+    return {
+      credential: {
+        protocol: slot.protocol,
+        baseUrl: slot.baseUrl,
+        model: slot.model,
+        temperature: slot.temperature,
+        apiKey,
+      },
+      requestModel: undefined,
+    };
+  }
+
   async function send() {
     const text = input.trim();
     if (!text || streaming || !online) return;
+    const selectedSlot = model?.startsWith("user:")
+      ? userSlots.find((s) => `user:${s.id}` === model)
+      : undefined;
+    if (selectedSlot?.credentialMode === "EPHEMERAL" && !getEphemeralUserModelKey(selectedSlot.id)) {
+      message.error("该模型是仅本机模式：请先在「我的模型」中编辑并填写 API Key，Key 只保存在本机。");
+      return;
+    }
+    const { credential, requestModel } = ephemeralCredentialFor(model);
     setInput("");
     autoScrollRef.current = true;
     setShowJumpToBottom(false);
@@ -242,8 +283,9 @@ export default function ChatPanel({
         text,
         session.id,
         loadPermissionPolicy(),
-        model,
+        requestModel,
         controller.signal,
+        credential,
       )) {
         if (event.kind === "text") {
           if (typing) setTyping(false);
@@ -279,9 +321,10 @@ export default function ChatPanel({
   }
 
   function stop() {
-    permissionResolveRef.current?.(false);
-    permissionResolveRef.current = null;
-    setPermissionRequest(null);
+    // 停止当前流：所有排队中的权限请求一并按拒绝收尾，避免 Promise 永久悬挂
+    permissionResolveRef.current.forEach((resolve) => resolve(false));
+    permissionResolveRef.current.clear();
+    setPermissionRequests([]);
     abortRef.current?.abort();
   }
 
@@ -341,11 +384,19 @@ export default function ChatPanel({
               },
               {
                 label: "我的模型",
-                options: userSlots.map((s) => ({
-                  value: `user:${s.id}`,
-                  label: `${s.name} · ${s.credentialMode === "ENCRYPTED_AT_REST" ? "云端加密" : "仅本机"}`,
-                  disabled: s.credentialMode !== "ENCRYPTED_AT_REST",
-                })),
+                options: userSlots.map((s) => {
+                  const ephemeral = s.credentialMode === "EPHEMERAL";
+                  const hasLocalKey = !ephemeral || !!getEphemeralUserModelKey(s.id);
+                  return {
+                    value: `user:${s.id}`,
+                    label: ephemeral
+                      ? hasLocalKey
+                        ? `${s.name} · 仅本机`
+                        : `${s.name} · 仅本机（未存 Key）`
+                      : `${s.name} · 云端加密`,
+                    disabled: !hasLocalKey,
+                  };
+                }),
               },
             ]}
           />
@@ -623,7 +674,7 @@ export default function ChatPanel({
       </div>
 
       <PermissionRequestModal
-        request={permissionRequest}
+        request={permissionRequests[0] ?? null}
         deciding={permissionDeciding}
         remember={permissionRemember}
         onRememberChange={setPermissionRemember}

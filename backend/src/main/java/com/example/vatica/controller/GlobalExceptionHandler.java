@@ -29,6 +29,12 @@ public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
+    /** 权限不足 → 403（迭代 13.5：平台管理员接口）。 */
+    @ExceptionHandler(ForbiddenException.class)
+    public ResponseEntity<ApiError> handleForbidden(ForbiddenException e) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ApiError(e.getMessage()));
+    }
+
     /** 资源不存在（任务 id 查无）→ 404。 */
     @ExceptionHandler(TaskNotFoundException.class)
     public ResponseEntity<ApiError> handleNotFound(TaskNotFoundException e) {

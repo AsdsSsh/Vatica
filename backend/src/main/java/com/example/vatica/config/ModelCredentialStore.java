@@ -1,5 +1,6 @@
 package com.example.vatica.config;
 
+import java.util.Collection;
 import java.util.Optional;
 
 import org.springframework.stereotype.Service;
@@ -10,7 +11,8 @@ import com.example.vatica.secret.SecretCrypto;
 /**
  * 模型凭据密文存取（迭代 13 I13-3）：
  * {@code put} 用信封加密落库（key_version+1，旧密文覆盖）；{@code resolve} 解密返回明文
- * （只存在于内存调用链）；{@code clear} 删除密文行。hint = 末 4 位。
+ * （只存在于内存调用链）；{@code clear} 删除密文行；{@code clearAllExcept} 清理
+ * 已不在配置列表中的孤儿凭据（迭代 13.5）。hint = 末 4 位。
  */
 @Service
 public class ModelCredentialStore {
@@ -56,6 +58,18 @@ public class ModelCredentialStore {
     @Transactional
     public void clear(String slotId) {
         repository.deleteById(slotId);
+    }
+
+    /** 迭代 13.5：删除所有不在 {@code keptSlotIds} 中的凭据（槽位删除后不再留密钥密文）。 */
+    @Transactional
+    public void clearAllExcept(Collection<String> keptSlotIds) {
+        if (keptSlotIds == null || keptSlotIds.isEmpty()) {
+            repository.deleteAllInBatch();
+            return;
+        }
+        repository.deleteAll(repository.findAll().stream()
+                .filter(row -> !keptSlotIds.contains(row.getSlotId()))
+                .toList());
     }
 
     public record Resolved(String apiKey, String hint, int keyVersion) {

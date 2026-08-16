@@ -65,14 +65,18 @@ public class UserModelService {
         slot.setModel(trim(request.model()));
         slot.setTemperature(request.temperature() == null ? 0.7 : request.temperature());
         slot.setEnabled(request.enabled());
-        slot.setCredentialMode(normalizeMode(request.credentialMode()));
+        String mode = normalizeMode(request.credentialMode());
+        slot.setCredentialMode(mode);
         validate(slot);
-        if (request.apiKey() != null) {
-            if (slot.getCredentialMode().equals(UserModelSlot.MODE_ENCRYPTED_AT_REST)) {
-                storeKey(slot.getId(), request.apiKey());
-            } else {
-                credentials.deleteById(slot.getId());
-            }
+        // 迭代 13.5：凭据与模式必须始终一致——
+        // 切到 EPHEMERAL 无条件删除云端密文；切到 ENCRYPTED_AT_REST 时
+        // apiKey 非空 = 覆写、null = 复用现有密文、两者都没有 = 快速失败。
+        if (mode.equals(UserModelSlot.MODE_EPHEMERAL)) {
+            credentials.deleteById(slot.getId());
+        } else if (request.apiKey() != null) {
+            storeKey(slot.getId(), request.apiKey());
+        } else if (!credentials.existsById(slot.getId())) {
+            throw new IllegalArgumentException("操作失败：切换为云端加密保存模式时必须提供 API Key。");
         }
         return view(slots.save(slot));
     }

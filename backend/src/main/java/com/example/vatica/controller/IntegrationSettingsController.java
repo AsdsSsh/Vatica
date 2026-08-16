@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.example.vatica.auth.AdminGuard;
 import com.example.vatica.config.IntegrationSettings;
 import com.example.vatica.config.IntegrationSettingsService;
 
@@ -32,14 +33,17 @@ public class IntegrationSettingsController {
             boolean dbPasswordSet, String dbPasswordHint) {
     }
 
+    /** 迭代 13.5：外部服务密钥属于平台级敏感设置，仅平台管理员可读可改。 */
     @GetMapping
     public View get() {
+        AdminGuard.requirePlatformAdmin();
         IntegrationSettings s = service.load();
         return view(s);
     }
 
     @PutMapping
     public View save(@RequestBody IntegrationSettings request) {
+        AdminGuard.requirePlatformAdmin();
         return view(service.save(request));
     }
 
