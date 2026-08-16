@@ -101,18 +101,66 @@ export default function StepPanel() {
   const [permissionDeciding, setPermissionDeciding] = useState(false);
   const [permissionRemember, setPermissionRemember] = useState(true);
   const prevStatus = useRef<string | null>(null);
+  const selectedIdRef = useRef<string | null>(null);
+  selectedIdRef.current = selectedId;
+  /** 所有非终态任务的 SSE 订阅：切走任务后仍能接收权限请求（迭代 12 热修）。 */
+  const taskSubscriptions = useRef<Map<string, () => void>>(new Map());
+
+  const subscribeTask = useCallback((id: string) => {
+    if (taskSubscriptions.current.has(id)) return;
+    const close = subscribeTaskEvents(
+      id,
+      (e: TaskEvent) => {
+        // 只更新当前选中的任务详情；其余任务只保持订阅通道存活
+        if (selectedIdRef.current === id) setDetail(e);
+        if (e.status === "DONE" || e.status === "FAILED" || e.status === "CANCELLED") {
+          close();
+          taskSubscriptions.current.delete(id);
+        }
+      },
+      (permission) => {
+        // 权限请求是全局弹窗，即使该任务未被选中也必须展示
+        setPermissionRemember(true);
+        setPermissionRequest(permission);
+      },
+    );
+    taskSubscriptions.current.set(id, close);
+  }, []);
+
+  const syncSubscriptions = useCallback((list: TaskSummary[]) => {
+    const terminal = new Set(["DONE", "FAILED", "CANCELLED"]);
+    const activeIds = new Set(list.filter((t) => !terminal.has(t.status)).map((t) => t.id));
+    for (const [id, close] of taskSubscriptions.current) {
+      if (!activeIds.has(id)) {
+        close();
+        taskSubscriptions.current.delete(id);
+      }
+    }
+    activeIds.forEach((id) => subscribeTask(id));
+  }, [subscribeTask]);
 
   const refreshTasks = useCallback(async () => {
     try {
-      setTasks(await fetchRecentTasks());
+      const list = await fetchRecentTasks();
+      setTasks(list);
+      syncSubscriptions(list);
     } catch {
       message.error("任务列表加载失败（后端未启动？）");
     }
-  }, []);
+  }, [syncSubscriptions]);
 
   useEffect(() => {
     refreshTasks();
   }, [refreshTasks]);
+
+  // 组件卸载时关闭全部任务订阅
+  useEffect(() => {
+    const subs = taskSubscriptions.current;
+    return () => {
+      subs.forEach((close) => close());
+      subs.clear();
+    };
+  }, []);
 
   // 迭代 12 I12-2：后端恢复在线后自动刷新任务列表（模型列表由 ChatPanel 负责）
   useEffect(() => {
@@ -121,7 +169,7 @@ export default function StepPanel() {
     }
   }, [online, refreshTasks]);
 
-  // 选中任务 → 拉详情 + 订阅 SSE 进度事件（含快照回放与权限请求）
+  // 选中任务 → 拉详情（SSE 订阅由 syncSubscriptions 统一维护，切换任务不再断权限通道）
   useEffect(() => {
     if (!selectedId) return;
     let disposed = false;
@@ -130,21 +178,8 @@ export default function StepPanel() {
         if (!disposed) setDetail(d);
       })
       .catch(() => message.error("任务详情加载失败"));
-    const close = subscribeTaskEvents(
-      selectedId,
-      (e: TaskEvent) => {
-        if (!disposed) setDetail(e);
-      },
-      (permission) => {
-        if (!disposed) {
-          setPermissionRemember(true);
-          setPermissionRequest(permission);
-        }
-      },
-    );
     return () => {
       disposed = true;
-      close();
     };
   }, [selectedId]);
 
@@ -303,9 +338,8 @@ export default function StepPanel() {
                 setSelectedId(t.id);
                 setDetail(null);
                 prevStatus.current = null;
-                // 迭代 12 I12-8：切任务重置审批/权限弹窗，避免旧任务状态残留
+                // 迭代 12 I12-8：切任务重置审批弹窗；权限弹窗保留（可能来自后台运行任务）
                 setApprovalOpen(false);
-                setPermissionRequest(null);
               }}
               style={{ cursor: "pointer", padding: "8px 10px" }}
             >

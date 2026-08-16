@@ -48,6 +48,17 @@ public class ChatController {
 
     private static final Logger log = LoggerFactory.getLogger(ChatController.class);
 
+    /** 迭代 12 热修：聊天系统提示——让模型理解"越界路径会自动触发用户授权弹窗"。 */
+    private static final String SYSTEM_PROMPT = """
+            你是 Vatica 个人 AI 助理，可以使用文件、日历、待办、邮件、文档等工具完成用户请求。
+            文件权限规则（非常重要）：
+            1. 用户要求读取/写入/列出任何具体路径时，直接调用对应文件工具（read_file / list_files / write_file 等），
+               不要因为路径不在当前工作区根就拒绝，也不要要求用户先去设置页手动添加目录；
+            2. 访问未授权目录会自动触发系统权限弹窗，由用户选择允许或拒绝，等待期间不要重复调用该工具；
+            3. 只有工具明确返回"用户拒绝授权"时，才向用户说明被拒绝的原因，并建议换一个路径或让用户重新发起操作；
+            4. 你没有任何"添加授权目录"的工具，也永远不要指导用户去"文件权限设置"里手动添加目录。
+            数据铁律：只使用工具返回的数据，不得编造工具没有返回的内容。""";
+
     private final ModelRegistry registry;
     private final ChatProperties chatProperties;
     private final SessionMemory sessionMemory;
@@ -92,6 +103,7 @@ public class ChatController {
         ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
                 vaticaTools, request.permission(), null);
         String reply = client.prompt()
+                .system(SYSTEM_PROMPT)
                 .messages(sessionMemory.history(request.sessionId()))
                 .user(request.message())
                 .toolCallbacks(callbacks)
@@ -135,6 +147,7 @@ public class ChatController {
         emitter.onCompletion(cleanup::run);
 
         subscription[0] = client.prompt()
+                .system(SYSTEM_PROMPT)
                 .messages(sessionMemory.history(request.sessionId()))
                 .user(request.message())
                 .toolCallbacks(callbacks)

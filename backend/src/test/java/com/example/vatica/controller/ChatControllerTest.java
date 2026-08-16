@@ -83,6 +83,7 @@ class ChatControllerTest {
         when(registry.defaultClient()).thenReturn(chatClient);
         when(registry.clientFor(anyString())).thenReturn(chatClient);
         when(chatClient.prompt()).thenReturn(spec);
+        when(spec.system(anyString())).thenReturn(spec);
         when(spec.messages(anyList())).thenReturn(spec);
         when(spec.user(anyString())).thenReturn(spec);
         when(toolProvider.getToolCallbacks()).thenReturn(new ToolCallback[0]);
@@ -206,6 +207,7 @@ class ChatControllerTest {
     void modelRoutingUsesSelectedClient() throws Exception {
         when(registry.clientFor("qwen")).thenReturn(qwenChatClient);
         when(qwenChatClient.prompt()).thenReturn(qwenSpec);
+        when(qwenSpec.system(anyString())).thenReturn(qwenSpec);
         when(qwenSpec.messages(anyList())).thenReturn(qwenSpec);
         when(qwenSpec.user(anyString())).thenReturn(qwenSpec);
         when(qwenSpec.toolCallbacks(any(ToolCallback[].class))).thenReturn(qwenSpec);

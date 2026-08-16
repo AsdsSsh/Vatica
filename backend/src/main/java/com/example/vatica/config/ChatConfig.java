@@ -38,10 +38,17 @@ public class ChatConfig {
         return new JpaSessionMemory(cache, repository, props.memory().maxMessages());
     }
 
-    /** JSON 序列化（迭代 5）：Boot 4.1 未自动装配 ObjectMapper Bean，这里显式声明供 Planner/任务层复用。 */
+    /**
+     * JSON 序列化（迭代 5）：Boot 4.1 未自动装配 ObjectMapper Bean，这里显式声明供
+     * Planner/任务层/权限事件复用。迭代 12 热修：注册 JavaTimeModule——
+     * PermissionEventPublisher 序列化 FilePermissionRequest.createdAt（Instant）时
+     * 若缺失会抛 InvalidDefinitionException，导致"权限弹窗无订阅者"假象。
+     */
     @Bean
     ObjectMapper objectMapper() {
-        return new ObjectMapper();
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+        return mapper;
     }
 
     /**
