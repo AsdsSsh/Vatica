@@ -36,6 +36,10 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler)
             throws Exception {
         if (!props.enabled() || HttpMethod.OPTIONS.matches(request.getMethod()) || isPublic(request.getRequestURI())) {
+            if (!props.enabled() && !HttpMethod.OPTIONS.matches(request.getMethod()) && !isPublic(request.getRequestURI())) {
+                // 过渡期：鉴权关闭时所有请求使用本地默认身份，自配槽位等 user 维度功能可用
+                RequestIdentityContext.set(new RequestIdentity(1L, 1L, "LOCAL", "local"));
+            }
             return true;
         }
         String header = request.getHeader("Authorization");

@@ -7,6 +7,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import com.example.vatica.config.ChatProperties;
 import com.example.vatica.config.ModelRegistry;
+import com.example.vatica.auth.RequestIdentity;
+import com.example.vatica.auth.RequestIdentityContext;
 import com.example.vatica.permission.FilePermissionRequestService;
 import com.example.vatica.permission.PermissionBoundToolCallbacks;
 import com.example.vatica.permission.PermissionEventPublisher;
@@ -92,6 +94,11 @@ public class ChatController {
     private ChatClient resolveClient(String model) {
         if (model == null || model.isBlank()) {
             return registry.defaultClient();
+        }
+        if (model.startsWith("user:")) {
+            RequestIdentity identity = RequestIdentityContext.current();
+            Long ownerId = identity == null ? 1L : identity.userId();
+            return registry.userClient(ownerId, model.substring("user:".length()), true);
         }
         return registry.clientFor(model);
     }

@@ -42,16 +42,18 @@ public class ModelRegistry {
 
     private final ModelConfigService config;
     private final ModelCredentialStore credentials;
+    private final UserModelService userModels;
     private final ObjectProvider<SyncMcpToolCallbackProvider> mcpToolProvider;
     private final ToolCallingManager toolCallingManager;
 
     /** 客户端缓存：key = slotId + 配置指纹。 */
     private final ConcurrentHashMap<String, ChatClient> clients = new ConcurrentHashMap<>();
 
-    public ModelRegistry(ModelConfigService config, ModelCredentialStore credentials,
+    public ModelRegistry(ModelConfigService config, ModelCredentialStore credentials, UserModelService userModels,
             ObjectProvider<SyncMcpToolCallbackProvider> mcpToolProvider, ToolCallingManager toolCallingManager) {
         this.config = config;
         this.credentials = credentials;
+        this.userModels = userModels;
         this.mcpToolProvider = mcpToolProvider;
         this.toolCallingManager = toolCallingManager;
     }
@@ -102,6 +104,18 @@ public class ModelRegistry {
     /** 迭代 13 I13-5：请求级临时凭据客户端——每次新建，不查库、不写库、不进缓存。 */
     public ChatClient ephemeralClient(EphemeralCredential credential, boolean withTools) {
         return build(credential.toSlot(), withTools);
+    }
+
+    /** 迭代 13 I13-4：用户自配槽位客户端（仅 ENCRYPTED_AT_REST；EPHEMERAL 需请求带 credential）。 */
+    public ChatClient userClient(Long ownerId, String slotId, boolean withTools) {
+        UserModelSlot slot = userModels.resolveSlot(ownerId, slotId);
+        if (UserModelSlot.MODE_EPHEMERAL.equals(slot.getCredentialMode())) {
+            throw new IllegalArgumentException("操作失败：该模型为仅本机模式，请随请求提供 credential 后重试。");
+        }
+        String apiKey = userModels.resolveApiKey(ownerId, slotId);
+        ModelSlot model = new ModelSlot("user:" + slotId, slot.getName(), slot.getProtocol(), slot.getBaseUrl(),
+                apiKey, slot.getModel(), slot.getTemperature(), true);
+        return build(model, withTools);
     }
 
     /** 连通性测试（不带工具）：发一句最短指令，成功即返回模型回复。

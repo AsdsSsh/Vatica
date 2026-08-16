@@ -42,7 +42,8 @@ class ModelRegistryTest {
                         new OpenAiDefaultsProperties.Chat("deepseek-v4-flash", 0.7)),
                 new ModelProperties(new ModelProperties.Qwen("", "", "", null)),
                 credentials);
-        registry = new ModelRegistry(config, credentials,
+        UserModelService userModels = mock(UserModelService.class);
+        registry = new ModelRegistry(config, credentials, userModels,
                 mcpProvider(null),
                 ToolCallingManager.builder().build());
     }
