@@ -20,11 +20,9 @@ public final class WindowsRegistryEnvBackfill {
     private static final String REG_KEY = "HKCU\\Environment";
     private static final String REG_SZ = "REG_SZ";
 
-    /** 后端配置引用的全部环境变量键（与 launcher/main.rs 的白名单保持一致）。 */
+    /** 后端配置引用的全部环境变量键（与 launcher/main.rs 的白名单保持一致）。迭代 13：模型 Key 已去环境变量。 */
     private static final List<String> KEYS = List.of(
-            "DEEPSEEK_API_KEY",
             "AMAP_MCP_KEY",
-            "QWEN_API_KEY",
             "MAIL_IMAP_HOST",
             "MAIL_IMAP_PORT",
             "MAIL_SMTP_HOST",

@@ -126,11 +126,9 @@ fn pid_alive(pid: u32) -> bool {
 fn merge_registry_user_env(cmd: &mut Command) {
     use winapi::um::winreg::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
 
-    // 后端用到的全部环境变量键（application.yml / application-packaged.yml 中引用）
+    // 后端用到的全部环境变量键（application.yml / application-packaged.yml 中引用；迭代 13：模型 Key 已移除）
     const KEYS: &[&str] = &[
-        "DEEPSEEK_API_KEY",
         "AMAP_MCP_KEY",
-        "QWEN_API_KEY",
         "MAIL_IMAP_HOST",
         "MAIL_IMAP_PORT",
         "MAIL_SMTP_HOST",
