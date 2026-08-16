@@ -354,6 +354,17 @@ curl localhost:8080/api/task/不存在   # {"message":"操作失败：任务不�
 - **skills.sh 配色 V2.2**：暗色纯黑背景 `#000` + 面板 `#171717` + 气泡 `#1f1f1f/#292929` + 边框 `#292929`，强调色琥珀橙 `#f99c00/#ffb200`；浅色 `#fff/#fafafa/#f2f2f2/#ebebeb`；靛蓝/青蓝品牌色退役，logo/状态灯/主按钮/选中条统一琥珀橙
 - 验证：`npm run build` 通过 + headless Chrome 断言（`###标题` 渲染为 `<h3>`、暗色背景/面板/气泡/文字与主按钮计算样式符合 tokens）
 
+### 迭代 13：云端凭据体系（多客户端后端）
+
+- **主密钥与信封加密**：`.vatica/master.key` + AES-256-GCM（每条秘密独立 DEK，主密钥包裹 DEK）
+- **账号/组织/JWT**：`POST /api/auth/register|login`；PBKDF2 密码哈希 + HS256 JWT；`vatica.auth.enabled` 开关（默认关闭，云端部署置 true）
+- **模型凭据**：`model_credential` / `user_model_credential` 密文表；`GET /api/models` 只回 `apiKeySet/apiKeyHint`；PUT 语义 `null=keep / 空串=clear / 非空=set`
+- **自配模型槽位**：`/api/models/user-slots`，`EPHEMERAL`（key 不落库）/ `ENCRYPTED_AT_REST`（云端加密保存，任务重启可恢复）；模型选择器「内置/我的模型」双分组
+- **请求级临时凭据**：聊天/任务请求可携带 `credential`，服务端仅内存构建客户端，零持久化；与 `modelId` 互斥
+- **任务恢复**：`TaskRecord.modelSource/recoverable`；启动清理 EPHEMERAL→FAILED、PLATFORM→可继续；`POST /api/task/{id}/resume`
+- **外部服务设置**：AMAP / 邮件 / 数据库统一加密存 `.vatica/integrations.json`，启动后处理器注入；模型/AMAP/邮件凭据全部去环境变量
+- **桌面瘦客户端**：Tauri 壳不再打包/拉起 sidecar，直连后端基址（默认 localhost:8080，服务设置可切换）
+
 ### 迭代 2.5 新增配置（application.yml，均可调）
 
 | 配置 | 默认 | 说明 |
