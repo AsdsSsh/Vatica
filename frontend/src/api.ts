@@ -121,6 +121,27 @@ async function post(path: string, body: unknown, signal?: AbortSignal): Promise<
   return res;
 }
 
+/** PUT 辅助（迭代 13 I13-4）：与 post 同一套错误契约 + Authorization 头。 */
+async function putJson(path: string, body: unknown): Promise<Response> {
+  const res = await fetch(`${getApiBase()}${path}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw await toRequestError(res, `请求失败（HTTP ${res.status}）`);
+  return res;
+}
+
+/** DELETE 辅助（迭代 13 I13-4）：无需请求体，但同样携带 Authorization 头。 */
+async function deleteJson(path: string): Promise<Response> {
+  const res = await fetch(`${getApiBase()}${path}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw await toRequestError(res, `请求失败（HTTP ${res.status}）`);
+  return res;
+}
+
 async function getJson(path: string): Promise<Response> {
   const res = await fetch(`${getApiBase()}${path}`, { headers: authHeaders() });
   if (!res.ok) throw await toRequestError(res, `请求失败（HTTP ${res.status}）`);
@@ -277,6 +298,76 @@ export async function saveModelSlots(slots: ModelSlot[]): Promise<ModelSlot[]> {
   });
   if (!res.ok) throw await toRequestError(res, `请求失败（HTTP ${res.status}）`);
   return res.json();
+}
+
+// ═══ 我的模型（迭代 13 I13-4：用户自配槽位 /api/models/user-slots）═══
+
+/** 用户自配模型槽位（后端 UserModelService.View；完整 apiKey 永不返回）。 */
+export interface UserModelSlotView {
+  id: string;
+  ownerId: number;
+  name: string;
+  /** 协议：openai = OpenAI 兼容端点；anthropic = Anthropic Messages 协议。 */
+  protocol: "openai" | "anthropic";
+  baseUrl: string;
+  model: string;
+  temperature: number;
+  enabled: boolean;
+  /**
+   * EPHEMERAL = key 仅本机/请求级，云端不落库；
+   * ENCRYPTED_AT_REST = key 信封加密保存在云端。
+   */
+  credentialMode: "EPHEMERAL" | "ENCRYPTED_AT_REST";
+  apiKeySet: boolean;
+  apiKeyHint: string | null;
+}
+
+/**
+ * 用户槽位提交体（后端 UserModelService.SaveRequest）：
+ * apiKey 为 null 时保持现有 key；EPHEMERAL 模式下后端忽略 apiKey。
+ */
+export interface UserModelSlotSaveRequest {
+  name: string;
+  protocol: "openai" | "anthropic";
+  baseUrl: string;
+  model: string;
+  temperature: number;
+  enabled: boolean;
+  credentialMode: "EPHEMERAL" | "ENCRYPTED_AT_REST";
+  apiKey: string | null;
+}
+
+export async function fetchUserModelSlots(): Promise<UserModelSlotView[]> {
+  return (await getJson("/api/models/user-slots")).json();
+}
+
+export async function createUserModelSlot(
+  request: UserModelSlotSaveRequest,
+): Promise<UserModelSlotView> {
+  return (await post("/api/models/user-slots", request)).json();
+}
+
+export async function updateUserModelSlot(
+  id: string,
+  request: UserModelSlotSaveRequest,
+): Promise<UserModelSlotView> {
+  return (await putJson(`/api/models/user-slots/${id}`, request)).json();
+}
+
+/**
+ * 切换凭据模式：切到 ENCRYPTED_AT_REST 时必须提供 apiKey
+ * （已有云端 key 时传 null 复用）；切回 EPHEMERAL 会立即删除云端密文。
+ */
+export async function setUserModelCredentialMode(
+  id: string,
+  credentialMode: "EPHEMERAL" | "ENCRYPTED_AT_REST",
+  apiKey: string | null,
+): Promise<UserModelSlotView> {
+  return (await putJson(`/api/models/user-slots/${id}/credential-mode`, { credentialMode, apiKey })).json();
+}
+
+export async function deleteUserModelSlot(id: string): Promise<void> {
+  await deleteJson(`/api/models/user-slots/${id}`);
 }
 
 /** 连通性测试结果（POST /api/models/test，失败时 error 为根因消息）。 */

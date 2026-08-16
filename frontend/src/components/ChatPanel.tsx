@@ -21,6 +21,7 @@ import {
   MoonOutlined,
   PicLeftOutlined,
   PicRightOutlined,
+  RobotOutlined,
   SafetyCertificateOutlined,
   SendOutlined,
   SettingOutlined,
@@ -34,10 +35,12 @@ import {
   approvePermissionRequest,
   denyPermissionRequest,
   fetchModels,
+  fetchUserModelSlots,
   streamChat,
   type FilePermissionRequest,
   type ModelInfo,
   type ToolActivity,
+  type UserModelSlotView,
 } from "../api";
 import { loadPermissionPolicy, rememberWorkspaceRoot } from "../permissions";
 import { useBackendStatus } from "../backendStatus";
@@ -49,6 +52,7 @@ import ServerSettings from "./ServerSettings";
 import FilePermissionSettings from "./FilePermissionSettings";
 import PermissionRequestModal from "./PermissionRequestModal";
 import AuthPanel from "./AuthPanel";
+import UserModelsPanel from "./UserModelsPanel";
 
 /**
  * 中栏：对话区（迭代 6 I6-4/I6-5；迭代 12 I12-2/I12-3 体验升级）——
@@ -106,12 +110,14 @@ export default function ChatPanel({
   const [input, setInput] = useState("");
   const [model, setModel] = useState<string | undefined>(readSavedModel);
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [userSlots, setUserSlots] = useState<UserModelSlotView[]>([]);
   const [typing, setTyping] = useState(false);
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
   const [permissionSettingsOpen, setPermissionSettingsOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
+  const [userModelsOpen, setUserModelsOpen] = useState(false);
   const [permissionRequest, setPermissionRequest] = useState<FilePermissionRequest | null>(null);
   const [permissionDeciding, setPermissionDeciding] = useState(false);
   const [permissionRemember, setPermissionRemember] = useState(true);
@@ -158,6 +164,11 @@ export default function ChatPanel({
       })
       .catch(() => {
         // 连接状态横幅已提示；保留上次成功加载的清单
+      });
+    fetchUserModelSlots()
+      .then(setUserSlots)
+      .catch(() => {
+        // 未登录/后端未启用鉴权时忽略，不影响内置模型
       });
   }, []);
 
@@ -316,11 +327,24 @@ export default function ChatPanel({
                 // 忽略
               }
             }}
-            options={models.map((m) => ({
-              value: m.id,
-              label: m.configured ? m.name : `${m.name}（未配置）`,
-              disabled: !m.configured,
-            }))}
+            options={[
+              {
+                label: "内置模型",
+                options: models.map((m) => ({
+                  value: m.id,
+                  label: m.configured ? m.name : `${m.name}（未配置）`,
+                  disabled: !m.configured,
+                })),
+              },
+              {
+                label: "我的模型",
+                options: userSlots.map((s) => ({
+                  value: `user:${s.id}`,
+                  label: `${s.name} · ${s.credentialMode === "ENCRYPTED_AT_REST" ? "云端加密" : "仅本机"}`,
+                  disabled: s.credentialMode !== "ENCRYPTED_AT_REST",
+                })),
+              },
+            ]}
           />
           <Tooltip title={isDark ? "切换浅色模式" : "切换深色模式"}>
             <Button
@@ -338,6 +362,15 @@ export default function ChatPanel({
               aria-label="账号"
               icon={<UserOutlined />}
               onClick={() => setAuthOpen(true)}
+            />
+          </Tooltip>
+          <Tooltip title="我的模型">
+            <Button
+              size="small"
+              type="text"
+              aria-label="我的模型"
+              icon={<RobotOutlined />}
+              onClick={() => setUserModelsOpen(true)}
             />
           </Tooltip>
           <Tooltip title="模型设置">
@@ -397,6 +430,11 @@ export default function ChatPanel({
         open={authOpen}
         onClose={() => setAuthOpen(false)}
         onAuthChanged={loadModels}
+      />
+      <UserModelsPanel
+        open={userModelsOpen}
+        onClose={() => setUserModelsOpen(false)}
+        onChanged={loadModels}
       />
 
       {/* 消息区 */}
