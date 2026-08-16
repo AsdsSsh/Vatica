@@ -2,7 +2,23 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <script>
+      // 首帧前恢复主题，避免浅色闪烁（迭代 12 I12-1；逻辑与 theme.tsx readMode 保持一致）
+      (function () {
+        try {
+          var mode = localStorage.getItem("vatica.theme") || "system";
+          var dark =
+            mode === "dark" ||
+            (mode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          var resolved = dark ? "dark" : "light";
+          document.documentElement.dataset.theme = resolved;
+          document.documentElement.style.colorScheme = resolved;
+        } catch (e) {
+          // 隐私模式等：保持默认
+        }
+      })();
+    </script>
+    <link rel="icon" type="image/svg+xml" href="/vatica.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Vatica · 个人 AI 助理</title>
   </head>

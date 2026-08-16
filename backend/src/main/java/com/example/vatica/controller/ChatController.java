@@ -113,6 +113,8 @@ public class ChatController {
 
         ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
                 vaticaTools, request.permission(), channel);
+        // 迭代 12 I12-4：工具调用活动以 SSE 事件推给对话区（start/end/failed 胶囊）
+        callbacks = new ToolActivityCallbacks().wrap(callbacks, emitter);
 
         StringBuilder reply = new StringBuilder();
         Disposable[] subscription = new Disposable[1];

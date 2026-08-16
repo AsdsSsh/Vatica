@@ -1,4 +1,75 @@
-/* Vatica 三栏布局样式（迭代 6 I6-4） */
+/* Vatica 视觉体系（迭代 12 I12-1，frontend-design skill 定稿 V2）：
+   语义 tokens：画布/表面/文字三级/状态色全部在此定义，
+   组件不再写死任何 AntD 默认蓝或固定浅色，保证亮暗主题真正联动。 */
+
+:root {
+  /* ── 品牌（brief 锁定） ── */
+  --vatica-indigo: #4f5be8;
+  --vatica-indigo-bright: #7b86f6;
+  --vatica-cyan: #38bdf8;
+  --vatica-amber: #f59e0b;
+  --vatica-green: #22c55e;
+  --vatica-red: #e5484d;
+
+  /* ── 画布与表面 ── */
+  --vatica-paper: #f6f7f9;
+  --vatica-ink: #161a23;
+  --vatica-bg: #f6f7f9;
+  --vatica-surface: #ffffff;
+  --vatica-surface-raised: #ffffff;
+  --vatica-assistant-bubble: #f1f2f7;
+
+  /* ── 文字三级 ── */
+  --vatica-text: #1e2430;
+  --vatica-text-secondary: #5f6a80;
+  --vatica-text-tertiary: #8b94a7;
+
+  /* ── 线与状态 ── */
+  --vatica-border: #e7e9f0;
+  --vatica-border-strong: #d9dde8;
+  --vatica-hover: rgba(79, 91, 232, 0.08);
+  --vatica-selected: rgba(79, 91, 232, 0.1);
+  --vatica-warning-bg: #fff7e6;
+  --vatica-danger-bg: #fff1f0;
+
+  --vatica-active-bar: linear-gradient(180deg, #4f5be8, #38bdf8);
+  --vatica-shadow-pop: 0 8px 28px rgba(22, 26, 35, 0.16);
+
+  --vatica-titlebar-bg: var(--vatica-bg);
+  --vatica-titlebar-text: var(--vatica-text);
+  --vatica-titlebar-control-hover: rgba(22, 26, 35, 0.06);
+  --vatica-titlebar-control-close-hover: #e81123;
+
+  /* ── 字体与圆角 ── */
+  --vatica-sans: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --vatica-mono: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+  --vatica-radius-sm: 8px;
+  --vatica-radius-md: 10px;
+  --vatica-radius-lg: 12px;
+}
+
+[data-theme="dark"] {
+  --vatica-paper: #161a23;
+  --vatica-ink: #0d1016;
+  --vatica-bg: #0d1016;
+  --vatica-surface: #161a23;
+  --vatica-surface-raised: #1b2130;
+  --vatica-assistant-bubble: #1e2432;
+
+  --vatica-text: #e8eaf2;
+  --vatica-text-secondary: #a8b0c3;
+  --vatica-text-tertiary: #77819a;
+
+  --vatica-border: #262d3d;
+  --vatica-border-strong: #333c50;
+  --vatica-hover: rgba(123, 134, 246, 0.14);
+  --vatica-selected: rgba(123, 134, 246, 0.18);
+  --vatica-warning-bg: #2b2518;
+  --vatica-danger-bg: #2c1a1d;
+
+  --vatica-shadow-pop: 0 10px 32px rgba(0, 0, 0, 0.45);
+  --vatica-titlebar-control-hover: rgba(232, 234, 242, 0.1);
+}
 
 * {
   box-sizing: border-box;
@@ -12,12 +83,452 @@ body,
   height: 100%;
 }
 
-.app-brand {
-  padding: 14px 16px;
-  font-size: 15px;
+body {
+  background: var(--vatica-bg);
+  color: var(--vatica-text);
+  font-family: var(--vatica-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.app-root {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--vatica-bg);
+}
+
+.app-layout {
+  flex: 1;
+  min-height: 0;
+  background: transparent;
+}
+
+.app-sider {
+  background: var(--vatica-surface);
+  transition: width 0.2s ease, min-width 0.2s ease, max-width 0.2s ease;
+}
+
+.app-content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--vatica-bg);
+}
+
+/* ─── 面板通用：section 眉题 + 计数 ─── */
+
+.sidebar-eyebrow {
+  font-size: 11px;
   font-weight: 600;
-  border-bottom: 1px solid #f0f0f0;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--vatica-text-tertiary);
+}
+
+.sidebar-count {
+  font-size: 11px;
+  color: var(--vatica-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── 自绘标题栏（U14：替代 Windows 原生边框） ─── */
+
+.titlebar {
+  height: 38px;
+  flex: 0 0 38px;
+  display: flex;
+  align-items: stretch;
+  background: var(--vatica-titlebar-bg);
+  color: var(--vatica-titlebar-text);
+  border-bottom: 1px solid var(--vatica-border);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  min-width: 0;
+}
+
+.titlebar-name {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
   white-space: nowrap;
+}
+
+.titlebar-spacer {
+  flex: 1;
+}
+
+.titlebar-controls {
+  display: flex;
+  align-items: stretch;
+}
+
+.titlebar-button {
+  width: 46px;
+  border: 0;
+  background: transparent;
+  color: var(--vatica-titlebar-text);
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.titlebar-button:hover {
+  background: var(--vatica-titlebar-control-hover);
+}
+
+.titlebar-button.close:hover {
+  background: var(--vatica-titlebar-control-close-hover);
+  color: #fff;
+}
+
+/* ─── 签名元素：呼吸状态灯（全应用唯一的持续性动画） ─── */
+
+.vatica-dot {
+  position: relative;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+  flex: 0 0 9px;
+  background: #9ca3af;
+  transition: background 0.2s ease;
+}
+
+.vatica-dot::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1px solid transparent;
+}
+
+.vatica-dot.online {
+  background: radial-gradient(circle at 35% 35%, #8f96f5, var(--vatica-indigo));
+  box-shadow: 0 0 6px rgba(79, 91, 232, 0.55);
+}
+
+.vatica-dot.checking {
+  background: radial-gradient(circle at 35% 35%, #fbd38d, var(--vatica-amber));
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.5);
+  animation: vatica-breathe 1.6s ease-in-out infinite;
+}
+
+.vatica-dot.checking::after {
+  border-color: rgba(245, 158, 11, 0.35);
+  animation: vatica-ring 1.6s ease-in-out infinite;
+}
+
+.vatica-dot.offline {
+  background: #9ca3af;
+}
+
+.vatica-dot.working {
+  background: radial-gradient(circle at 35% 35%, #a5f3fc, var(--vatica-cyan));
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.65);
+  animation: vatica-breathe 1.6s ease-in-out infinite;
+}
+
+.vatica-dot.working::after {
+  border-color: rgba(56, 189, 248, 0.4);
+  animation: vatica-ring 1.6s ease-in-out infinite;
+}
+
+@keyframes vatica-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 4px rgba(56, 189, 248, 0.35);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 11px rgba(56, 189, 248, 0.8);
+    transform: scale(1.18);
+  }
+}
+
+@keyframes vatica-ring {
+  0%,
+  100% {
+    transform: scale(0.75);
+    opacity: 0.25;
+  }
+  50% {
+    transform: scale(1.3);
+    opacity: 0.9;
+  }
+}
+
+/* ─── 左栏：会话列表（活动项用品牌渐变条，替代 AntD 默认蓝） ─── */
+
+.session-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 2px 8px;
+  padding: 9px 12px 9px 14px;
+  border-radius: var(--vatica-radius-sm);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.session-item:hover {
+  background: var(--vatica-hover);
+}
+
+.session-item.active {
+  background: var(--vatica-selected);
+}
+
+.session-active-bar {
+  position: absolute;
+  left: 0;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--vatica-active-bar);
+  opacity: 0;
+  transform: scaleY(0.5);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.session-item.active .session-active-bar {
+  opacity: 1;
+  transform: scaleY(1);
+}
+
+.session-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.session-item:hover .session-actions,
+.session-item.active .session-actions {
+  opacity: 1;
+}
+
+/* ─── 右栏：任务列表选中态 ─── */
+
+.task-item {
+  border-radius: var(--vatica-radius-sm);
+  transition: background 0.15s ease;
+}
+
+.task-item:hover {
+  background: var(--vatica-hover);
+}
+
+.task-item.active {
+  background: var(--vatica-selected);
+}
+
+/* ─── 对话区（迭代 12 I12-3） ─── */
+
+.chat-empty {
+  max-width: 560px;
+  margin: 14vh auto 0;
+  text-align: center;
+}
+
+.empty-mark {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.empty-mark svg {
+  filter: drop-shadow(0 10px 24px rgba(79, 91, 232, 0.35));
+}
+
+.chat-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--vatica-text-tertiary);
+}
+
+.chat-empty .ant-typography h4,
+.chat-empty h4.ant-typography {
+  margin: 6px 0 4px;
+  font-size: 20px;
+  letter-spacing: -0.01em;
+}
+
+.suggestion-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.suggestion-card {
+  border: 1px solid var(--vatica-border);
+  background: var(--vatica-surface);
+  border-radius: var(--vatica-radius-md);
+  padding: 10px 12px;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--vatica-text);
+  font-family: var(--vatica-sans);
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.suggestion-card:hover {
+  border-color: var(--vatica-indigo);
+  background: var(--vatica-hover);
+  transform: translateY(-1px);
+}
+
+.suggestion-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.suggestion-prompt {
+  font-size: 11px;
+  color: var(--vatica-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 消息气泡：工作台卡片式——助手卡带边框、用户卡品牌靛蓝，方向性圆角指向说话人 */
+
+.msg-row {
+  display: flex;
+  margin-bottom: 12px;
+}
+
+.msg-row.user {
+  justify-content: flex-end;
+}
+
+.msg-bubble {
+  max-width: 82%;
+  padding: 8px 14px;
+  font-size: 14px;
+  line-height: 1.7;
+  border-radius: var(--vatica-radius-lg);
+  overflow-wrap: anywhere;
+}
+
+.msg-bubble.user {
+  background: var(--vatica-indigo);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+  box-shadow: 0 2px 10px rgba(79, 91, 232, 0.22);
+}
+
+.msg-bubble.assistant {
+  background: var(--vatica-assistant-bubble);
+  border: 1px solid var(--vatica-border);
+  color: var(--vatica-text);
+  border-bottom-left-radius: 4px;
+}
+
+.stream-caret {
+  color: var(--vatica-indigo);
+  animation: vatica-caret-blink 1s steps(1) infinite;
+  margin-left: 1px;
+}
+
+[data-theme="dark"] .stream-caret {
+  color: var(--vatica-cyan);
+}
+
+@keyframes vatica-caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+.jump-to-bottom {
+  position: sticky;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0 auto 10px;
+  display: block;
+  box-shadow: var(--vatica-shadow-pop);
+}
+
+/* ─── 通用细节 ─── */
+
+.vatica-mono {
+  font-family: var(--vatica-mono);
+}
+
+.vatica-markdown {
+  color: var(--vatica-text);
+  font-size: 14px;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(128, 136, 160, 0.35);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 136, 160, 0.55);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+/* 键盘可达性：不隐藏 AntD 焦点，只给自有按钮补一个可见焦点环 */
+
+.suggestion-card:focus-visible,
+.titlebar-button:focus-visible {
+  outline: 2px solid var(--vatica-indigo);
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vatica-dot.working,
+  .vatica-dot.checking,
+  .vatica-dot.working::after,
+  .vatica-dot.checking::after {
+    animation: none;
+  }
+
+  .app-sider,
+  .session-item,
+  .task-item,
+  .suggestion-card,
+  .titlebar-button {
+    transition: none;
+  }
+
+  .suggestion-card:hover {
+    transform: none;
+  }
 }

@@ -10,6 +10,7 @@ use tauri::{Manager, RunEvent};
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // 仅打包模式自动拉起后端 sidecar；开发期后端手动启动（README 快速开始）
             if cfg!(debug_assertions) {

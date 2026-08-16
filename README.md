@@ -335,6 +335,19 @@ curl localhost:8080/api/task/不存在   # {"message":"操作失败：任务不�
 - **新工具 `list_workspace_roots`**：Agent 可查询当前沙盒模式与工作区根
 - 接口：`POST /api/permissions/requests/{id}/approve`（remember）、`POST /api/permissions/requests/{id}/deny`
 
+### 迭代 12：前端 UI/UX 优化（视觉体系 V2 + 体验收尾）
+
+- **视觉体系 V2**：Vatica Indigo/Paper/Ink semantic tokens + 亮/暗/跟随系统三态主题（`index.html` 首帧防闪）；顶栏呼吸状态灯（在线常亮 / 连接中琥珀 / 工作青蓝 / 离线灰点）；会话/任务列表品牌渐变选中条；消息气泡工作台卡片化；空状态品牌化；favicon 替换为 Vatica logo
+- **连接状态**：`GET /` 探活 + 指数退避重试（1s→30s）；离线横幅 + 状态灯；恢复后自动刷新模型与任务列表
+- **输入与流式体验**：中文输入法组合态回车守卫（聊天/任务/权限设置三处）；智能滚动不强制拽底 + 回到底部按钮；首 token 前"正在思考"，有内容后流式光标；空状态建议卡 + 消息复制
+- **工具活动胶囊**：聊天 SSE 新增 `tool_activity`（start/end/failed + 工具名 + 耗时），对话区显示"正在调用工具…"
+- **会话管理**：localStorage 持久化（50 会话 / 200 条 / 20k 字符上限）+ 启动恢复 + 重命名/删除（确认 + 保底新会话）
+- **权限体验**：弹窗统一为共享组件、遮罩不可误关；"记住授权"在**当前任务/会话 channel 内即时生效**（后端内存级临时授权，取消/收尾自动清理）
+- **任务面板**：Tauri dialog 目录选择器（任务工作目录 + 权限设置）；步骤结果可展开/复制；任务相对时间；切任务重置弹窗状态
+- **设置一致性**：模型设置 dirty 确认；权限"清空授权"改草稿 + Popconfirm；服务设置校验 catch
+- **性能**：Markdown 预览直连 + manualChunks 拆包（单 chunk 2066KB → 主 chunk 51.4KB）
+- 回归：mvn test 237 → **241** 全绿 + npm run build + cargo check + headless Chrome（会话恢复 / IME composition 守卫 / 离线横幅）冒烟通过
+
 ### 迭代 2.5 新增配置（application.yml，均可调）
 
 | 配置 | 默认 | 说明 |

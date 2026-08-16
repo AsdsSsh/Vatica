@@ -25,13 +25,18 @@ export default function ServerSettings({ open, onClose }: Props) {
   }, [open]);
 
   function save() {
-    form.validateFields().then((values) => {
-      setSaving(true);
-      setApiBase(values.baseUrl);
-      message.success(`已保存，接口地址：${getApiBase()}`);
-      setSaving(false);
-      onClose();
-    });
+    form
+      .validateFields()
+      .then((values) => {
+        setSaving(true);
+        setApiBase(values.baseUrl);
+        message.success(`已保存，接口地址：${getApiBase()}`);
+        setSaving(false);
+        onClose();
+      })
+      .catch(() => {
+        // 迭代 12 I12-9：校验失败由 Form 就地展示，避免未处理 rejection
+      });
   }
 
   return (

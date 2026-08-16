@@ -3,7 +3,9 @@ package com.example.vatica.permission;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -14,8 +16,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
- * 文件权限运行时请求（迭代 11）：后端只负责"发事件 + 等待决定 + 超时按拒绝"，
- * 不持久化任何授权——永久授权由前端 localStorage 持有。
+ * 文件权限运行时请求（迭代 11）：后端只负责"发事件 + 等待决定 + 超时按拒绝"。
+ * 迭代 12 I12-7：同一 channel 的 approve(remember) 增加<b>内存级临时授权</b>——
+ * 后续工具调用先查临时授权，命中直接放行，不再二次弹窗；channel 收尾/取消时清理。
+ * 永久授权仍由前端 localStorage 持有，后端不落盘。
  */
 @Service
 public class FilePermissionRequestService {
@@ -35,7 +39,12 @@ public class FilePermissionRequestService {
         }
     }
 
+    /** channel → 本次会话/任务内已批准并选择"记住"的路径授权（内存级，不落盘）。 */
+    private record TempGrant(String pathKey, FileAccess access) {
+    }
+
     private final Map<String, Pending> pending = new ConcurrentHashMap<>();
+    private final Map<String, Set<TempGrant>> grants = new ConcurrentHashMap<>();
     private final PermissionEventPublisher publisher;
 
     public FilePermissionRequestService(PermissionEventPublisher publisher) {
@@ -76,25 +85,62 @@ public class FilePermissionRequestService {
         }
     }
 
-    /** 前端批准/拒绝入口。remember 仅作为回执语义——永久授权由前端存储。 */
+    /** 前端批准/拒绝入口。remember=true 时把本次授权记入当前 channel 内存级临时授权。 */
     public boolean decide(String requestId, boolean approved, boolean remember) {
         Pending item = pending.get(requestId);
         if (item == null) {
             throw new IllegalArgumentException("操作失败：权限请求不存在或已超时（" + requestId + "）。");
         }
         item.future.complete(approved);
+        if (approved && remember) {
+            rememberGrant(item.request.channel(), item.request.path(), item.request.access());
+        }
         log.info("权限请求 {} 已被{}（remember={}）：{}", requestId, approved ? "批准" : "拒绝",
                 remember, item.request.path());
         return approved;
     }
 
-    /** 任务取消 / 聊天停止：该通道所有挂起请求按拒绝处理。 */
+    /** 当前 channel 是否已有"记住授权"覆盖该路径与操作（路径前缀匹配，大小写归一）。 */
+    public boolean isGranted(String channel, Path path, FileAccess access) {
+        if (channel == null || channel.isBlank() || path == null || access == null) {
+            return false;
+        }
+        Set<TempGrant> set = grants.get(channel);
+        if (set == null || set.isEmpty()) {
+            return false;
+        }
+        String target = pathKey(path);
+        return set.stream().anyMatch(g -> g.access() == access && matches(target, g.pathKey()));
+    }
+
+    void rememberGrant(String channel, String path, FileAccess access) {
+        grants.computeIfAbsent(channel, k -> ConcurrentHashMap.newKeySet())
+                .add(new TempGrant(pathKey(Path.of(path)), access));
+    }
+
+    /** 任务取消 / 聊天停止：该通道所有挂起请求按拒绝处理，并清掉内存级临时授权。 */
     public void cancelChannel(String channel) {
         if (channel == null) {
             return;
         }
+        grants.remove(channel);
         pending.values().stream()
                 .filter(p -> channel.equals(p.request.channel()))
                 .forEach(p -> p.future.complete(false));
+    }
+
+    /** 当前 channel 的临时授权数量（单测用）。 */
+    int grantCount(String channel) {
+        Set<TempGrant> set = grants.get(channel);
+        return set == null ? 0 : set.size();
+    }
+
+    private static boolean matches(String target, String grant) {
+        String sep = Path.of(".").toAbsolutePath().getFileSystem().getSeparator();
+        return target.equals(grant) || target.startsWith(grant + sep);
+    }
+
+    private static String pathKey(Path path) {
+        return path.toAbsolutePath().normalize().toString().toLowerCase(Locale.ROOT);
     }
 }

@@ -52,19 +52,25 @@ interface Props {
 }
 
 export default function ModelSettings({ open, onClose, onSaved }: Props) {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [slots, setSlots] = useState<ModelSlot[]>([]);
   const [editing, setEditing] = useState<ModelSlot | null>(null);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm<ModelSlot>();
+  // 迭代 12 I12-9：dirty 跟踪——打开时快照，任何槽位变更后取消需确认
+  const [baseline, setBaseline] = useState("");
+  const dirty = JSON.stringify(slots) !== baseline;
 
   // 打开时拉取当前配置
   useEffect(() => {
     if (!open) return;
     fetchModelSlots()
-      .then(setSlots)
+      .then((list) => {
+        setSlots(list);
+        setBaseline(JSON.stringify(list));
+      })
       .catch((e) => message.error(`读取模型配置失败：${(e as Error).message}`));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -110,6 +116,22 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
     setSlots((prev) => prev.filter((_, i) => i !== index));
   }
 
+  /** 迭代 12 I12-9：未保存变更时点取消需确认，避免静默丢弃。 */
+  function handleCancel() {
+    if (!dirty) {
+      onClose();
+      return;
+    }
+    modal.confirm({
+      title: "放弃未保存的修改？",
+      content: "模型配置的改动尚未保存，关闭后将丢失。",
+      okText: "放弃修改",
+      okButtonProps: { danger: true },
+      cancelText: "继续编辑",
+      onOk: onClose,
+    });
+  }
+
   async function saveAll() {
     setSaving(true);
     try {
@@ -145,7 +167,7 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
       <Modal
         title="模型设置"
         open={open}
-        onCancel={onClose}
+        onCancel={handleCancel}
         width={820}
         footer={
           <Flex justify="space-between" align="center">
@@ -153,7 +175,7 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
               保存后立即生效，无需重启
             </Typography.Text>
             <Space>
-              <Button onClick={onClose}>取消</Button>
+              <Button onClick={handleCancel}>取消</Button>
               <Button type="primary" loading={saving} onClick={saveAll}>
                 保存全部
               </Button>
@@ -239,6 +261,7 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
                         size="small"
                         type="link"
                         danger
+                        aria-label="删除模型"
                         icon={<DeleteOutlined />}
                         onClick={() => removeSlot(index)}
                       />

@@ -100,9 +100,18 @@ export interface FilePermissionRequest {
   createdAt: string;
 }
 
+/** 后端经 SSE 推送的一次工具调用活动（迭代 12 I12-4）。 */
+export interface ToolActivity {
+  tool: string;
+  phase: "start" | "end" | "failed";
+  durationMs?: number;
+  error?: string;
+}
+
 export type ChatStreamEvent =
   | { kind: "text"; content: string }
-  | { kind: "permission"; request: FilePermissionRequest };
+  | { kind: "permission"; request: FilePermissionRequest }
+  | { kind: "tool"; activity: ToolActivity };
 
 /**
  * SSE 流式对话（迭代 6 I6-5；迭代 11 支持权限请求事件）：
@@ -139,6 +148,12 @@ export async function* streamChat(
           if (eventName === "permission_request") {
             try {
               yield { kind: "permission", request: JSON.parse(payload) as FilePermissionRequest };
+            } catch {
+              // 忽略坏帧
+            }
+          } else if (eventName === "tool_activity") {
+            try {
+              yield { kind: "tool", activity: JSON.parse(payload) as ToolActivity };
             } catch {
               // 忽略坏帧
             }

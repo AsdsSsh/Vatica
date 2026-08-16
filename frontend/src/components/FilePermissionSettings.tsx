@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
-import { App, Button, Flex, Input, Modal, Select, Space, Switch, Table, Typography } from "antd";
-import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
+import { App, Button, Flex, Input, Modal, Popconfirm, Select, Space, Switch, Table, Typography } from "antd";
+import { DeleteOutlined, FolderOpenOutlined, PlusOutlined } from "@ant-design/icons";
 import {
-  clearPermissionPolicy,
+  DEFAULT_PERMISSION_POLICY,
   loadPermissionPolicy,
   savePermissionPolicy,
   type FilePermissionMode,
   type FilePermissionPolicy,
   type WorkspaceRoot,
 } from "../permissions";
+import { pickDirectory } from "../directoryPicker";
 
 /**
  * 文件权限与工作区设置（迭代 11）：前端权限中心。
@@ -73,14 +74,18 @@ export default function FilePermissionSettings({ open, onClose }: Props) {
       width={720}
       footer={
         <Space>
-          <Button
-            onClick={() => {
-              setPolicy(clearPermissionPolicy());
-              message.success("已清空授权，恢复默认工作区");
+          <Popconfirm
+            title="清空全部授权？"
+            description="沙盒模式与工作区根将恢复默认（草稿），点击保存后生效。"
+            okText="清空"
+            cancelText="取消"
+            onConfirm={() => {
+              setPolicy(structuredClone(DEFAULT_PERMISSION_POLICY));
+              message.info("已恢复默认草稿，点保存后生效");
             }}
           >
-            清空授权
-          </Button>
+            <Button>清空授权</Button>
+          </Popconfirm>
           <Button onClick={onClose}>取消</Button>
           <Button type="primary" onClick={save}>
             保存
@@ -153,6 +158,7 @@ export default function FilePermissionSettings({ open, onClose }: Props) {
                     size="small"
                     type="link"
                     danger
+                    aria-label="删除工作区根"
                     icon={<DeleteOutlined />}
                     onClick={() => removeRoot(index)}
                   />
@@ -165,8 +171,23 @@ export default function FilePermissionSettings({ open, onClose }: Props) {
               placeholder="输入绝对路径，如 D:\\docs 或 C:\\Users\\you\\Desktop\\project"
               value={newPath}
               onChange={(e) => setNewPath(e.target.value)}
-              onPressEnter={addRoot}
+              onPressEnter={(e) => {
+                // 迭代 12 I12-3：中文输入法选词回车不触发添加
+                if (e.nativeEvent.isComposing) return;
+                addRoot();
+              }}
             />
+            <Button
+              icon={<FolderOpenOutlined />}
+              aria-label="选择工作区目录"
+              onClick={() => {
+                void pickDirectory().then((dir) => {
+                  if (dir) setNewPath(dir);
+                });
+              }}
+            >
+              选择
+            </Button>
             <Button icon={<PlusOutlined />} onClick={addRoot}>
               添加
             </Button>

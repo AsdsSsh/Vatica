@@ -8,6 +8,28 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react()],
 
+  build: {
+    rollupOptions: {
+      output: {
+        // 迭代 12 I12-10：拆包降低主 chunk 体积，antd/React/Markdown 独立缓存
+        manualChunks(id: string) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("@uiw/react-markdown-preview")) return "markdown";
+          if (
+            id.includes("antd") ||
+            id.includes("@ant-design/icons") ||
+            id.includes("@rc-component") ||
+            id.includes("rc-")
+          ) {
+            return "antd";
+          }
+          if (id.includes("react")) return "react";
+          return undefined;
+        },
+      },
+    },
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

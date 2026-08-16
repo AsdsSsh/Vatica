@@ -3,7 +3,6 @@ import {
   App,
   Badge,
   Button,
-  Checkbox,
   Empty,
   Flex,
   Input,
@@ -17,6 +16,7 @@ import {
   CheckCircleOutlined,
   ClockCircleOutlined,
   ExclamationCircleOutlined,
+  FolderOpenOutlined,
   PlusOutlined,
   ReloadOutlined,
   StopOutlined,
@@ -37,6 +37,9 @@ import {
   type TaskStep,
 } from "../api";
 import { loadPermissionPolicy, rememberWorkspaceRoot } from "../permissions";
+import { useBackendStatus } from "../backendStatus";
+import { pickDirectory } from "../directoryPicker";
+import PermissionRequestModal from "./PermissionRequestModal";
 
 const STATUS_COLOR: Record<string, string> = {
   PENDING: "default",
@@ -67,12 +70,26 @@ function scoreColor(score: number | null): string {
   return score >= 70 ? "green" : "red";
 }
 
+/** 迭代 12 I12-8：任务相对时间（刚刚 / N 分钟前 / N 小时前 / N 天前）。 */
+function relativeTime(createdAt: string): string {
+  const time = Date.parse(createdAt);
+  if (Number.isNaN(time)) return "";
+  const diffMs = Date.now() - time;
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.floor(hours / 24)} 天前`;
+}
+
 /**
  * 右栏：任务面板（迭代 7 I7-1/2/3/4/6）——创建任务、任务列表、步骤实时打勾（SSE）、
  * 审批弹窗、终止按钮、准确率徽标 + 返工、文件产物列表（打开文件）。
  */
 export default function StepPanel() {
   const { message } = App.useApp();
+  const { online } = useBackendStatus();
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<TaskDetail | null>(null);
@@ -96,6 +113,13 @@ export default function StepPanel() {
   useEffect(() => {
     refreshTasks();
   }, [refreshTasks]);
+
+  // 迭代 12 I12-2：后端恢复在线后自动刷新任务列表（模型列表由 ChatPanel 负责）
+  useEffect(() => {
+    if (online) {
+      void refreshTasks();
+    }
+  }, [online, refreshTasks]);
 
   // 选中任务 → 拉详情 + 订阅 SSE 进度事件（含快照回放与权限请求）
   useEffect(() => {
@@ -215,10 +239,10 @@ export default function StepPanel() {
   return (
     <Flex vertical style={{ height: "100%" }}>
       {/* 任务面板头 + 创建 */}
-      <div style={{ padding: 12, borderBottom: "1px solid #f0f0f0" }}>
+      <div style={{ padding: 12, borderBottom: "1px solid var(--vatica-border)" }}>
         <Flex justify="space-between" align="center" style={{ marginBottom: 8 }}>
           <Typography.Text strong>任务面板</Typography.Text>
-          <Button size="small" icon={<ReloadOutlined />} onClick={() => refreshTasks()} />
+          <Button size="small" aria-label="刷新任务列表" icon={<ReloadOutlined />} onClick={() => refreshTasks()} />
         </Flex>
         <Flex gap={6}>
           <Input
@@ -226,7 +250,11 @@ export default function StepPanel() {
             placeholder="一句话任务，如：整理下周日程"
             value={goalInput}
             onChange={(e) => setGoalInput(e.target.value)}
-            onPressEnter={handleCreate}
+            onPressEnter={(e) => {
+              // 迭代 12 I12-3：中文输入法选词回车不创建任务
+              if (e.nativeEvent.isComposing) return;
+              void handleCreate();
+            }}
           />
           <Button
             size="small"
@@ -238,33 +266,48 @@ export default function StepPanel() {
             创建
           </Button>
         </Flex>
-        <Input
-          size="small"
-          style={{ marginTop: 6 }}
-          placeholder="任务工作目录（可选，如 D:\\docs；不填用全局工作区）"
-          value={workspaceInput}
-          onChange={(e) => setWorkspaceInput(e.target.value)}
-        />
+        <Flex gap={6} style={{ marginTop: 6 }}>
+          <Input
+            size="small"
+            style={{ flex: 1 }}
+            placeholder="任务工作目录（可选，如 D:\\docs；不填用全局工作区）"
+            value={workspaceInput}
+            onChange={(e) => setWorkspaceInput(e.target.value)}
+          />
+          <Button
+            size="small"
+            icon={<FolderOpenOutlined />}
+            aria-label="选择任务工作目录"
+            onClick={() => {
+              void pickDirectory().then((dir) => {
+                if (dir) setWorkspaceInput(dir);
+              });
+            }}
+          >
+            选择目录
+          </Button>
+        </Flex>
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "0 12px 12px" }}>
         {/* 任务列表 */}
         <List
           size="small"
+          split={false}
           dataSource={tasks}
           locale={{ emptyText: <Empty description="暂无任务，先创建一条试试" style={{ marginTop: 24 }} /> }}
           renderItem={(t) => (
             <List.Item
+              className={`task-item${t.id === selectedId ? " active" : ""}`}
               onClick={() => {
                 setSelectedId(t.id);
                 setDetail(null);
                 prevStatus.current = null;
+                // 迭代 12 I12-8：切任务重置审批/权限弹窗，避免旧任务状态残留
+                setApprovalOpen(false);
+                setPermissionRequest(null);
               }}
-              style={{
-                cursor: "pointer",
-                padding: "8px 4px",
-                background: t.id === selectedId ? "rgba(22, 119, 255, 0.06)" : undefined,
-              }}
+              style={{ cursor: "pointer", padding: "8px 10px" }}
             >
               <Flex vertical gap={2} style={{ width: "100%" }}>
                 <Space size={6}>
@@ -277,6 +320,9 @@ export default function StepPanel() {
                   >
                     {t.goal}
                   </Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 11, flexShrink: 0 }}>
+                    {relativeTime(t.createdAt)}
+                  </Typography.Text>
                 </Space>
               </Flex>
             </List.Item>
@@ -285,7 +331,7 @@ export default function StepPanel() {
 
         {/* 任务详情：步骤打勾 + 操作 + 准确率 */}
         {detail && (
-          <div style={{ marginTop: 8, borderTop: "1px dashed #f0f0f0", paddingTop: 8 }}>
+          <div style={{ marginTop: 8, borderTop: "1px dashed var(--vatica-border-strong)", paddingTop: 8 }}>
             <Typography.Text strong style={{ fontSize: 13 }}>
               {detail.goal}
             </Typography.Text>
@@ -319,13 +365,13 @@ export default function StepPanel() {
                   <List.Item style={{ padding: "4px 0" }}>
                     <Flex align="start" gap={6} style={{ width: "100%" }}>
                       {done ? (
-                        <CheckCircleOutlined style={{ color: "#52c41a", marginTop: 3 }} />
+                        <CheckCircleOutlined style={{ color: "var(--vatica-green)", marginTop: 3 }} />
                       ) : isPendingApproval ? (
-                        <ExclamationCircleOutlined style={{ color: "#faad14", marginTop: 3 }} />
+                        <ExclamationCircleOutlined style={{ color: "var(--vatica-amber)", marginTop: 3 }} />
                       ) : isRunning ? (
-                        <ClockCircleOutlined style={{ color: "#1677ff", marginTop: 3 }} />
+                        <ClockCircleOutlined style={{ color: "var(--vatica-indigo)", marginTop: 3 }} />
                       ) : (
-                        <ClockCircleOutlined style={{ color: "#bbb", marginTop: 3 }} />
+                        <ClockCircleOutlined style={{ color: "var(--vatica-text-tertiary)", marginTop: 3 }} />
                       )}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <Typography.Text style={{ fontSize: 12 }}>
@@ -337,18 +383,13 @@ export default function StepPanel() {
                           </Tag>
                         )}
                         {done && (
-                          <div
-                            style={{
-                              fontSize: 11,
-                              color: "#999",
-                              whiteSpace: "nowrap",
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                            }}
-                            title={s.result ?? ""}
+                          <Typography.Paragraph
+                            style={{ fontSize: 11, color: "var(--vatica-text-tertiary)", marginBottom: 0 }}
+                            ellipsis={{ rows: 1, expandable: true, symbol: "展开" }}
+                            copyable={{ text: s.result ?? "", tooltips: ["复制结果", "已复制"] }}
                           >
                             {s.result}
-                          </div>
+                          </Typography.Paragraph>
                         )}
                       </div>
                     </Flex>
@@ -429,7 +470,7 @@ export default function StepPanel() {
             <Typography.Paragraph>
               步骤 <b>{approvalStep?.id}</b> 涉及敏感操作，执行前需要你的确认：
             </Typography.Paragraph>
-            <Typography.Paragraph type="warning" style={{ background: "#fffbe6", padding: 8, borderRadius: 6 }}>
+            <Typography.Paragraph type="warning" style={{ background: "var(--vatica-warning-bg)", padding: 8, borderRadius: 8 }}>
               {approvalStep?.description}
             </Typography.Paragraph>
           </div>
@@ -454,46 +495,14 @@ export default function StepPanel() {
         )}
       </Modal>
 
-      {/* 文件权限请求弹窗（迭代 11） */}
-      <Modal
-        open={permissionRequest !== null}
-        title="文件访问需要授权"
-        onCancel={() => decidePermission(false)}
-        footer={
-          <Space>
-            <Button danger onClick={() => decidePermission(false)}>
-              拒绝
-            </Button>
-            <Button
-              type="primary"
-              loading={permissionDeciding}
-              onClick={() => decidePermission(true)}
-            >
-              允许
-            </Button>
-          </Space>
-        }
-      >
-        {permissionRequest && (
-          <div>
-            <Typography.Paragraph>
-              Agent 请求<b>{permissionRequest.access === "WRITE" ? "写入" : "读取"}</b>以下路径：
-            </Typography.Paragraph>
-            <Typography.Paragraph code copyable style={{ wordBreak: "break-all" }}>
-              {permissionRequest.path}
-            </Typography.Paragraph>
-            <Typography.Paragraph type="secondary">
-              {permissionRequest.description}
-            </Typography.Paragraph>
-            <Checkbox
-              checked={permissionRemember}
-              onChange={(e) => setPermissionRemember(e.target.checked)}
-            >
-              记住授权，以后不再询问该目录
-            </Checkbox>
-          </div>
-        )}
-      </Modal>
+      {/* 文件权限请求弹窗（迭代 11 引入；迭代 12 I12-6 统一为共享组件） */}
+      <PermissionRequestModal
+        request={permissionRequest}
+        deciding={permissionDeciding}
+        remember={permissionRemember}
+        onRememberChange={setPermissionRemember}
+        onDecide={(approved) => void decidePermission(approved)}
+      />
     </Flex>
   );
 }

@@ -70,7 +70,6 @@ public class FileSandboxPolicy {
         FilePermissionPolicy policy = context == null || context.policy() == null
                 ? FilePermissionPolicy.defaultPolicy(defaultRoot)
                 : context.policy().normalized();
-        String channel = context == null ? null : context.channel();
 
         Path candidate = toCandidate(rawPath, policy);
         Path real = realOrParent(candidate);
@@ -78,6 +77,12 @@ public class FileSandboxPolicy {
         if (isProtected(real, access, policy.mode())) {
             throw new IllegalArgumentException("操作失败：该路径是受保护路径（" + real
                     + "），不允许通过文件工具修改。请改用其他路径。");
+        }
+
+        // 迭代 12 I12-7：同一 channel 的"记住授权"临时放行优先于工作区根判定，避免二次弹窗
+        String channel = context == null ? null : context.channel();
+        if (requestService.isGranted(channel, real, access)) {
+            return prepareForWrite(real, access);
         }
 
         if (policy.mode() == FilePermissionMode.DANGER_FULL_ACCESS) {
