@@ -8,11 +8,42 @@ import "@uiw/react-markdown-preview/markdown.css";
  * 否则界面会原样显示 ### 等符号。
  */
 function normalizeMarkdown(source: string): string {
+  return normalizeInlineNumberedList(
+    normalizeInlineTables(
+      source
+        .replace(/^(#{1,6})(?=\S)/gm, "$1 ")
+        .replace(/^>(?=\S)/gm, "> ")
+        .replace(/^(\d+\.)(?=\S)/gm, "$1 ")
+        .replace(/^([-*+])(?=\S)/gm, "$1 "),
+    ),
+  );
+}
+
+/** 模型常把两列表格写在一行里：|路径|权限|---|---|...；拆成真正的 GFM 表格。 */
+function normalizeInlineTables(source: string): string {
+  const table = /\|([^|\n]+)\|([^|\n]+)\|\s*\|\s*---\s*\|\s*---\s*\|((?:\|[^|\n]+\|[^|\n]+\|)+)/g;
+  return source.replace(table, (_whole, h1: string, h2: string, rows: string) => {
+    const rowLines = rows.match(/\|([^|\n]+)\|([^|\n]+)\|/g) ?? [];
+    const rebuilt = rowLines
+      .map((row) => {
+        const cells = row.match(/^\|([^|]+)\|([^|]+)\|$/);
+        return cells ? `| ${cells[1].trim()} | ${cells[2].trim()} |` : "";
+      })
+      .filter(Boolean)
+      .join("\n");
+    return `\n\n| ${h1.trim()} | ${h2.trim()} |\n| --- | --- |\n${rebuilt}`;
+  });
+}
+
+/** 模型把有序/无序列表也常写在一行里：1.📁xxx 2.📄yyy；识别 emoji 开头的条目并换行。 */
+function normalizeInlineNumberedList(source: string): string {
+  const ordered = /(^|[^\n])(\d+)\.[ \t]*([📁📄📊📎✉️📌🗂️🔗📝📅📋🧾])/g;
+  const bullet = /(^|[^\n])([-*+])\s*([📁📄📊📎✉️📌🗂️🔗📝📅📋🧾])/g;
   return source
-    .replace(/^(#{1,6})(?=\S)/gm, "$1 ")
-    .replace(/^>(?=\S)/gm, "> ")
-    .replace(/^(\d+\.)(?=\S)/gm, "$1 ")
-    .replace(/^([-*+])(?=\S)/gm, "$1 ");
+    .replace(ordered, (_m, prefix: string, num: string, emoji: string) =>
+      `${prefix === "" ? "" : `${prefix}\n`}${num}. ${emoji}`)
+    .replace(bullet, (_m, prefix: string, mark: string, emoji: string) =>
+      `${prefix === "" ? "" : `${prefix}\n`}${mark} ${emoji}`);
 }
 
 export default function Markdown({ content, dark = false }: { content: string; dark?: boolean }) {
