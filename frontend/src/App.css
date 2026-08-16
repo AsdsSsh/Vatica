@@ -1,9 +1,11 @@
-/* Vatica 视觉体系（迭代 12 I12-1，frontend-design skill 定稿 V2）：
+/* Vatica 视觉体系（迭代 12 I12-1 初版；迭代 12.5 V2.1 中性黑灰）：
    语义 tokens：画布/表面/文字三级/状态色全部在此定义，
-   组件不再写死任何 AntD 默认蓝或固定浅色，保证亮暗主题真正联动。 */
+   组件不再写死任何 AntD 默认蓝或固定浅色，保证亮暗主题真正联动。
+   V2.1：表面全部收敛为中性黑灰（#0f/#17/#1d/#20），靛蓝/青蓝只保留为
+   小面积品牌点缀（选中条、状态灯、主按钮），不再铺满整个暗色界面。 */
 
 :root {
-  /* ── 品牌（brief 锁定） ── */
+  /* ── 品牌点缀（仅小面积使用） ── */
   --vatica-indigo: #4f5be8;
   --vatica-indigo-bright: #7b86f6;
   --vatica-cyan: #38bdf8;
@@ -11,33 +13,33 @@
   --vatica-green: #22c55e;
   --vatica-red: #e5484d;
 
-  /* ── 画布与表面 ── */
-  --vatica-paper: #f6f7f9;
-  --vatica-ink: #161a23;
-  --vatica-bg: #f6f7f9;
+  /* ── 中性画布与表面（浅色） ── */
+  --vatica-paper: #f4f4f5;
+  --vatica-ink: #171717;
+  --vatica-bg: #f4f4f5;
   --vatica-surface: #ffffff;
   --vatica-surface-raised: #ffffff;
-  --vatica-assistant-bubble: #f1f2f7;
+  --vatica-assistant-bubble: #f0f0f1;
 
   /* ── 文字三级 ── */
-  --vatica-text: #1e2430;
-  --vatica-text-secondary: #5f6a80;
-  --vatica-text-tertiary: #8b94a7;
+  --vatica-text: #18181b;
+  --vatica-text-secondary: #52525b;
+  --vatica-text-tertiary: #8e8e96;
 
   /* ── 线与状态 ── */
-  --vatica-border: #e7e9f0;
-  --vatica-border-strong: #d9dde8;
-  --vatica-hover: rgba(79, 91, 232, 0.08);
-  --vatica-selected: rgba(79, 91, 232, 0.1);
+  --vatica-border: #e4e4e7;
+  --vatica-border-strong: #d4d4d8;
+  --vatica-hover: rgba(24, 24, 27, 0.05);
+  --vatica-selected: rgba(24, 24, 27, 0.08);
   --vatica-warning-bg: #fff7e6;
   --vatica-danger-bg: #fff1f0;
 
   --vatica-active-bar: linear-gradient(180deg, #4f5be8, #38bdf8);
-  --vatica-shadow-pop: 0 8px 28px rgba(22, 26, 35, 0.16);
+  --vatica-shadow-pop: 0 8px 28px rgba(24, 24, 27, 0.16);
 
   --vatica-titlebar-bg: var(--vatica-bg);
   --vatica-titlebar-text: var(--vatica-text);
-  --vatica-titlebar-control-hover: rgba(22, 26, 35, 0.06);
+  --vatica-titlebar-control-hover: rgba(24, 24, 27, 0.06);
   --vatica-titlebar-control-close-hover: #e81123;
 
   /* ── 字体与圆角 ── */
@@ -49,26 +51,26 @@
 }
 
 [data-theme="dark"] {
-  --vatica-paper: #161a23;
-  --vatica-ink: #0d1016;
-  --vatica-bg: #0d1016;
-  --vatica-surface: #161a23;
-  --vatica-surface-raised: #1b2130;
-  --vatica-assistant-bubble: #1e2432;
+  --vatica-paper: #171719;
+  --vatica-ink: #0f0f10;
+  --vatica-bg: #0f0f10;
+  --vatica-surface: #171719;
+  --vatica-surface-raised: #1d1d20;
+  --vatica-assistant-bubble: #202024;
 
-  --vatica-text: #e8eaf2;
-  --vatica-text-secondary: #a8b0c3;
-  --vatica-text-tertiary: #77819a;
+  --vatica-text: #e7e7e9;
+  --vatica-text-secondary: #9f9fa7;
+  --vatica-text-tertiary: #6d6d75;
 
-  --vatica-border: #262d3d;
-  --vatica-border-strong: #333c50;
-  --vatica-hover: rgba(123, 134, 246, 0.14);
-  --vatica-selected: rgba(123, 134, 246, 0.18);
-  --vatica-warning-bg: #2b2518;
-  --vatica-danger-bg: #2c1a1d;
+  --vatica-border: #2a2a2e;
+  --vatica-border-strong: #36363b;
+  --vatica-hover: rgba(255, 255, 255, 0.06);
+  --vatica-selected: rgba(255, 255, 255, 0.09);
+  --vatica-warning-bg: #2a2519;
+  --vatica-danger-bg: #2b1c1e;
 
   --vatica-shadow-pop: 0 10px 32px rgba(0, 0, 0, 0.45);
-  --vatica-titlebar-control-hover: rgba(232, 234, 242, 0.1);
+  --vatica-titlebar-control-hover: rgba(255, 255, 255, 0.08);
 }
 
 * {
