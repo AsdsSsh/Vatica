@@ -17,6 +17,8 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
 import com.example.vatica.config.AppStateProperties;
+import com.example.vatica.auth.RequestIdentity;
+import com.example.vatica.auth.RequestIdentityContext;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -42,10 +44,18 @@ public final class TodoTools {
     }
 
     private final Path todoFile;
+    private final TodoRecordRepository repository;
     private final ObjectMapper mapper = new ObjectMapper();
 
     public TodoTools(AppStateProperties props) {
         this.todoFile = Path.of(props.stateDir()).toAbsolutePath().normalize().resolve(TODO_FILE);
+        this.repository = null;
+    }
+
+    /** 迭代 14 生产存储：不再读取共享 .vatica/todos.json。 */
+    public TodoTools(TodoRecordRepository repository) {
+        this.todoFile = null;
+        this.repository = repository;
     }
 
     @Tool(name = "todo_add", description = "添加一条待办到本地清单。截止日期可选（yyyy-MM-dd）。"
@@ -149,6 +159,11 @@ public final class TodoTools {
     // ══════════════════════════════ 存储 ══════════════════════════════
 
     private List<Todo> load() {
+        if (repository != null) {
+            RequestIdentity identity = RequestIdentityContext.require();
+            return repository.findByUserId(identity.userId()).stream().map(TodoRecord::toTodo)
+                    .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        }
         if (!Files.exists(todoFile)) {
             return new ArrayList<>();
         }
@@ -161,6 +176,14 @@ public final class TodoTools {
     }
 
     private void save(List<Todo> todos) {
+        if (repository != null) {
+            RequestIdentity identity = RequestIdentityContext.require();
+            repository.deleteByUserId(identity.userId());
+            repository.saveAll(todos.stream()
+                    .map(todo -> new TodoRecord(identity.userId(), identity.orgId(), todo))
+                    .toList());
+            return;
+        }
         try {
             // 迭代 10 I10-5：工作目录可能还不存在 data/，先建父目录再写
             Path parent = todoFile.getParent();

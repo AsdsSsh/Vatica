@@ -4,7 +4,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
-/** 迭代 13 I13-2：把 JWT 拦截器挂到 /api/**（enabled 由 vatica.auth.enabled 控制）。 */
+/** 迭代 14：JWT 同时保护 REST API 与 MCP Streamable HTTP 入口。 */
 @Configuration
 public class AuthWebConfig implements WebMvcConfigurer {
 
@@ -16,6 +16,6 @@ public class AuthWebConfig implements WebMvcConfigurer {
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
-        registry.addInterceptor(interceptor).addPathPatterns("/api/**");
+        registry.addInterceptor(interceptor).addPathPatterns("/api/**", "/mcp", "/mcp/**");
     }
 }

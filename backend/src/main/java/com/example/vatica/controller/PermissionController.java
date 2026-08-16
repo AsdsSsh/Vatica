@@ -11,8 +11,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 文件权限决定接口（迭代 11）：权限规则/永久授权都由前端 localStorage 持有，
- * 后端只接收一次决定并解除对应工具调用的阻塞等待。
+ * 文件权限决定接口（迭代 11；迭代 14 服务端化）：接收当前用户的审批决定，
+ * remember=true 时先持久化服务端规则，再解除对应工具调用的阻塞等待。
  */
 @RestController
 @RequestMapping("/api/permissions/requests")
@@ -24,7 +24,7 @@ public class PermissionController {
         this.requestService = requestService;
     }
 
-    /** @param remember true 表示前端会记住授权；后端仅记录日志，不持久化。 */
+    /** @param remember true 表示将该用户的路径授权持久化到服务端。 */
     public record DecisionRequest(boolean remember) {
     }
 

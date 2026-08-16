@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useEffect } from "react";
 import { App as AntApp, ConfigProvider, Layout, theme } from "antd";
 import zhCN from "antd/locale/zh_CN";
@@ -9,6 +9,12 @@ import TitleBar from "./components/TitleBar";
 import { createSession, type ChatMessage, type ChatSession } from "./types";
 import { loadSessions, saveSessions } from "./sessions";
 import { readUiPref, useTheme, writeUiPref } from "./theme";
+import {
+  deleteRemoteSession,
+  fetchSessionDetail,
+  fetchSessions,
+  upsertSession,
+} from "./api";
 import "./App.css";
 
 const { Sider, Content } = Layout;
@@ -27,10 +33,72 @@ function App() {
   const [streaming, setStreaming] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(() => readUiPref("vatica.leftCollapsed", false));
   const [rightCollapsed, setRightCollapsed] = useState(() => readUiPref("vatica.rightCollapsed", false));
+  const [remoteLoaded, setRemoteLoaded] = useState(false);
+  const sessionsRef = useRef(sessions);
+  const hydrateGeneration = useRef(0);
 
   useEffect(() => {
+    sessionsRef.current = sessions;
     saveSessions(sessions);
   }, [sessions]);
+
+  useEffect(() => {
+    let disposed = false;
+    async function hydrate(accountChanged = false) {
+      const generation = ++hydrateGeneration.current;
+      const local = loadSessions();
+      if (accountChanged) {
+        // token 已切换时先清掉旧账号内存态，网络慢/失败也不能短暂展示上一个账号的消息。
+        setRemoteLoaded(false);
+        setSessions(local);
+        setActiveId(local[0].id);
+      }
+      try {
+        const remote = await fetchSessions();
+        if (disposed || generation !== hydrateGeneration.current) return;
+        if (remote.length === 0) {
+          setSessions(local);
+          setActiveId(local[0].id);
+          await Promise.all(local.map((s) => upsertSession(s.id, s.title)));
+        } else {
+          const details = await Promise.all(remote.map((s) => fetchSessionDetail(s.id)));
+          if (disposed || generation !== hydrateGeneration.current) return;
+          const hydrated: ChatSession[] = details.map((s) => ({
+            id: s.id,
+            title: s.title,
+            createdAt: Date.parse(s.createdAt),
+            messages: s.messages.map((m, index) => ({
+              id: `${s.id}-${index}-${Date.parse(m.createdAt)}`,
+              role: m.role === "USER" ? "user" : "assistant",
+              content: m.content,
+            })),
+          }));
+          if (hydrated.length > 0) {
+            setSessions(hydrated);
+            setActiveId(hydrated[0].id);
+          }
+        }
+        if (!disposed && generation === hydrateGeneration.current) setRemoteLoaded(true);
+      } catch {
+        // 后端离线或未登录时继续使用当前账号自己的本机缓存。
+      }
+    }
+    const onAuthChanged = () => void hydrate(true);
+    window.addEventListener("vatica-auth-changed", onAuthChanged);
+    void hydrate();
+    return () => {
+      disposed = true;
+      window.removeEventListener("vatica-auth-changed", onAuthChanged);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!remoteLoaded) return;
+    const timer = window.setTimeout(() => {
+      void Promise.all(sessions.map((s) => upsertSession(s.id, s.title))).catch(() => undefined);
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [remoteLoaded, sessions.map((s) => `${s.id}:${s.title}`).join("|")]);
 
   const active = useMemo(
     () => sessions.find((s) => s.id === activeId) ?? sessions[0],
@@ -77,6 +145,7 @@ function App() {
 
   /** 删除会话：至少保底一个新会话（I12-5）。 */
   function deleteSession(id: string) {
+    void deleteRemoteSession(id).catch(() => undefined);
     const remaining = sessions.filter((s) => s.id !== id);
     let next: ChatSession[];
     let nextActiveId: string;

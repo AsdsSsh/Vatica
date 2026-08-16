@@ -37,7 +37,8 @@ public class TaskController {
     /** 一句话创建任务：Planner 拆解 → 返回计划（PENDING 待审批）；迭代 11 起携带权限快照，迭代 13 支持临时凭据。 */
     @PostMapping
     public TaskDetailDto create(@RequestBody TaskCreateRequest body) {
-        TaskRecord record = taskService.create(body.goal(), body.permission(), body.credential());
+        TaskRecord record = taskService.create(body.goal(), body.permission(), body.credential(),
+                body.mailCredential());
         return detail(record);
     }
 

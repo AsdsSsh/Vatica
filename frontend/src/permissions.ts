@@ -1,7 +1,6 @@
 /**
- * 前端文件权限中心（迭代 11）：localStorage 是权限事实来源。
- * 每次聊天/任务请求随带本模块生成的权限快照；后端只做机械校验与 ask 等待，
- * 不持久化用户授权。
+ * 文件权限兼容缓存（迭代 14）：服务端数据库是事实来源，localStorage 只用于离线启动时的 UI 快照。
+ * 聊天/任务仍携带快照以兼容旧接口，但后端不会用它扩大服务端授权。
  */
 
 export type FilePermissionMode = "READ_ONLY" | "WORKSPACE_WRITE" | "DANGER_FULL_ACCESS";

@@ -14,12 +14,15 @@ import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
+
+import com.example.vatica.auth.RequestIdentityContext;
 
 /**
  * 文件权限运行时请求（迭代 11）：后端只负责"发事件 + 等待决定 + 超时按拒绝"。
  * 迭代 12 I12-7：同一 channel 的 approve(remember) 增加<b>内存级临时授权</b>——
  * 后续工具调用先查临时授权，命中直接放行，不再二次弹窗；channel 收尾/取消时清理。
- * 永久授权仍由前端 localStorage 持有，后端不落盘。
+ * 迭代 14 起，remember=true 同时持久化到服务端权限规则，客户端不再是权限事实来源。
  */
 @Service
 public class FilePermissionRequestService {
@@ -32,10 +35,12 @@ public class FilePermissionRequestService {
     private static final class Pending {
         final FilePermissionRequest request;
         final CompletableFuture<Boolean> future;
+        final Long ownerId;
 
-        Pending(FilePermissionRequest request) {
+        Pending(FilePermissionRequest request, Long ownerId) {
             this.request = request;
             this.future = new CompletableFuture<>();
+            this.ownerId = ownerId;
         }
     }
 
@@ -46,9 +51,17 @@ public class FilePermissionRequestService {
     private final Map<String, Pending> pending = new ConcurrentHashMap<>();
     private final Map<String, Set<TempGrant>> grants = new ConcurrentHashMap<>();
     private final PermissionEventPublisher publisher;
+    private final PermissionPolicyService policyService;
 
     public FilePermissionRequestService(PermissionEventPublisher publisher) {
         this.publisher = publisher;
+        this.policyService = null;
+    }
+
+    @Autowired
+    public FilePermissionRequestService(PermissionEventPublisher publisher, PermissionPolicyService policyService) {
+        this.publisher = publisher;
+        this.policyService = policyService;
     }
 
     /** 请求用户授权；channel 为空（MCP/无 UI）时立即按拒绝返回。 */
@@ -61,7 +74,7 @@ public class FilePermissionRequestService {
         String id = UUID.randomUUID().toString().substring(0, 8);
         FilePermissionRequest request = new FilePermissionRequest(id, channel, path.toString(),
                 access, policy.mode(), description, Instant.now());
-        Pending item = new Pending(request);
+        Pending item = new Pending(request, RequestIdentityContext.require().userId());
         pending.put(id, item);
         boolean delivered = publisher.publish(request);
         if (!delivered) {
@@ -91,10 +104,17 @@ public class FilePermissionRequestService {
         if (item == null) {
             throw new IllegalArgumentException("操作失败：权限请求不存在或已超时（" + requestId + "）。");
         }
-        item.future.complete(approved);
+        if (!item.ownerId.equals(RequestIdentityContext.require().userId())) {
+            throw new IllegalArgumentException("操作失败：权限请求不存在或已超时（" + requestId + "）。");
+        }
         if (approved && remember) {
+            if (policyService != null) {
+                policyService.remember(Path.of(item.request.path()), item.request.access());
+            }
             rememberGrant(item.request.channel(), item.request.path(), item.request.access());
         }
+        // 持久化和通道缓存均成功后再唤醒工具，避免“工具已执行但审批接口返回失败”。
+        item.future.complete(approved);
         log.info("权限请求 {} 已被{}（remember={}）：{}", requestId, approved ? "批准" : "拒绝",
                 remember, item.request.path());
         return approved;

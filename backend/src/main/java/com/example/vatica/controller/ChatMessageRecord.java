@@ -18,12 +18,18 @@ import jakarta.persistence.Table;
  */
 @Entity
 @Table(name = "vatica_chat_message", indexes = {
-        @Index(name = "idx_msg_session_seq", columnList = "sessionId,seq") })
+        @Index(name = "idx_msg_owner_session_seq", columnList = "userId,sessionId,seq") })
 public class ChatMessageRecord {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Column(updatable = false)
+    private Long userId;
+
+    @Column(updatable = false)
+    private Long orgId;
 
     @Column(nullable = false, length = 64)
     private String sessionId;
@@ -46,7 +52,9 @@ public class ChatMessageRecord {
         // JPA
     }
 
-    public ChatMessageRecord(String sessionId, String role, String content, long seq) {
+    public ChatMessageRecord(Long userId, Long orgId, String sessionId, String role, String content, long seq) {
+        this.userId = userId;
+        this.orgId = orgId;
         this.sessionId = sessionId;
         this.role = role;
         this.content = content;
@@ -55,6 +63,14 @@ public class ChatMessageRecord {
 
     public Long getId() {
         return id;
+    }
+
+    public Long getUserId() {
+        return userId;
+    }
+
+    public Long getOrgId() {
+        return orgId;
     }
 
     public String getSessionId() {

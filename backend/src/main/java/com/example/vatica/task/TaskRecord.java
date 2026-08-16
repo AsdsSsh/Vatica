@@ -10,6 +10,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.Index;
 
 /**
  * 任务持久化实体（迭代 5 I5-4）：计划与步骤结果以 JSON 存 TEXT 列
@@ -18,12 +19,20 @@ import jakarta.persistence.Table;
  * <p>score / reworkCount / verdict 为迭代 5.5 质量闭环字段（Judge 评分、自动返工限次、评测结论）。
  */
 @Entity
-@Table(name = "vatica_task")
+@Table(name = "vatica_task", indexes = {
+        @Index(name = "idx_task_owner_created", columnList = "userId,createdAt") })
 public class TaskRecord {
 
     @Id
     @Column(length = 36)
     private String id;
+
+    /** 迭代 14：创建者与组织快照，所有用户侧读写均按 userId 收口。 */
+    @Column(updatable = false)
+    private Long userId;
+
+    @Column(updatable = false)
+    private Long orgId;
 
     /** 用户原始目标（一句话）。 */
     @Column(nullable = false, length = 4000)
@@ -89,7 +98,14 @@ public class TaskRecord {
 
     public TaskRecord(String id, String goal, TaskStatus status, String planJson, int currentStep,
             String permissionJson) {
+        this(id, null, null, goal, status, planJson, currentStep, permissionJson);
+    }
+
+    public TaskRecord(String id, Long userId, Long orgId, String goal, TaskStatus status, String planJson,
+            int currentStep, String permissionJson) {
         this.id = id;
+        this.userId = userId;
+        this.orgId = orgId;
         this.goal = goal;
         this.status = status;
         this.planJson = planJson;
@@ -110,6 +126,14 @@ public class TaskRecord {
 
     public String getId() {
         return id;
+    }
+
+    public Long getUserId() {
+        return userId;
+    }
+
+    public Long getOrgId() {
+        return orgId;
     }
 
     public String getGoal() {

@@ -3,7 +3,7 @@ import { App, Flex, Form, Input, InputNumber, Modal, Select, Switch, Typography 
 import { fetchIntegrationSettings, saveIntegrationSettings, type IntegrationSettingsView } from "../api";
 
 /**
- * 外部服务设置（迭代 13 I13-9）：AMAP / 邮件 / 数据库。
+ * 平台外部服务设置（迭代 14：用户邮箱已迁入个人工作台）：AMAP / 数据库。
  * 密钥输入留空 = 保持现值；勾选"清除" = 删除该密钥。数据库与 AMAP 保存后重启生效。
  */
 interface Props {
@@ -16,7 +16,6 @@ export default function IntegrationSettingsPanel({ open, onClose }: Props) {
   const [view, setView] = useState<IntegrationSettingsView | null>(null);
   const [busy, setBusy] = useState(false);
   const [clearAmap, setClearAmap] = useState(false);
-  const [clearMail, setClearMail] = useState(false);
   const [clearDb, setClearDb] = useState(false);
   const [form] = Form.useForm();
 
@@ -33,7 +32,6 @@ export default function IntegrationSettingsPanel({ open, onClose }: Props) {
       void reload();
       form.resetFields();
       setClearAmap(false);
-      setClearMail(false);
       setClearDb(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -43,11 +41,6 @@ export default function IntegrationSettingsPanel({ open, onClose }: Props) {
   useEffect(() => {
     if (open && view) {
       form.setFieldsValue({
-        imapHost: view.imapHost,
-        imapPort: view.imapPort,
-        smtpHost: view.smtpHost,
-        smtpPort: view.smtpPort,
-        mailUsername: view.mailUsername,
         dbMode: view.dbMode,
         dbHost: view.dbHost,
         dbPort: view.dbPort,
@@ -63,14 +56,6 @@ export default function IntegrationSettingsPanel({ open, onClose }: Props) {
     try {
       await saveIntegrationSettings({
         amap: { apiKey: clearAmap ? "" : values.amapKey || null },
-        mail: {
-          imapHost: values.imapHost ?? "",
-          imapPort: values.imapPort ?? 993,
-          smtpHost: values.smtpHost ?? "",
-          smtpPort: values.smtpPort ?? 465,
-          username: values.mailUsername ?? "",
-          password: clearMail ? "" : values.mailPassword || null,
-        },
         db: {
           mode: values.dbMode ?? "MYSQL",
           host: values.dbHost ?? "localhost",
@@ -106,11 +91,6 @@ export default function IntegrationSettingsPanel({ open, onClose }: Props) {
         form={form}
         layout="vertical"
         initialValues={{
-          imapHost: view?.imapHost ?? "",
-          imapPort: view?.imapPort ?? 993,
-          smtpHost: view?.smtpHost ?? "",
-          smtpPort: view?.smtpPort ?? 465,
-          mailUsername: view?.mailUsername ?? "",
           dbMode: view?.dbMode ?? "MYSQL",
           dbHost: view?.dbHost ?? "localhost",
           dbPort: view?.dbPort ?? 3306,
@@ -126,24 +106,6 @@ export default function IntegrationSettingsPanel({ open, onClose }: Props) {
         <Flex align="center" gap={8} style={{ marginTop: -8 }}>
           <Switch size="small" checked={clearAmap} onChange={setClearAmap} />
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>清除已保存的 AMAP Key</Typography.Text>
-        </Flex>
-
-        <Typography.Title level={5}>邮件（JavaMail）</Typography.Title>
-        <Flex gap={12}>
-          <Form.Item name="imapHost" label="IMAP 服务器" style={{ flex: 1 }}><Input placeholder="imap.qq.com" /></Form.Item>
-          <Form.Item name="imapPort" label="IMAP 端口" style={{ width: 120 }}><InputNumber style={{ width: "100%" }} /></Form.Item>
-        </Flex>
-        <Flex gap={12}>
-          <Form.Item name="smtpHost" label="SMTP 服务器" style={{ flex: 1 }}><Input placeholder="smtp.qq.com" /></Form.Item>
-          <Form.Item name="smtpPort" label="SMTP 端口" style={{ width: 120 }}><InputNumber style={{ width: "100%" }} /></Form.Item>
-        </Flex>
-        <Form.Item name="mailUsername" label="邮箱账号"><Input placeholder="yourname@qq.com" /></Form.Item>
-        <Form.Item name="mailPassword" label="授权码/密码">
-          <Input.Password placeholder={secretPlaceholder(view?.mailPasswordSet ?? false, view?.mailPasswordHint ?? null)} autoComplete="new-password" />
-        </Form.Item>
-        <Flex align="center" gap={8} style={{ marginTop: -8 }}>
-          <Switch size="small" checked={clearMail} onChange={setClearMail} />
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>清除已保存的邮件密码</Typography.Text>
         </Flex>
 
         <Typography.Title level={5}>数据库（保存后重启生效）</Typography.Title>

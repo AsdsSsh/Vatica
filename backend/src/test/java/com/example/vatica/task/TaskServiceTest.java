@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.chat.client.ChatClient;
@@ -34,6 +35,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 import com.example.vatica.agent.ExecutorAgent;
 import com.example.vatica.agent.JudgeAgent;
 import com.example.vatica.agent.PlannerAgent;
+import com.example.vatica.auth.RequestIdentity;
+import com.example.vatica.auth.RequestIdentityContext;
 import com.example.vatica.task.TaskPlan.TaskStep;
 
 /**
@@ -52,6 +55,9 @@ import com.example.vatica.task.TaskPlan.TaskStep;
         "spring.jpa.hibernate.ddl-auto=create-drop" })
 class TaskServiceTest {
 
+    private static final RequestIdentity TEST_IDENTITY =
+            new RequestIdentity(1L, 1L, "LOCAL", "test");
+
     @MockitoBean
     PlannerAgent plannerAgent;
     @MockitoBean
@@ -66,10 +72,16 @@ class TaskServiceTest {
 
     @BeforeEach
     void setUp() {
+        RequestIdentityContext.set(TEST_IDENTITY);
         repository.deleteAll();
         when(plannerAgent.plan("目标")).thenReturn(twoStepPlan());
         when(executorAgent.executeStep(eq("目标"), any(), anyList(), any(ToolCallback[].class), any(ChatClient.class))).thenReturn("完成该步骤");
         when(judgeAgent.evaluate(anyString(), any(), any(ChatClient.class))).thenReturn(new JudgeAgent.Evaluation(85, TaskVerdict.PASS, "合格"));
+    }
+
+    @AfterEach
+    void clearIdentity() {
+        RequestIdentityContext.clear();
     }
 
     /** 全链路：创建 PENDING → 审批计划执行第 1 步 → 第 2 步审批点挂起 → 续批 → 评测 PASS → DONE，全程落库。 */
@@ -314,7 +326,8 @@ class TaskServiceTest {
         TaskRecord created = taskService.create("目标");
         ExecutorService pool = Executors.newSingleThreadExecutor();
         try {
-            Future<TaskRecord> future = pool.submit(() -> taskService.approve(created.getId()));
+            Future<TaskRecord> future = pool.submit(() -> RequestIdentityContext.callWith(
+                    TEST_IDENTITY, () -> taskService.approve(created.getId())));
             assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
 
             TaskRecord cancelled = taskService.cancel(created.getId());
@@ -428,6 +441,22 @@ class TaskServiceTest {
         assertThat(recent).hasSize(2);
         assertThat(recent.get(0).getId()).isEqualTo(second.getId());
         assertThat(recent.get(1).getId()).isEqualTo(first.getId());
+    }
+
+    /** 迭代 14：知道任务 id 也不能跨用户读取、审批或在列表中发现。 */
+    @Test
+    void taskOwnershipIsEnforcedAcrossUsers() {
+        TaskRecord owned = taskService.create("目标");
+
+        RequestIdentityContext.set(new RequestIdentity(2L, 1L, "MEMBER", "other"));
+        assertThatThrownBy(() -> taskService.get(owned.getId()))
+                .isInstanceOf(TaskNotFoundException.class);
+        assertThatThrownBy(() -> taskService.approve(owned.getId()))
+                .isInstanceOf(TaskNotFoundException.class);
+        assertThat(taskService.recent(20)).isEmpty();
+
+        RequestIdentityContext.set(TEST_IDENTITY);
+        assertThat(taskService.get(owned.getId()).getUserId()).isEqualTo(1L);
     }
 
     private static TaskPlan twoStepPlan() {

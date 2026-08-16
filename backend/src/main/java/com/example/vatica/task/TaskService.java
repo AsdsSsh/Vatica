@@ -19,6 +19,7 @@ import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,9 +29,13 @@ import jakarta.persistence.PersistenceContext;
 import com.example.vatica.agent.ExecutorAgent;
 import com.example.vatica.agent.JudgeAgent;
 import com.example.vatica.agent.PlannerAgent;
+import com.example.vatica.auth.RequestIdentity;
+import com.example.vatica.auth.RequestIdentityContext;
+import com.example.vatica.auth.TenantChannels;
 import com.example.vatica.config.EphemeralCredential;
 import com.example.vatica.config.JudgeProperties;
 import com.example.vatica.config.ModelRegistry;
+import com.example.vatica.mail.MailConnectionSettings;
 import com.example.vatica.permission.FilePermissionPolicy;
 import com.example.vatica.permission.FilePermissionRequestService;
 import com.example.vatica.permission.PermissionBoundToolCallbacks;
@@ -74,6 +79,9 @@ public class TaskService {
     /** 迭代 13 I13-5：EPHEMERAL 任务在运行期的临时凭据（不落库，服务重启即失效）。 */
     private final Map<String, EphemeralCredential> ephemeralCredentials = new ConcurrentHashMap<>();
 
+    /** 仅本次邮件凭据与模型临时凭据同样只驻留内存，不进入任务表。 */
+    private final Map<String, MailConnectionSettings> ephemeralMailCredentials = new ConcurrentHashMap<>();
+
     /** 用于跨事务重读被终止任务的最新状态（需悲观锁"当前读"，避开 REPEATABLE_READ 快照）。 */
     @PersistenceContext
     private EntityManager entityManager;
@@ -111,11 +119,19 @@ public class TaskService {
     /** 创建任务（迭代 13 I13-5：支持请求级临时凭据，credential 不落库）。 */
     @Transactional
     public TaskRecord create(String goal, FilePermissionPolicy permission, EphemeralCredential credential) {
+        return create(goal, permission, credential, null);
+    }
+
+    @Transactional
+    public TaskRecord create(String goal, FilePermissionPolicy permission, EphemeralCredential credential,
+            MailConnectionSettings mailCredential) {
         if (goal == null || goal.isBlank()) {
             throw new IllegalArgumentException("操作失败：任务目标不能为空。");
         }
-        TaskRecord record = new TaskRecord(UUID.randomUUID().toString(), goal.trim(),
-                TaskStatus.PENDING, null, 0, permission == null ? null : toPermissionJson(permission));
+        RequestIdentity identity = RequestIdentityContext.require();
+        TaskRecord record = new TaskRecord(UUID.randomUUID().toString(), identity.userId(), identity.orgId(),
+                goal.trim(), TaskStatus.PENDING, null, 0,
+                permission == null ? null : toPermissionJson(permission));
         if (credential != null) {
             record.setModelSource("EPHEMERAL");
             ephemeralCredentials.put(record.getId(), credential);
@@ -127,21 +143,24 @@ public class TaskService {
             TaskPlan plan = plannerAgent.plan(goal.trim());
             record.setPlanJson(toJson(plan));
         }
+        if (mailCredential != null) {
+            ephemeralMailCredentials.put(record.getId(), mailCredential);
+        }
         return repository.save(record);
     }
 
     /** 查询单任务。 */
     public TaskRecord get(String id) {
-        return repository.findById(id)
+        RequestIdentity identity = RequestIdentityContext.require();
+        return repository.findByIdAndUserId(id, identity.userId())
                 .orElseThrow(() -> new TaskNotFoundException(id));
     }
 
     /** 最近任务（前端任务列表用）。 */
     public List<TaskRecord> recent(int limit) {
-        return repository.findAll().stream()
-                .sorted((a, b) -> b.getCreatedAt().compareTo(a.getCreatedAt()))
-                .limit(Math.min(Math.max(limit, 1), 100))
-                .toList();
+        RequestIdentity identity = RequestIdentityContext.require();
+        return repository.findByUserIdOrderByCreatedAtDesc(identity.userId(),
+                PageRequest.of(0, Math.min(Math.max(limit, 1), 100)));
     }
 
     /**
@@ -157,6 +176,7 @@ public class TaskService {
             }
             if ("EPHEMERAL".equals(record.getModelSource())) {
                 ephemeralCredentials.remove(record.getId());
+                ephemeralMailCredentials.remove(record.getId());
                 record.setStatus(TaskStatus.FAILED);
                 record.setRecoverable(false);
                 record.setError("服务重启，临时模型凭据已失效，请重新提交任务。");
@@ -242,8 +262,9 @@ public class TaskService {
                 record.setStatus(TaskStatus.CANCELLED);
                 record.setError("用户手动终止");
                 cancelFlags.computeIfAbsent(id, k -> new AtomicBoolean()).set(true);
-                permissionRequests.cancelChannel(id);
+                permissionRequests.cancelChannel(TenantChannels.task(identityOf(record), id));
                 ephemeralCredentials.remove(id);
+                ephemeralMailCredentials.remove(id);
                 repository.save(record);
                 eventPublisher.publish(record, "cancelled");
                 log.info("任务 {} 被用户终止", id);
@@ -355,6 +376,7 @@ public class TaskService {
                 record.setError(cause.getMessage());
                 cancelFlags.remove(record.getId());
                 ephemeralCredentials.remove(record.getId());
+                ephemeralMailCredentials.remove(record.getId());
                 repository.save(record);
                 eventPublisher.publish(record, "failed");
                 return;
@@ -378,8 +400,10 @@ public class TaskService {
         try {
             // 迭代 11：把任务创建时的权限快照绑定到本次步骤的全部工具调用
             FilePermissionPolicy policy = parsePermission(record.getPermissionJson());
+            RequestIdentity identity = identityOf(record);
             ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
-                    vaticaTools, policy, record.getId());
+                    vaticaTools, policy, TenantChannels.task(identity, record.getId()), identity,
+                    ephemeralMailCredentials.get(record.getId()));
             return executorAgent.executeStep(record.getGoal(), step, previous, callbacks,
                     clientFor(record, true));
         } catch (RuntimeException e) {
@@ -424,6 +448,7 @@ public class TaskService {
             record.setError("评测异常：" + e.getMessage());
             cancelFlags.remove(record.getId());
             ephemeralCredentials.remove(record.getId());
+            ephemeralMailCredentials.remove(record.getId());
             repository.save(record);
             eventPublisher.publish(record, "failed");
             return;
@@ -438,6 +463,7 @@ public class TaskService {
             record.setStatus(TaskStatus.DONE);
             cancelFlags.remove(record.getId());
             ephemeralCredentials.remove(record.getId());
+            ephemeralMailCredentials.remove(record.getId());
             log.info("任务 {} 评测通过（{} 分），交付", record.getId(), eval.score());
             repository.save(record);
             eventPublisher.publish(record, "done");
@@ -522,5 +548,12 @@ public class TaskService {
                 .filter(s -> s.getId() == stepId)
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException("操作失败：计划中找不到步骤 id=" + stepId));
+    }
+
+    private static RequestIdentity identityOf(TaskRecord record) {
+        if (record.getUserId() == null || record.getOrgId() == null) {
+            throw new IllegalStateException("操作失败：任务缺少租户归属，旧任务不允许在云模式继续执行。");
+        }
+        return new RequestIdentity(record.getUserId(), record.getOrgId(), "TASK_OWNER", "task-owner");
     }
 }

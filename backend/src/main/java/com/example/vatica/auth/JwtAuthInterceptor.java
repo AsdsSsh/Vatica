@@ -46,8 +46,17 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
         String token = header != null && header.startsWith("Bearer ") ? header.substring(7) : null;
         try {
             JwtService.Claims claims = jwt.verify(token);
-            RequestIdentityContext.set(new RequestIdentity(claims.userId(), claims.orgId(),
-                    claims.role(), claims.username()));
+            RequestIdentity identity = new RequestIdentity(claims.userId(), claims.orgId(),
+                    claims.role(), claims.username());
+            if (request.getRequestURI().startsWith("/mcp") && !"PLATFORM_ADMIN".equals(identity.role())) {
+                response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+                response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+                response.getWriter().write(mapper.writeValueAsString(
+                        Map.of("message", "操作失败：MCP Server 当前仅允许平台管理员访问。")));
+                return false;
+            }
+            RequestIdentityContext.set(identity);
             return true;
         } catch (IllegalArgumentException e) {
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);

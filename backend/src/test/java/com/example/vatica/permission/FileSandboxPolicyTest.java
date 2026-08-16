@@ -9,12 +9,25 @@ import java.util.List;
 import com.example.vatica.tool.FileToolProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.io.TempDir;
+import com.example.vatica.auth.RequestIdentity;
+import com.example.vatica.auth.RequestIdentityContext;
 
 /** 迭代 11：文件沙盒判定测试——工作区内放行 / 越界无订阅者拒绝 / 保护路径禁写。 */
 class FileSandboxPolicyTest {
+
+    @BeforeEach
+    void setIdentity() {
+        RequestIdentityContext.set(new RequestIdentity(1L, 1L, "LOCAL", "test"));
+    }
+
+    @AfterEach
+    void clearIdentity() {
+        RequestIdentityContext.clear();
+    }
 
     @TempDir
     Path root;

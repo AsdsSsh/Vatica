@@ -7,6 +7,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
+import com.example.vatica.auth.RequestIdentity;
+import com.example.vatica.auth.RequestIdentityContext;
+import com.example.vatica.workspace.WorkspaceStore;
+
 /**
  * 文件沙盒策略（迭代 11）：按请求携带的权限快照机械判定 allow / ask / deny。
  *
@@ -31,11 +35,29 @@ public class FileSandboxPolicy {
 
     private final Path defaultRoot;
     private final FilePermissionRequestService requestService;
+    private final WorkspaceStore workspaceStore;
+    private final PermissionPolicyService policyService;
 
     public FileSandboxPolicy(FilePermissionRequestService requestService,
             com.example.vatica.tool.FileToolProperties fileProps) {
         this.requestService = requestService;
         this.defaultRoot = Path.of(fileProps.workspaceDir()).toAbsolutePath().normalize();
+        this.workspaceStore = null;
+        this.policyService = null;
+    }
+
+    public FileSandboxPolicy(FilePermissionRequestService requestService,
+            com.example.vatica.tool.FileToolProperties fileProps, WorkspaceStore workspaceStore) {
+        this(requestService, fileProps, workspaceStore, null);
+    }
+
+    public FileSandboxPolicy(FilePermissionRequestService requestService,
+            com.example.vatica.tool.FileToolProperties fileProps, WorkspaceStore workspaceStore,
+            PermissionPolicyService policyService) {
+        this.requestService = requestService;
+        this.defaultRoot = Path.of(fileProps.workspaceDir()).toAbsolutePath().normalize();
+        this.workspaceStore = workspaceStore;
+        this.policyService = policyService;
     }
 
     public Path resolveForRead(String rawPath) {
@@ -57,9 +79,7 @@ public class FileSandboxPolicy {
     /** 当前请求生效的策略（无上下文时返回后端默认工作区策略）。 */
     public FilePermissionPolicy currentPolicy() {
         FilePermissionContext.Snapshot context = FilePermissionContext.current();
-        return context == null || context.policy() == null
-                ? FilePermissionPolicy.defaultPolicy(defaultRoot)
-                : context.policy().normalized();
+        return effectivePolicy(context);
     }
 
     private Path resolve(String rawPath, FileAccess access, String description) {
@@ -67,12 +87,18 @@ public class FileSandboxPolicy {
             throw new IllegalArgumentException("操作失败：路径不能为空。");
         }
         FilePermissionContext.Snapshot context = FilePermissionContext.current();
-        FilePermissionPolicy policy = context == null || context.policy() == null
-                ? FilePermissionPolicy.defaultPolicy(defaultRoot)
-                : context.policy().normalized();
+        FilePermissionPolicy policy = effectivePolicy(context);
 
         Path candidate = toCandidate(rawPath, policy);
         Path real = realOrParent(candidate);
+
+        // 云模式硬边界：即使客户端伪造 DANGER_FULL_ACCESS 或绝对路径，也不能越过个人租户根。
+        if (workspaceStore != null) {
+            Path root = tenantRoot();
+            if (!real.startsWith(root)) {
+                throw new IllegalArgumentException("操作失败：路径越过当前用户的云工作区边界。");
+            }
+        }
 
         if (isProtected(real, access, policy.mode())) {
             throw new IllegalArgumentException("操作失败：该路径是受保护路径（" + real
@@ -82,6 +108,9 @@ public class FileSandboxPolicy {
         // 迭代 12 I12-7：同一 channel 的"记住授权"临时放行优先于工作区根判定，避免二次弹窗
         String channel = context == null ? null : context.channel();
         if (requestService.isGranted(channel, real, access)) {
+            return prepareForWrite(real, access);
+        }
+        if (policyService != null && policyService.isRemembered(real, access)) {
             return prepareForWrite(real, access);
         }
 
@@ -119,11 +148,27 @@ public class FileSandboxPolicy {
         if (raw.isAbsolute()) {
             return raw.normalize();
         }
-        Path base = defaultRoot;
+        Path base = workspaceStore == null ? defaultRoot : tenantRoot();
         if (policy.workspaceRoots() != null && !policy.workspaceRoots().isEmpty()) {
             base = Path.of(policy.workspaceRoots().get(0).path());
         }
         return base.resolve(raw).normalize();
+    }
+
+    private FilePermissionPolicy effectivePolicy(FilePermissionContext.Snapshot context) {
+        if (workspaceStore == null) {
+            return context == null || context.policy() == null
+                    ? FilePermissionPolicy.defaultPolicy(defaultRoot)
+                    : context.policy().normalized();
+        }
+        return policyService == null
+                ? FilePermissionPolicy.defaultPolicy(tenantRoot())
+                : policyService.current();
+    }
+
+    private Path tenantRoot() {
+        RequestIdentity identity = RequestIdentityContext.require();
+        return workspaceStore.root(identity);
     }
 
     private static Path realOrParent(Path candidate) {

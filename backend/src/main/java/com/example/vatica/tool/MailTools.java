@@ -18,11 +18,13 @@ import jakarta.mail.internet.InternetAddress;
 import jakarta.mail.internet.MimeMessage;
 import jakarta.mail.search.SubjectTerm;
 
+import com.example.vatica.mail.UserMailService;
+
 /**
  * 邮件工具（mail_query / mail_send）——迭代 3.5 PIM：邮件。
  *
- * <p>JavaMail（Angus 实现）：IMAP 收件箱查询/主题搜索 + SMTP 发送；配置走环境变量
- * （{@link MailProperties}），未配置时返回指引（不崩溃）。集成测试用 GreenMail
+ * <p>JavaMail（Angus 实现）：IMAP 收件箱查询/主题搜索 + SMTP 发送；生产环境按当前用户
+ * 从 {@code UserMailService} 解析配置，旧 {@link MailProperties} 构造器仅供协议回归测试。集成测试用 GreenMail
  * 内存 SMTP/IMAP 服务器测真实协议行为（不 mock、不连真实邮箱）。
  *
  * <p><b>副作用护栏</b>：发送邮件是不可逆操作 → 必须传 {@code confirm="yes"}（模型须先征得
@@ -36,10 +38,17 @@ public final class MailTools {
     private static final int CONNECT_TIMEOUT_MS = 15_000;
     private static final int IO_TIMEOUT_MS = 30_000;
 
-    private final MailProperties props;
+    private final MailProperties legacyProps;
+    private final UserMailService userMailService;
 
     public MailTools(MailProperties props) {
-        this.props = props;
+        this.legacyProps = props;
+        this.userMailService = null;
+    }
+
+    public MailTools(UserMailService userMailService) {
+        this.legacyProps = null;
+        this.userMailService = userMailService;
     }
 
     @Tool(name = "mail_query", description = "查询邮箱收件箱最近的邮件（默认 10 封，最多 50），可按主题关键词过滤。"
@@ -47,10 +56,11 @@ public final class MailTools {
     public String query(
             @ToolParam(description = "返回邮件封数（可选，默认 10，最多 50）", required = false) Integer limit,
             @ToolParam(description = "主题关键词（可选），只返回主题包含该词的邮件", required = false) String keyword) {
-        ensureConfigured();
+        MailProperties props = properties();
+        ensureConfigured(props);
         int n = Math.min(Math.max(limit == null ? 10 : limit, 1), 50);
         try {
-            Store store = session().getStore("imap");
+            Store store = session(props).getStore("imap");
             store.connect(props.imapHost(), props.imapPort(), props.username(), props.password());
             try (store) {
                 Folder inbox = store.getFolder("INBOX");
@@ -100,19 +110,20 @@ public final class MailTools {
             throw new IllegalArgumentException("操作失败：发送邮件是副作用操作，需要用户确认。"
                     + "请先向用户展示收件人、主题与正文并征得同意，用户同意后再调用本工具并传 confirm=\"yes\"。");
         }
-        ensureConfigured();
+        MailProperties props = properties();
+        ensureConfigured(props);
         if (to == null || to.isBlank() || subject == null || subject.isBlank() || body == null || body.isBlank()) {
             throw new IllegalArgumentException("操作失败：收件人、主题、正文均不能为空。");
         }
         try {
-            MimeMessage message = new MimeMessage(session());
+            MimeMessage message = new MimeMessage(session(props));
             message.setFrom(new InternetAddress(props.username()));
             message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(to.trim()));
             message.setSubject(subject.trim(), "UTF-8");
             message.setText(body, "UTF-8");
             // 显式 connect 传账号密码：静态 Transport.send 依赖 Session 内嵌 Authenticator，
             // 环境变量场景下走显式认证最直白
-            Transport transport = session().getTransport("smtp");
+            Transport transport = session(props).getTransport("smtp");
             try {
                 transport.connect(props.smtpHost(), props.smtpPort(), props.username(), props.password());
                 transport.sendMessage(message, message.getAllRecipients());
@@ -130,18 +141,40 @@ public final class MailTools {
         }
     }
 
+    /** 邮箱设置页连通性测试：仅握手并认证，不读信、不发信。 */
+    public String testConnection() {
+        MailProperties props = properties();
+        ensureConfigured(props);
+        try {
+            Store store = session(props).getStore("imap");
+            store.connect(props.imapHost(), props.imapPort(), props.username(), props.password());
+            store.close();
+            Transport transport = session(props).getTransport("smtp");
+            transport.connect(props.smtpHost(), props.smtpPort(), props.username(), props.password());
+            transport.close();
+            return "IMAP / SMTP 连接成功";
+        } catch (MessagingException e) {
+            throw new IllegalStateException("操作失败：邮箱连接测试失败。" + e.getMessage(), e);
+        }
+    }
+
     // ══════════════════════════════ 内部 ══════════════════════════════
 
-    private void ensureConfigured() {
+    private MailProperties properties() {
+        return userMailService == null ? legacyProps : userMailService.resolve();
+    }
+
+    private void ensureConfigured(MailProperties props) {
         if (!props.configured()) {
-            throw new IllegalArgumentException("操作失败：邮箱未配置。请告知用户：需要设置环境变量 "
-                    + "MAIL_IMAP_HOST / MAIL_SMTP_HOST / MAIL_USERNAME / MAIL_PASSWORD（application.yml 中 "
-                    + "vatica.mail.* 已映射这些变量），设置后重启应用。");
+            String guidance = userMailService == null
+                    ? "请设置 MAIL_IMAP_HOST / MAIL_SMTP_HOST / MAIL_USERNAME / MAIL_PASSWORD 后重启应用。"
+                    : "请先在“我的邮箱”中设置 IMAP、SMTP、账号与密码。";
+            throw new IllegalArgumentException("操作失败：邮箱未配置。" + guidance);
         }
     }
 
     /** 组装 JavaMail Session：默认端口映射 SSL/STARTTLS（993/465=SSL，587=STARTTLS），带连接与 IO 超时。 */
-    private Session session() {
+    private Session session(MailProperties props) {
         Properties p = new Properties();
         p.put("mail.imap.host", props.imapHost());
         p.put("mail.imap.port", String.valueOf(props.imapPort()));

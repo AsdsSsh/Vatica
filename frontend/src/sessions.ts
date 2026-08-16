@@ -4,7 +4,8 @@
  */
 import { createSession, type ChatMessage, type ChatSession } from "./types";
 
-const STORAGE_KEY = "vatica.sessions.v1";
+const LEGACY_STORAGE_KEY = "vatica.sessions.v1";
+const STORAGE_KEY_PREFIX = "vatica.sessions.v2.";
 const MAX_SESSIONS = 50;
 const MAX_MESSAGES_PER_SESSION = 200;
 const MAX_MESSAGE_CHARS = 20_000;
@@ -36,7 +37,10 @@ function sanitizeSession(raw: unknown): ChatSession | null {
 
 export function loadSessions(): ChatSession[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const key = storageKey();
+    // 旧全局缓存只能在未登录的本地模式迁移，不能带入任意云端账号。
+    const raw = localStorage.getItem(key)
+      ?? (key.endsWith("local") ? localStorage.getItem(LEGACY_STORAGE_KEY) : null);
     if (!raw) return [createSession()];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [createSession()];
@@ -52,8 +56,29 @@ export function loadSessions(): ChatSession[] {
 export function saveSessions(sessions: ChatSession[]): void {
   try {
     const trimmed = sessions.slice(0, MAX_SESSIONS);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+    localStorage.setItem(storageKey(), JSON.stringify(trimmed));
   } catch {
     // 隐私模式等 localStorage 不可用时忽略
+  }
+}
+
+/** 本地快照按 JWT 的 org/user 分桶；这里只用于缓存命名，权限仍以服务端验签结果为准。 */
+function storageKey(): string {
+  const token = localStorage.getItem("vatica.authToken");
+  if (!token) return STORAGE_KEY_PREFIX + "local";
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) throw new Error("invalid token");
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const payload = JSON.parse(atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, "="))) as {
+      sub?: number | string;
+      org?: number | string;
+    };
+    if (payload.sub == null || payload.org == null) throw new Error("missing subject");
+    return `${STORAGE_KEY_PREFIX}org-${payload.org}.user-${payload.sub}`;
+  } catch {
+    // 畸形/旧格式 token 也独立分桶，避免回退到本地缓存造成账号间内容泄漏。
+    const parts = token.split(".");
+    return STORAGE_KEY_PREFIX + "token-" + (parts[parts.length - 1]?.slice(0, 16) ?? "unknown");
   }
 }

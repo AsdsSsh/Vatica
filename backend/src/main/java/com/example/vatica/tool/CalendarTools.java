@@ -17,6 +17,8 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
 import com.example.vatica.config.AppStateProperties;
+import com.example.vatica.auth.RequestIdentity;
+import com.example.vatica.auth.RequestIdentityContext;
 import com.example.vatica.permission.FileSandboxPolicy;
 import com.example.vatica.tool.IcsParser.CalendarEvent;
 import com.example.vatica.tool.IcsParser.ParseResult;
@@ -43,10 +45,19 @@ public final class CalendarTools {
 
     private final Path calendarFile;
     private final FileSandboxPolicy sandboxPolicy;
+    private final CalendarEventRecordRepository repository;
 
     public CalendarTools(AppStateProperties props, FileSandboxPolicy sandboxPolicy) {
         this.calendarFile = Path.of(props.stateDir()).toAbsolutePath().normalize().resolve(CALENDAR_FILE);
         this.sandboxPolicy = sandboxPolicy;
+        this.repository = null;
+    }
+
+    /** 迭代 14 生产存储：日历落 vatica_event，按当前用户过滤。 */
+    public CalendarTools(CalendarEventRecordRepository repository, FileSandboxPolicy sandboxPolicy) {
+        this.calendarFile = null;
+        this.sandboxPolicy = sandboxPolicy;
+        this.repository = repository;
     }
 
     @Tool(name = "calendar_query", description = "查询日历在指定日期范围内的日程（含重复日程自动展开到具体日期）。"
@@ -143,6 +154,11 @@ public final class CalendarTools {
         } catch (IOException ex) {
             throw new IllegalStateException("操作失败：读取 ICS 文件失败。" + ex.getMessage(), ex);
         }
+        return importIcs(text);
+    }
+
+    /** REST 上传与文件工具共用同一导入语义。 */
+    public synchronized String importIcs(String text) {
         ParseResult parsed = IcsParser.parse(text);
         if (parsed.events().isEmpty()) {
             throw new IllegalArgumentException("操作失败：文件中没有可导入的日程（VEVENT）。请确认是有效的 .ics 文件。");
@@ -162,6 +178,12 @@ public final class CalendarTools {
     // ══════════════════════════════ 存储与解析 ══════════════════════════════
 
     private List<CalendarEvent> loadEvents() {
+        if (repository != null) {
+            RequestIdentity identity = RequestIdentityContext.require();
+            return repository.findByUserIdOrderByStartAtAsc(identity.userId()).stream()
+                    .map(CalendarEventRecord::toEvent)
+                    .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        }
         if (!Files.exists(calendarFile)) {
             return new ArrayList<>();
         }
@@ -173,6 +195,14 @@ public final class CalendarTools {
     }
 
     private void saveEvents(List<CalendarEvent> events) {
+        if (repository != null) {
+            RequestIdentity identity = RequestIdentityContext.require();
+            repository.deleteByUserId(identity.userId());
+            repository.saveAll(events.stream()
+                    .map(event -> new CalendarEventRecord(identity.userId(), identity.orgId(), event))
+                    .toList());
+            return;
+        }
         try {
             // 迭代 10 I10-5：工作目录可能还不存在 data/，先建父目录再写
             Path parent = calendarFile.getParent();
@@ -183,6 +213,11 @@ public final class CalendarTools {
         } catch (IOException e) {
             throw new IllegalStateException("操作失败：保存日历文件失败。" + e.getMessage(), e);
         }
+    }
+
+    /** REST 导出使用：按当前用户生成标准 VCALENDAR 文本。 */
+    public synchronized String exportIcs() {
+        return IcsParser.toIcs(loadEvents());
     }
 
     /** 宽松日期解析：yyyy-MM-dd / yyyy-MM-ddTHH:mm / yyyy-MM-dd HH:mm；纯日期按参数决定是当日 0 点还是 23:59:59。 */

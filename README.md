@@ -84,15 +84,15 @@ curl -N -X POST localhost:8080/api/chat/stream \
 - Excel 数字规则（`create_excel_stats`）：仅严格数字（无前导零/无科学计数法）写为数值单元格，其余一律文本——"001"编号不会变 1
 - 迭代 11 起产物落盘在当前工作区根目录（后端启动目录），不再有 `data/`
 
-### 迭代 3.5：PIM 私人数据（日历 / 待办 / 邮件）
+### 迭代 3.5 / 14：PIM 私人数据（日历 / 待办 / 邮件）
 
 Agent 现有 **17 个工具**（迭代 11 起含 `list_workspace_roots`），PIM 三件套：
 
 | 工具 | 功能 | 存储/说明 |
 |---|---|---|
-| `calendar_query` / `calendar_create` / `calendar_import` | 查日程（重复自动展开）/ 建日程 / 导入 ICS | 手写 RFC5545 子集，本地 `.vatica/calendar.ics` |
-| `todo_add` / `todo_list` / `todo_complete` / `todo_remind` | 待办增查改 + 到期提醒 | 本地 `.vatica/todos.json`（运行时数据，已 gitignore） |
-| `mail_query` / `mail_send` | IMAP 收件箱查询/搜索 + SMTP 发送 | 环境变量配置；发送需用户确认（confirm="yes"） |
+| `calendar_query` / `calendar_create` / `calendar_import` | 查日程（重复自动展开）/ 建日程 / 导入 ICS | `vatica_event`，按 JWT 用户隔离，支持 ICS 导入/导出 |
+| `todo_add` / `todo_list` / `todo_complete` / `todo_remind` | 待办增查改 + 到期提醒 | `vatica_todo`，按 JWT 用户隔离 |
+| `mail_query` / `mail_send` | IMAP 收件箱查询/搜索 + SMTP 发送 | 每用户配置；默认密码仅随请求使用，可选信封加密落库；发送需确认 |
 
 主演示场景（一句话）：
 
@@ -102,21 +102,15 @@ curl -N -X POST localhost:8080/api/chat/stream -H "Content-Type: application/jso
 ```
 
 - 数据约束：涉及具体时间/日期的内容模型必须从工具返回值引用（幻觉控制约定，写在工具描述里）
-- 日历数据存 `.vatica/calendar.ics`；旧 `data/calendar.ics` 会在启动时自动迁移到 `.vatica/`
-- **邮件配置**（可选，不配也能用其他工具）：
-  ```powershell
-  setx MAIL_IMAP_HOST imap.qq.com
-  setx MAIL_SMTP_HOST smtp.qq.com
-  setx MAIL_USERNAME 你的邮箱
-  setx MAIL_PASSWORD 你的授权码     # 设置后重开终端再启动
-  ```
+- 云端生产路径不读取旧 `.vatica/calendar.ics` / `.vatica/todos.json`；旧文件构造器只保留用于兼容性测试
+- **邮件配置**（可选）：在“个人工作台 → 邮箱”中配置 IMAP/SMTP。`EPHEMERAL` 模式不在服务端保存密码；`ENCRYPTED_AT_REST` 模式使用迭代 13 的信封加密后按用户落库
 - 邮件发送是副作用操作：模型必须先征得你确认，确认后才会发（完整审批流在迭代 5 HITL）
 
 ### 迭代 4：MCP 协议能力（Server + Client）
 
 Vatica 同时是 MCP Server 与 MCP Client：
 
-- **Server**：17 个本地工具零改动经 Streamable HTTP 暴露在 `POST /mcp`（加 starter 自动转换 ToolCallback，任何 MCP 客户端可接入）
+- **Server**：17 个本地工具经 Streamable HTTP 暴露在 `POST /mcp`。鉴权开启时必须携带 JWT；由于当前 SDK 无稳定的逐工具用户上下文注入点，安全降级为仅平台管理员可调用
 - **Client**：已接入**高德地图官方 MCP**（`https://mcp.amap.com`，迭代 4.5，替代原模拟天气服务），15 个地图/天气工具与本地 17 个工具合并供 Agent 调用
 
 #### 高德 MCP 接入（迭代 4.5）
@@ -236,7 +230,7 @@ vatica-backend-x86_64-pc-windows-msvc.exe —— Rust 启动器（externalBin si
   │  注入 VATICA_WATCHDOG_PID = 自身 PID
   ▼
 后端 Spring Boot 4.1（--spring.profiles.active=packaged）
-  ├─ 16 个本地工具 ── MCP Server 暴露 POST /mcp（Streamable HTTP）
+  ├─ 17 个本地工具 ── MCP Server 暴露 POST /mcp（鉴权开启时仅平台管理员）
   ├─ MCP Client ── 高德官方 MCP（懒初始化 + 失败退避兜底）
   ├─ 持久化：H2 文件库 .vatica/vatica-db.mv.db（零依赖开箱即用；PACKAGED_DB_URL + PACKAGED_DB_USERNAME/PASSWORD 可切回 MySQL）
   └─ 看门狗 SidecarWatchdog：轮询不到启动器 PID → 10 秒内自行退出（防 8080 孤儿进程）
@@ -272,7 +266,7 @@ npm run tauri build                # NSIS 安装包 → target/release/bundle/ns
 | `DEEPSEEK_API_KEY` | 对话 / 任务执行 | 聊天不可用，界面与任务管理正常 |
 | `AMAP_MCP_KEY`（可选） | 高德地图/天气 MCP 工具 | 无 MCP 远程工具，本地 16 工具照常 |
 | `QWEN_API_KEY`（可选） | 备用模型（通义千问） | 模型选择器置灰 |
-| `MAIL_*`（可选） | 邮件查询/发送 | mail_* 工具返回未配置指引 |
+| 个人邮箱设置（可选） | 邮件查询/发送 | `mail_*` 工具返回未配置指引 |
 
 #### 演示场景脚本（桌面应用，承接演示视频职能）
 
@@ -328,7 +322,7 @@ curl localhost:8080/api/task/不存在   # {"message":"操作失败：任务不�
 ### 迭代 11：文件权限改造（前端权限中心 + 后端执行校验，删除 data/）
 
 - **默认工作区 = 后端启动目录**（Codex workspace 语义），工作区内 `workspace-write` 自动放行，越界触发权限请求
-- **前端 localStorage 是权限事实来源**：沙盒模式（read-only / workspace-write / danger-full-access）、工作区根、永久授权都存前端，聊天/任务请求自动携带权限快照
+- **迭代 11 当时由前端 localStorage 保存权限**；迭代 14 已将模式、工作区根和永久授权上移服务端，客户端请求快照只保留兼容语义，不能扩大服务端权限
 - **权限弹窗**：任务面板与对话区都会弹"文件访问需要授权"，可选"仅本次允许 / 永久允许 / 拒绝"；5 分钟超时自动拒绝
 - **任务工作目录**：创建任务时可填任务工作目录（WorkBuddy 式），不填用全局工作区
 - **内部状态迁到 `.vatica/`**：calendar.ics / todos.json / models.json / H2 数据库；旧 `data/` 启动时自动迁移并删除
@@ -364,6 +358,17 @@ curl localhost:8080/api/task/不存在   # {"message":"操作失败：任务不�
 - **任务恢复**：`TaskRecord.modelSource/recoverable`；启动清理 EPHEMERAL→FAILED、PLATFORM→可继续；`POST /api/task/{id}/resume`
 - **外部服务设置**：AMAP / 邮件 / 数据库统一加密存 `.vatica/integrations.json`，启动后处理器注入；模型/AMAP/邮件凭据全部去环境变量
 - **桌面瘦客户端**：Tauri 壳不再打包/拉起 sidecar，直连后端基址（默认 localhost:8080，服务设置可切换）
+
+### 迭代 14：云多租户数据与工作空间隔离
+
+- **身份全链路**：JWT 中的 `userId/orgId/roles` 进入请求上下文；虚拟线程任务、Spring AI 工具回调和流式完成回调都显式捕获并恢复身份，缺失身份时失败关闭
+- **数据归属**：任务、聊天消息、会话、日历、待办、权限和邮箱全部按用户查询；同名 sessionId 在不同用户之间互不影响。旧任务/消息的 NULL 租户行不迁移且对所有用户不可见
+- **云工作区**：`WorkspaceStore` 抽象的本地实现固定使用 `./workspace/{orgId}/{userId}/`，API 只接受相对路径，并拒绝绝对路径、目录穿越和符号链接逃逸
+- **服务端权限**：`permission_profile` / `workspace_root` / `permission_rule` 是权限事实来源；聊天和任务 channel 使用 `user:{userId}:...` 前缀防串台
+- **跨端个人工作台**：会话历史、云文件、待办、日历/ICS 与个人邮箱均可由桌面端管理
+- **主要接口**：`/api/sessions`、`/api/workspace/files`、`/api/pim/*`、`/api/permissions/policy`、`/api/mail/settings`
+- **部署开关**：本地学习模式可保持 `vatica.auth.enabled=false`；云部署必须设为 `true`。工作区根可通过 `vatica.workspace.base-dir` 配置
+- 详细设计、DDL 审阅稿和验证记录见 `docs/20260816_feature_tenant_isolation/`
 
 ### 迭代 2.5 新增配置（application.yml，均可调）
 

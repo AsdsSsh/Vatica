@@ -9,5 +9,10 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface ChatMessageRecordRepository extends JpaRepository<ChatMessageRecord, Long> {
 
     /** 按 seq 倒序取最近 N 条（Pageable 由调用方给 limit）。 */
-    List<ChatMessageRecord> findBySessionIdOrderBySeqDesc(String sessionId, Pageable pageable);
+    List<ChatMessageRecord> findByUserIdAndSessionIdOrderBySeqDesc(Long userId, String sessionId,
+            Pageable pageable);
+
+    List<ChatMessageRecord> findByUserIdAndSessionIdOrderBySeqAsc(Long userId, String sessionId);
+
+    void deleteByUserIdAndSessionId(Long userId, String sessionId);
 }

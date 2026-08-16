@@ -16,7 +16,7 @@ import {
   CheckCircleOutlined,
   ClockCircleOutlined,
   ExclamationCircleOutlined,
-  FolderOpenOutlined,
+  CloudOutlined,
   PlusOutlined,
   ReloadOutlined,
   StopOutlined,
@@ -36,9 +36,8 @@ import {
   type TaskEvent,
   type TaskStep,
 } from "../api";
-import { loadPermissionPolicy, rememberWorkspaceRoot } from "../permissions";
+import { loadPermissionPolicy } from "../permissions";
 import { useBackendStatus } from "../backendStatus";
-import { pickDirectory } from "../directoryPicker";
 import PermissionRequestModal from "./PermissionRequestModal";
 
 const STATUS_COLOR: Record<string, string> = {
@@ -94,7 +93,6 @@ export default function StepPanel() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [goalInput, setGoalInput] = useState("");
-  const [workspaceInput, setWorkspaceInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [permissionRequests, setPermissionRequests] = useState<FilePermissionRequest[]>([]);
@@ -204,17 +202,8 @@ export default function StepPanel() {
     setBusy(true);
     try {
       const policy = loadPermissionPolicy();
-      const taskWorkspace = workspaceInput.trim();
-      if (taskWorkspace) {
-        // WorkBuddy 式任务工作空间：本次任务把所选目录加为第一个工作区根
-        policy.workspaceRoots = [
-          { path: taskWorkspace, read: true, write: true },
-          ...policy.workspaceRoots.filter((r) => r.path.trim() !== taskWorkspace),
-        ];
-      }
       const created = await createTask(goal, policy);
       setGoalInput("");
-      setWorkspaceInput("");
       setSelectedId(created.id);
       setDetail(created);
       prevStatus.current = null; // 让审批弹窗对新任务触发一次
@@ -232,9 +221,6 @@ export default function StepPanel() {
     if (!request) return;
     setPermissionDeciding(true);
     try {
-      if (approved && permissionRemember) {
-        rememberWorkspaceRoot(request.path, request.access);
-      }
       if (approved) {
         await approvePermissionRequest(request.requestId, permissionRemember);
       } else {
@@ -305,27 +291,9 @@ export default function StepPanel() {
             创建
           </Button>
         </Flex>
-        <Flex gap={6} style={{ marginTop: 6 }}>
-          <Input
-            size="small"
-            style={{ flex: 1 }}
-            placeholder="任务工作目录（可选，如 D:\\docs；不填用全局工作区）"
-            value={workspaceInput}
-            onChange={(e) => setWorkspaceInput(e.target.value)}
-          />
-          <Button
-            size="small"
-            icon={<FolderOpenOutlined />}
-            aria-label="选择任务工作目录"
-            onClick={() => {
-              void pickDirectory().then((dir) => {
-                if (dir) setWorkspaceInput(dir);
-              });
-            }}
-          >
-            选择目录
-          </Button>
-        </Flex>
+        <Typography.Text type="secondary" style={{ display: "block", marginTop: 6, fontSize: 11 }}>
+          <CloudOutlined /> 任务产物写入当前账号的个人云工作区
+        </Typography.Text>
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "0 12px 12px" }}>

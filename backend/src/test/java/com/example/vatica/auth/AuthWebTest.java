@@ -23,6 +23,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.PostMapping;
 
 /** 迭代 13 I13-2：JWT 拦截器 401/放行 + 注册登录接口契约。 */
 class AuthWebTest {
@@ -38,6 +39,9 @@ class AuthWebTest {
         String ping() {
             return "pong";
         }
+
+        @PostMapping("/mcp")
+        String mcp() { return "mcp"; }
     }
 
     @BeforeEach
@@ -97,5 +101,30 @@ class AuthWebTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         assertThat(login).contains("\"token\":\"tok2\"");
+    }
+
+    @Test
+    void mcpRequiresJwtAndPlatformAdmin() throws Exception {
+        AuthProperties props = new AuthProperties(true, Duration.ofHours(1));
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(new PingController())
+                .addInterceptors(new JwtAuthInterceptor(props, jwt, new ObjectMapper()))
+                .build();
+        mvc.perform(post("/mcp")).andExpect(status().isUnauthorized());
+
+        AppUser member = mock(AppUser.class);
+        when(member.getId()).thenReturn(2L);
+        when(member.getOrgId()).thenReturn(1L);
+        when(member.getRole()).thenReturn(AppUser.ROLE_MEMBER);
+        when(member.getUsername()).thenReturn("member");
+        mvc.perform(post("/mcp").header("Authorization", "Bearer " + jwt.issue(member)))
+                .andExpect(status().isForbidden());
+
+        AppUser admin = mock(AppUser.class);
+        when(admin.getId()).thenReturn(1L);
+        when(admin.getOrgId()).thenReturn(1L);
+        when(admin.getRole()).thenReturn(AppUser.ROLE_PLATFORM_ADMIN);
+        when(admin.getUsername()).thenReturn("admin");
+        mvc.perform(post("/mcp").header("Authorization", "Bearer " + jwt.issue(admin)))
+                .andExpect(status().isOk());
     }
 }

@@ -5,12 +5,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
+import com.example.vatica.auth.RequestIdentity;
+import com.example.vatica.auth.RequestIdentityContext;
+import com.example.vatica.tool.CalendarEventRecordRepository;
+import com.example.vatica.tool.CalendarTools;
+import com.example.vatica.tool.TodoRecordRepository;
+import com.example.vatica.tool.TodoTools;
 
 /**
  * 会话记忆持久化集成测试（迭代 5 I5-4）：H2 真库 + 新实例模拟"应用重启"，
@@ -27,10 +34,22 @@ class JpaSessionMemoryTest {
 
     @Autowired
     ChatMessageRecordRepository repository;
+    @Autowired TodoTools todoTools;
+    @Autowired TodoRecordRepository todoRepository;
+    @Autowired CalendarTools calendarTools;
+    @Autowired CalendarEventRecordRepository eventRepository;
 
     @BeforeEach
     void setUp() {
+        RequestIdentityContext.set(new RequestIdentity(1L, 1L, "LOCAL", "test"));
         repository.deleteAll();
+        todoRepository.deleteAll();
+        eventRepository.deleteAll();
+    }
+
+    @AfterEach
+    void clearIdentity() {
+        RequestIdentityContext.clear();
     }
 
     private JpaSessionMemory fresh() {
@@ -85,5 +104,32 @@ class JpaSessionMemoryTest {
         assertThat(fresh().history("s2")).hasSize(2);
         assertThat(fresh().history("s1").get(0).getText()).isEqualTo("A");
         assertThat(fresh().history("s2").get(0).getText()).isEqualTo("B");
+    }
+
+    /** 同一个 sessionId 在不同用户下是两份独立历史。 */
+    @Test
+    void sameSessionIdIsIsolatedByUser() {
+        fresh().append("shared", "用户一", "回答一");
+        RequestIdentityContext.set(new RequestIdentity(2L, 1L, "MEMBER", "other"));
+        fresh().append("shared", "用户二", "回答二");
+
+        assertThat(fresh().history("shared").get(0).getText()).isEqualTo("用户二");
+        RequestIdentityContext.set(new RequestIdentity(1L, 1L, "LOCAL", "test"));
+        assertThat(fresh().history("shared").get(0).getText()).isEqualTo("用户一");
+    }
+
+    /** 日历与待办生产 Bean 使用数据库，并按当前用户过滤。 */
+    @Test
+    void pimDataIsIsolatedByUser() {
+        todoTools.add("用户一待办", "2026-08-20");
+        calendarTools.create("用户一日程", "2026-08-20T09:00", "2026-08-20T10:00", null);
+
+        RequestIdentityContext.set(new RequestIdentity(2L, 1L, "MEMBER", "other"));
+        assertThat(todoTools.list()).contains("待办清单为空");
+        assertThat(calendarTools.query("2026-08-20", "2026-08-21")).contains("没有日程");
+
+        todoTools.add("用户二待办", null);
+        RequestIdentityContext.set(new RequestIdentity(1L, 1L, "LOCAL", "test"));
+        assertThat(todoTools.list()).contains("用户一待办").doesNotContain("用户二待办");
     }
 }

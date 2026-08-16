@@ -9,6 +9,7 @@ import com.example.vatica.config.ChatProperties;
 import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
+import com.example.vatica.auth.TenantChannels;
 import com.example.vatica.permission.FilePermissionRequestService;
 import com.example.vatica.permission.PermissionBoundToolCallbacks;
 import com.example.vatica.permission.PermissionEventPublisher;
@@ -96,9 +97,8 @@ public class ChatController {
             return registry.defaultClient();
         }
         if (model.startsWith("user:")) {
-            RequestIdentity identity = RequestIdentityContext.current();
-            Long ownerId = identity == null ? 1L : identity.userId();
-            return registry.userClient(ownerId, model.substring("user:".length()), true);
+            RequestIdentity identity = RequestIdentityContext.require();
+            return registry.userClient(identity.userId(), model.substring("user:".length()), true);
         }
         return registry.clientFor(model);
     }
@@ -117,9 +117,10 @@ public class ChatController {
     /** 非流式对话（无 UI 权限弹窗：越界直接拒绝，由前端把权限快照先行送达） */
     @PostMapping
     public String chat(@RequestBody ChatRequest request) {
+        RequestIdentity identity = RequestIdentityContext.require();
         ChatClient client = resolveClient(request);
         ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
-                vaticaTools, request.permission(), null);
+                vaticaTools, request.permission(), null, identity, request.mailCredential());
         String reply = client.prompt()
                 .system(SYSTEM_PROMPT)
                 .messages(sessionMemory.history(request.sessionId()))
@@ -134,15 +135,15 @@ public class ChatController {
     /** SSE 流式对话（打字机效果；迭代 11 增加权限请求事件） */
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@RequestBody ChatRequest request) {
+        RequestIdentity identity = RequestIdentityContext.require();
         ChatClient client = resolveClient(request);
         SseEmitter emitter = new SseEmitter(chatProperties.sse().timeout().toMillis());
         activeEmitters.add(emitter);
-        String channel = "chat:" + (request.sessionId() == null || request.sessionId().isBlank()
-                ? "default" : request.sessionId());
+        String channel = TenantChannels.chat(identity, request.sessionId());
         permissionEvents.subscribe(channel, emitter);
 
         ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
-                vaticaTools, request.permission(), channel);
+                vaticaTools, request.permission(), channel, identity, request.mailCredential());
         // 迭代 12 I12-4：工具调用活动以 SSE 事件推给对话区（start/end/failed 胶囊）
         callbacks = new ToolActivityCallbacks().wrap(callbacks, emitter);
 
@@ -187,7 +188,10 @@ public class ChatController {
                             emitter.completeWithError(error);
                         },
                         () -> {
-                            sessionMemory.append(request.sessionId(), request.message(), reply.toString());
+                            RequestIdentityContext.callWith(identity, () -> {
+                                sessionMemory.append(request.sessionId(), request.message(), reply.toString());
+                                return null;
+                            });
                             cleanup.run();
                             emitter.complete();
                         });

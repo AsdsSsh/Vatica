@@ -3,6 +3,10 @@ package com.example.vatica.tool;
 import com.example.vatica.config.AppStateProperties;
 import com.example.vatica.permission.FilePermissionRequestService;
 import com.example.vatica.permission.FileSandboxPolicy;
+import com.example.vatica.permission.PermissionPolicyService;
+import com.example.vatica.workspace.WorkspaceStore;
+import com.example.vatica.workspace.WorkspaceProperties;
+import com.example.vatica.mail.UserMailService;
 
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
@@ -24,14 +28,14 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration
 @EnableConfigurationProperties({FileToolProperties.class, ToolProperties.class, MailProperties.class,
-        AppStateProperties.class})
+        AppStateProperties.class, WorkspaceProperties.class})
 public class ToolConfig {
 
     /** 迭代 11：文件沙盒策略由工具层显式装配（默认工作区根 = workspace-dir）。 */
     @Bean
     FileSandboxPolicy fileSandboxPolicy(FilePermissionRequestService permissionRequests,
-            FileToolProperties fileProps) {
-        return new FileSandboxPolicy(permissionRequests, fileProps);
+            FileToolProperties fileProps, WorkspaceStore workspaceStore, PermissionPolicyService policyService) {
+        return new FileSandboxPolicy(permissionRequests, fileProps, workspaceStore, policyService);
     }
 
     @Bean
@@ -50,22 +54,22 @@ public class ToolConfig {
         return new DocumentTools(sandboxPolicy);
     }
 
-    /** 迭代 3.5：PIM 日历工具；迭代 11 起日历文件存 .vatica，导入源走工作区沙盒。 */
+    /** 迭代 3.5：PIM 日历工具；迭代 14 起按用户存数据库，导入源走工作区沙盒。 */
     @Bean
-    CalendarTools calendarTools(AppStateProperties props, FileSandboxPolicy sandboxPolicy) {
-        return new CalendarTools(props, sandboxPolicy);
+    CalendarTools calendarTools(CalendarEventRecordRepository repository, FileSandboxPolicy sandboxPolicy) {
+        return new CalendarTools(repository, sandboxPolicy);
     }
 
-    /** 迭代 3.5：PIM 待办工具；迭代 11 起存 .vatica。 */
+    /** 迭代 3.5：PIM 待办工具；迭代 14 起按用户存数据库。 */
     @Bean
-    TodoTools todoTools(AppStateProperties props) {
-        return new TodoTools(props);
+    TodoTools todoTools(TodoRecordRepository repository) {
+        return new TodoTools(repository);
     }
 
-    /** 迭代 3.5：PIM 邮件工具（JavaMail，配置走环境变量）。 */
+    /** 迭代 3.5：PIM 邮件工具；迭代 14 起按当前用户解析邮箱设置与凭据。 */
     @Bean
-    MailTools mailTools(MailProperties props) {
-        return new MailTools(props);
+    MailTools mailTools(UserMailService userMailService) {
+        return new MailTools(userMailService);
     }
 
     /** 迭代 11：工作区根查询工具。 */

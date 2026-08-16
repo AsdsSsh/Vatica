@@ -70,6 +70,9 @@ spring:
 vatica:
   app:
     state-dir: ./.vatica
+  # 迭代 14：云端文件固定落在 {base-dir}/{orgId}/{userId}/，客户端只传相对路径
+  workspace:
+    base-dir: ./workspace
   # ===== 鉴权（迭代 13 I13-2）=====
   # enabled=false 为过渡期开关：前端登录页上线后云端部署置 true；
   # token-ttl 为 JWT 有效期，签名密钥由 .vatica/master.key 派生

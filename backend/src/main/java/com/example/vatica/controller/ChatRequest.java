@@ -2,6 +2,7 @@ package com.example.vatica.controller;
 
 import com.example.vatica.config.EphemeralCredential;
 import com.example.vatica.permission.FilePermissionPolicy;
+import com.example.vatica.mail.MailConnectionSettings;
 
 /**
  * 对话请求体（迭代 13 I13-5 增加临时凭据）。
@@ -13,9 +14,15 @@ import com.example.vatica.permission.FilePermissionPolicy;
  * @param credential 迭代 13：请求级自配模型凭据；与 model 同时出现视为冲突（400）
  */
 public record ChatRequest(String message, String sessionId, String model,
-        FilePermissionPolicy permission, EphemeralCredential credential) {
+        FilePermissionPolicy permission, EphemeralCredential credential,
+        MailConnectionSettings mailCredential) {
 
     public ChatRequest(String message, String sessionId, String model, FilePermissionPolicy permission) {
-        this(message, sessionId, model, permission, null);
+        this(message, sessionId, model, permission, null, null);
+    }
+
+    public ChatRequest(String message, String sessionId, String model, FilePermissionPolicy permission,
+            EphemeralCredential credential) {
+        this(message, sessionId, model, permission, credential, null);
     }
 }

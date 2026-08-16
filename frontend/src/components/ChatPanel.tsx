@@ -15,6 +15,7 @@ import {
 import {
   ApiOutlined,
   CheckCircleOutlined,
+  CloudOutlined,
   CopyOutlined,
   ExclamationCircleOutlined,
   GlobalOutlined,
@@ -45,7 +46,7 @@ import {
   type ToolActivity,
   type UserModelSlotView,
 } from "../api";
-import { loadPermissionPolicy, rememberWorkspaceRoot } from "../permissions";
+import { loadPermissionPolicy } from "../permissions";
 import { useBackendStatus } from "../backendStatus";
 import { useTheme } from "../theme";
 import Markdown from "./Markdown";
@@ -57,6 +58,7 @@ import PermissionRequestModal from "./PermissionRequestModal";
 import AuthPanel from "./AuthPanel";
 import UserModelsPanel from "./UserModelsPanel";
 import IntegrationSettingsPanel from "./IntegrationSettingsPanel";
+import PersonalWorkspacePanel from "./PersonalWorkspacePanel";
 
 /**
  * 中栏：对话区（迭代 6 I6-4/I6-5；迭代 12 I12-2/I12-3 体验升级）——
@@ -123,6 +125,7 @@ export default function ChatPanel({
   const [authOpen, setAuthOpen] = useState(false);
   const [userModelsOpen, setUserModelsOpen] = useState(false);
   const [integrationOpen, setIntegrationOpen] = useState(false);
+  const [personalWorkspaceOpen, setPersonalWorkspaceOpen] = useState(false);
   const [permissionRequests, setPermissionRequests] = useState<FilePermissionRequest[]>([]);
   const [permissionDeciding, setPermissionDeciding] = useState(false);
   const [permissionRemember, setPermissionRemember] = useState(true);
@@ -198,9 +201,6 @@ export default function ChatPanel({
     if (!request) return;
     setPermissionDeciding(true);
     try {
-      if (approved && permissionRemember) {
-        rememberWorkspaceRoot(request.path, request.access);
-      }
       if (approved) {
         await approvePermissionRequest(request.requestId, permissionRemember);
       } else {
@@ -427,6 +427,15 @@ export default function ChatPanel({
               onClick={() => setUserModelsOpen(true)}
             />
           </Tooltip>
+          <Tooltip title="个人工作台">
+            <Button
+              size="small"
+              type="text"
+              aria-label="个人工作台"
+              icon={<CloudOutlined />}
+              onClick={() => setPersonalWorkspaceOpen(true)}
+            />
+          </Tooltip>
           <Tooltip title="模型设置">
             <Button
               size="small"
@@ -445,7 +454,7 @@ export default function ChatPanel({
               onClick={() => setPermissionSettingsOpen(true)}
             />
           </Tooltip>
-          <Tooltip title="外部服务（AMAP / 邮件 / 数据库）">
+          <Tooltip title="平台外部服务（AMAP / 数据库）">
             <Button
               size="small"
               type="text"
@@ -488,6 +497,10 @@ export default function ChatPanel({
       <IntegrationSettingsPanel
         open={integrationOpen}
         onClose={() => setIntegrationOpen(false)}
+      />
+      <PersonalWorkspacePanel
+        open={personalWorkspaceOpen}
+        onClose={() => setPersonalWorkspaceOpen(false)}
       />
       <FilePermissionSettings
         open={permissionSettingsOpen}

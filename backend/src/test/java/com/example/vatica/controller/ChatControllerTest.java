@@ -24,8 +24,9 @@ import com.example.vatica.config.ModelSlot;
 import com.example.vatica.permission.FilePermissionRequestService;
 import com.example.vatica.permission.PermissionEventPublisher;
 
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
@@ -45,6 +46,8 @@ import org.springframework.web.filter.CharacterEncodingFilter;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import reactor.core.publisher.Flux;
+import com.example.vatica.auth.RequestIdentity;
+import com.example.vatica.auth.RequestIdentityContext;
 
 /**
  * 对话控制器单测（迭代 2.5 I2.5-1/I2.5-3）：SSE 错误传播 / 超时 / 断连清理 + 会话历史回放；
@@ -57,6 +60,16 @@ import reactor.core.publisher.Flux;
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
 class ChatControllerTest {
+
+    @BeforeEach
+    void setIdentity() {
+        RequestIdentityContext.set(new RequestIdentity(1L, 1L, "LOCAL", "test"));
+    }
+
+    @AfterEach
+    void clearIdentity() {
+        RequestIdentityContext.clear();
+    }
 
     @Mock
     ModelRegistry registry;

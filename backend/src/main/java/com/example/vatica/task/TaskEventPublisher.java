@@ -13,6 +13,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.example.vatica.permission.PermissionEventPublisher;
+import com.example.vatica.auth.RequestIdentity;
+import com.example.vatica.auth.TenantChannels;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
@@ -46,24 +48,26 @@ public class TaskEventPublisher {
 
     /** 订阅任务进度：立即回放当前快照，随后持续推送；同时订阅同 channel 的文件权限事件（迭代 11）。 */
     public SseEmitter subscribe(TaskRecord record) {
+        String channel = channel(record);
         SseEmitter emitter = new SseEmitter(SUBSCRIBER_TIMEOUT_MS);
-        Set<SseEmitter> set = subscribers.computeIfAbsent(record.getId(), k -> ConcurrentHashMap.newKeySet());
+        Set<SseEmitter> set = subscribers.computeIfAbsent(channel, k -> ConcurrentHashMap.newKeySet());
         set.add(emitter);
-        permissionEvents.subscribe(record.getId(), emitter);
-        emitter.onTimeout(() -> remove(record.getId(), emitter));
-        emitter.onError(e -> remove(record.getId(), emitter));
-        emitter.onCompletion(() -> remove(record.getId(), emitter));
+        permissionEvents.subscribe(channel, emitter);
+        emitter.onTimeout(() -> remove(channel, emitter));
+        emitter.onError(e -> remove(channel, emitter));
+        emitter.onCompletion(() -> remove(channel, emitter));
         try {
             emitter.send(SseEmitter.event().name("task").data(toJson(snapshot(record, "snapshot"))));
         } catch (IOException e) {
-            remove(record.getId(), emitter);
+            remove(channel, emitter);
         }
         return emitter;
     }
 
     /** 广播任务快照（无订阅者时零开销）。 */
     public void publish(TaskRecord record, String type) {
-        Set<SseEmitter> set = subscribers.get(record.getId());
+        String channel = channel(record);
+        Set<SseEmitter> set = subscribers.get(channel);
         if (set == null || set.isEmpty()) {
             return;
         }
@@ -72,7 +76,7 @@ public class TaskEventPublisher {
             try {
                 emitter.send(SseEmitter.event().name("task").data(json));
             } catch (Exception e) {
-                remove(record.getId(), emitter);
+                remove(channel, emitter);
             }
         }
     }
@@ -109,11 +113,16 @@ public class TaskEventPublisher {
         }
     }
 
-    private void remove(String taskId, SseEmitter emitter) {
-        Set<SseEmitter> set = subscribers.get(taskId);
+    private void remove(String channel, SseEmitter emitter) {
+        Set<SseEmitter> set = subscribers.get(channel);
         if (set != null) {
             set.remove(emitter);
         }
-        permissionEvents.unsubscribe(taskId, emitter);
+        permissionEvents.unsubscribe(channel, emitter);
+    }
+
+    private static String channel(TaskRecord record) {
+        return TenantChannels.task(new RequestIdentity(record.getUserId(), record.getOrgId(),
+                "TASK_OWNER", "task-owner"), record.getId());
     }
 }

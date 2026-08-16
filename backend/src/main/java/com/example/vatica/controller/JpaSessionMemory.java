@@ -8,6 +8,9 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.data.domain.PageRequest;
 
+import com.example.vatica.auth.RequestIdentity;
+import com.example.vatica.auth.RequestIdentityContext;
+
 /**
  * 会话短期记忆·MySQL 持久化实现（迭代 5 I5-4）。
  *
@@ -33,36 +36,44 @@ public final class JpaSessionMemory implements SessionMemory {
 
     @Override
     public synchronized List<Message> history(String sessionId) {
-        String key = keyOf(sessionId);
+        RequestIdentity identity = RequestIdentityContext.require();
+        String session = sessionIdOf(sessionId);
+        String key = cacheKey(identity.userId(), session);
         if (!cache.contains(key)) {
-            restore(key);
+            restore(identity.userId(), session, key);
         }
         return cache.history(key);
     }
 
     @Override
     public synchronized void append(String sessionId, String userText, String assistantText) {
-        String key = keyOf(sessionId);
+        RequestIdentity identity = RequestIdentityContext.require();
+        String session = sessionIdOf(sessionId);
+        String key = cacheKey(identity.userId(), session);
         if (!cache.contains(key)) {
-            restore(key);
+            restore(identity.userId(), session, key);
         }
         cache.append(key, userText, assistantText);
 
-        long nextSeq = repository.findBySessionIdOrderBySeqDesc(key, PageRequest.of(0, 1))
+        long nextSeq = repository.findByUserIdAndSessionIdOrderBySeqDesc(identity.userId(), session,
+                PageRequest.of(0, 1))
                 .stream().findFirst().map(r -> r.getSeq() + 1).orElse(1L);
         List<ChatMessageRecord> rows = new ArrayList<>(2);
         if (userText != null && !userText.isBlank()) {
-            rows.add(new ChatMessageRecord(key, "USER", userText, nextSeq++));
+            rows.add(new ChatMessageRecord(identity.userId(), identity.orgId(), session,
+                    "USER", userText, nextSeq++));
         }
         if (assistantText != null && !assistantText.isBlank()) {
-            rows.add(new ChatMessageRecord(key, "ASSISTANT", assistantText, nextSeq));
+            rows.add(new ChatMessageRecord(identity.userId(), identity.orgId(), session,
+                    "ASSISTANT", assistantText, nextSeq));
         }
         repository.saveAll(rows);
     }
 
     /** 从库中取最近 windowSize 条重建滑窗（重启恢复路径）。 */
-    private void restore(String key) {
-        List<ChatMessageRecord> recent = repository.findBySessionIdOrderBySeqDesc(key, PageRequest.of(0, windowSize));
+    private void restore(Long userId, String sessionId, String key) {
+        List<ChatMessageRecord> recent = repository.findByUserIdAndSessionIdOrderBySeqDesc(userId, sessionId,
+                PageRequest.of(0, windowSize));
         List<Message> messages = new ArrayList<>(recent.size());
         for (int i = recent.size() - 1; i >= 0; i--) {
             ChatMessageRecord r = recent.get(i);
@@ -71,7 +82,11 @@ public final class JpaSessionMemory implements SessionMemory {
         cache.restore(key, messages);
     }
 
-    private static String keyOf(String sessionId) {
+    private static String sessionIdOf(String sessionId) {
         return (sessionId == null || sessionId.isBlank()) ? "default" : sessionId;
+    }
+
+    private static String cacheKey(Long userId, String sessionId) {
+        return "user:" + userId + ":session:" + sessionId;
     }
 }

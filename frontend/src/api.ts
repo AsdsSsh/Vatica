@@ -63,6 +63,7 @@ export function setAuthToken(token: string | null): void {
   } catch {
     // 隐私模式忽略
   }
+  window.dispatchEvent(new CustomEvent("vatica-auth-changed"));
 }
 
 export interface AuthResponse {
@@ -173,6 +174,35 @@ export interface EphemeralCredential {
   apiKey: string;
 }
 
+export interface MailConnectionSettings {
+  imapHost: string;
+  imapPort: number;
+  smtpHost: string;
+  smtpPort: number;
+  username: string;
+  password: string;
+}
+
+const EPHEMERAL_MAIL_KEY = "vatica.ephemeralMail";
+
+export function saveEphemeralMailCredential(value: MailConnectionSettings | null): void {
+  try {
+    if (value) localStorage.setItem(EPHEMERAL_MAIL_KEY, JSON.stringify(value));
+    else localStorage.removeItem(EPHEMERAL_MAIL_KEY);
+  } catch {
+    // 隐私模式忽略
+  }
+}
+
+export function getEphemeralMailCredential(): MailConnectionSettings | undefined {
+  try {
+    const raw = localStorage.getItem(EPHEMERAL_MAIL_KEY);
+    return raw ? (JSON.parse(raw) as MailConnectionSettings) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // ═══ EPHEMERAL 用户模型的客户端密钥（迭代 13.5）═══
 // 后端永不回传完整 key；"仅本机"模式的 key 由前端保存在 localStorage，
 // 发消息时以请求级 credential 随请求发出，云端不落库。
@@ -235,7 +265,13 @@ export async function* streamChat(
   // 迭代 13.5：credential 与 model 二选一（后端约定两者同时出现快速失败）
   const res = await post(
     "/api/chat/stream",
-    { message, sessionId, permission, ...(credential ? { credential } : { model }) },
+    {
+      message,
+      sessionId,
+      permission,
+      mailCredential: getEphemeralMailCredential(),
+      ...(credential ? { credential } : { model }),
+    },
     signal,
   );
   if (!res.body) {
@@ -290,6 +326,43 @@ export async function approvePermissionRequest(requestId: string, remember: bool
 /** 拒绝文件权限请求。 */
 export async function denyPermissionRequest(requestId: string): Promise<void> {
   await post(`/api/permissions/requests/${requestId}/deny`, {});
+}
+
+export async function fetchPermissionPolicy(): Promise<FilePermissionPolicy> {
+  return (await getJson("/api/permissions/policy")).json();
+}
+
+export async function saveServerPermissionPolicy(policy: FilePermissionPolicy): Promise<FilePermissionPolicy> {
+  return (await putJson("/api/permissions/policy", policy)).json();
+}
+
+// ═══ 用户会话（迭代 14：服务端元数据 + 消息历史）═══
+
+export interface SessionSummaryView {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SessionDetailView extends SessionSummaryView {
+  messages: { role: "USER" | "ASSISTANT"; content: string; createdAt: string }[];
+}
+
+export async function fetchSessions(): Promise<SessionSummaryView[]> {
+  return (await getJson("/api/sessions")).json();
+}
+
+export async function fetchSessionDetail(id: string): Promise<SessionDetailView> {
+  return (await getJson(`/api/sessions/${encodeURIComponent(id)}`)).json();
+}
+
+export async function upsertSession(id: string, title: string): Promise<SessionSummaryView> {
+  return (await putJson(`/api/sessions/${encodeURIComponent(id)}`, { title })).json();
+}
+
+export async function deleteRemoteSession(id: string): Promise<void> {
+  await deleteJson(`/api/sessions/${encodeURIComponent(id)}`);
 }
 
 // ═══ 模型（与 OpenAPI schema 对齐：/api/chat/models、/api/models）═══
@@ -450,6 +523,137 @@ export async function testModelConnection(slot: ModelSlot): Promise<ModelTestRes
   return (await post("/api/models/test", slot)).json();
 }
 
+// ═══ 个人工作台（迭代 14：云文件 / PIM / 我的邮箱）═══
+
+export interface WorkspaceEntry {
+  path: string;
+  size: number;
+  directory: boolean;
+  modifiedAt: string;
+}
+
+export async function fetchWorkspaceFiles(path = ""): Promise<WorkspaceEntry[]> {
+  return (await getJson(`/api/workspace/files?path=${encodeURIComponent(path)}`)).json();
+}
+
+export async function uploadWorkspaceFile(file: File, directory = ""): Promise<WorkspaceEntry> {
+  const data = new FormData();
+  data.append("file", file);
+  const res = await fetch(`${getApiBase()}/api/workspace/files?directory=${encodeURIComponent(directory)}`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: data,
+  });
+  if (!res.ok) throw await toRequestError(res, `上传失败（HTTP ${res.status}）`);
+  return res.json();
+}
+
+export async function downloadWorkspaceFile(path: string): Promise<Blob> {
+  const res = await fetch(`${getApiBase()}/api/workspace/files/content?path=${encodeURIComponent(path)}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw await toRequestError(res, `下载失败（HTTP ${res.status}）`);
+  return res.blob();
+}
+
+export async function deleteWorkspaceFile(path: string): Promise<void> {
+  await deleteJson(`/api/workspace/files?path=${encodeURIComponent(path)}`);
+}
+
+export interface TodoView {
+  id: string;
+  title: string;
+  due: string | null;
+  done: boolean;
+  createdAt: string;
+}
+
+export interface CalendarEventView {
+  id: number;
+  summary: string;
+  start: string;
+  end: string;
+  rrule: string | null;
+}
+
+export async function fetchTodos(): Promise<TodoView[]> {
+  return (await getJson("/api/pim/todos")).json();
+}
+export async function addTodo(title: string, due?: string): Promise<TodoView[]> {
+  return (await post("/api/pim/todos", { title, due: due || null })).json();
+}
+export async function completeTodo(id: string): Promise<TodoView[]> {
+  const res = await fetch(`${getApiBase()}/api/pim/todos/${encodeURIComponent(id)}/complete`, {
+    method: "PATCH", headers: authHeaders(),
+  });
+  if (!res.ok) throw await toRequestError(res, `请求失败（HTTP ${res.status}）`);
+  return res.json();
+}
+export async function deleteTodo(id: string): Promise<void> {
+  await deleteJson(`/api/pim/todos/${encodeURIComponent(id)}`);
+}
+
+export async function fetchCalendarEvents(): Promise<CalendarEventView[]> {
+  return (await getJson("/api/pim/events")).json();
+}
+export async function addCalendarEvent(body: Omit<CalendarEventView, "id">): Promise<CalendarEventView[]> {
+  return (await post("/api/pim/events", body)).json();
+}
+export async function deleteCalendarEvent(id: number): Promise<void> {
+  await deleteJson(`/api/pim/events/${id}`);
+}
+export async function importCalendar(file: File): Promise<CalendarEventView[]> {
+  const data = new FormData();
+  data.append("file", file);
+  const res = await fetch(`${getApiBase()}/api/pim/events/import`, {
+    method: "POST", headers: authHeaders(), body: data,
+  });
+  if (!res.ok) throw await toRequestError(res, `导入失败（HTTP ${res.status}）`);
+  return res.json();
+}
+export async function exportCalendar(): Promise<Blob> {
+  const res = await fetch(`${getApiBase()}/api/pim/events/export`, { headers: authHeaders() });
+  if (!res.ok) throw await toRequestError(res, `导出失败（HTTP ${res.status}）`);
+  return res.blob();
+}
+
+export interface UserMailSettingsView {
+  credentialMode: "EPHEMERAL" | "ENCRYPTED_AT_REST";
+  imapHost: string;
+  imapPort: number;
+  smtpHost: string;
+  smtpPort: number;
+  username: string;
+  passwordSet: boolean;
+  passwordHint: string | null;
+}
+
+export async function fetchUserMailSettings(): Promise<UserMailSettingsView> {
+  return (await getJson("/api/mail/settings")).json();
+}
+
+export async function saveUserMailSettings(body: {
+  credentialMode: UserMailSettingsView["credentialMode"];
+  imapHost: string; imapPort: number; smtpHost: string; smtpPort: number;
+  username: string; password: string | null;
+}): Promise<UserMailSettingsView> {
+  if (body.credentialMode === "EPHEMERAL") {
+    if (body.password) {
+      saveEphemeralMailCredential({
+        imapHost: body.imapHost, imapPort: body.imapPort, smtpHost: body.smtpHost,
+        smtpPort: body.smtpPort, username: body.username, password: body.password,
+      });
+    }
+  } else {
+    saveEphemeralMailCredential(null);
+  }
+  return (await putJson("/api/mail/settings", body)).json();
+}
+
+export async function testUserMailSettings(settings?: MailConnectionSettings): Promise<{ ok: boolean; message: string }> {
+  return (await post("/api/mail/settings/test", settings ?? {})).json();
+}
+
 // ═══ 任务（与 OpenAPI schema 对齐：/api/task，详情与 SSE 事件同构）═══
 
 /** 任务计划步骤（后端 TaskPlan.TaskStep 的投影）。 */
@@ -509,7 +713,12 @@ export async function createTask(
   permission?: FilePermissionPolicy,
   credential?: EphemeralCredential,
 ): Promise<TaskDetail> {
-  return (await post("/api/task", { goal, permission, credential })).json();
+  return (await post("/api/task", {
+    goal,
+    permission,
+    credential,
+    mailCredential: getEphemeralMailCredential(),
+  })).json();
 }
 
 export async function fetchTaskDetail(id: string): Promise<TaskDetail> {
