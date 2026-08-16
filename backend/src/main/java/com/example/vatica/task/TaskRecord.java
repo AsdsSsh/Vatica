@@ -41,6 +41,18 @@ public class TaskRecord {
     @Column(columnDefinition = "TEXT")
     private String permissionJson;
 
+    /** 迭代 13：模型来源 PLATFORM（平台槽位）| EPHEMERAL（请求级临时凭据，不落库）。 */
+    @Column(nullable = false, length = 16)
+    private String modelSource = "PLATFORM";
+
+    /** 迭代 13：PLATFORM 来源时使用的槽位 id（EPHEMERAL 为 null）。 */
+    @Column(length = 64)
+    private String modelSlotId;
+
+    /** 迭代 13：服务重启中断后是否可"继续执行"（平台/加密保存凭据的任务为 true）。 */
+    @Column(nullable = false)
+    private boolean recoverable;
+
     /** 当前待执行步骤下标（0 起）；全部完成置 -1。 */
     @Column(nullable = false)
     private int currentStep;
@@ -122,6 +134,30 @@ public class TaskRecord {
 
     public String getPermissionJson() {
         return permissionJson;
+    }
+
+    public String getModelSource() {
+        return modelSource;
+    }
+
+    public void setModelSource(String modelSource) {
+        this.modelSource = modelSource;
+    }
+
+    public String getModelSlotId() {
+        return modelSlotId;
+    }
+
+    public void setModelSlotId(String modelSlotId) {
+        this.modelSlotId = modelSlotId;
+    }
+
+    public boolean isRecoverable() {
+        return recoverable;
+    }
+
+    public void setRecoverable(boolean recoverable) {
+        this.recoverable = recoverable;
     }
 
     public int getCurrentStep() {

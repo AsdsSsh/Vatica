@@ -13,9 +13,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,7 +28,9 @@ import jakarta.persistence.PersistenceContext;
 import com.example.vatica.agent.ExecutorAgent;
 import com.example.vatica.agent.JudgeAgent;
 import com.example.vatica.agent.PlannerAgent;
+import com.example.vatica.config.EphemeralCredential;
 import com.example.vatica.config.JudgeProperties;
+import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.permission.FilePermissionPolicy;
 import com.example.vatica.permission.FilePermissionRequestService;
 import com.example.vatica.permission.PermissionBoundToolCallbacks;
@@ -61,9 +66,13 @@ public class TaskService {
     private final TaskEventPublisher eventPublisher;
     private final ToolCallbackProvider vaticaTools;
     private final FilePermissionRequestService permissionRequests;
+    private final ModelRegistry registry;
 
     /** 终止标志（迭代 7 I7-4）：取消接口与执行线程的协作式协调点（波次粒度生效）。 */
     private final Map<String, AtomicBoolean> cancelFlags = new ConcurrentHashMap<>();
+
+    /** 迭代 13 I13-5：EPHEMERAL 任务在运行期的临时凭据（不落库，服务重启即失效）。 */
+    private final Map<String, EphemeralCredential> ephemeralCredentials = new ConcurrentHashMap<>();
 
     /** 用于跨事务重读被终止任务的最新状态（需悲观锁"当前读"，避开 REPEATABLE_READ 快照）。 */
     @PersistenceContext
@@ -72,7 +81,8 @@ public class TaskService {
     public TaskService(PlannerAgent plannerAgent, ExecutorAgent executorAgent, JudgeAgent judgeAgent,
             JudgeProperties judgeProps, TaskRecordRepository repository, ObjectMapper mapper,
             @Qualifier("taskParallelExecutor") Executor parallelExecutor, TaskEventPublisher eventPublisher,
-            ToolCallbackProvider vaticaTools, FilePermissionRequestService permissionRequests) {
+            ToolCallbackProvider vaticaTools, FilePermissionRequestService permissionRequests,
+            ModelRegistry registry) {
         this.plannerAgent = plannerAgent;
         this.executorAgent = executorAgent;
         this.judgeAgent = judgeAgent;
@@ -83,6 +93,7 @@ public class TaskService {
         this.eventPublisher = eventPublisher;
         this.vaticaTools = vaticaTools;
         this.permissionRequests = permissionRequests;
+        this.registry = registry;
     }
 
     /** 创建任务：Planner 拆解 → PENDING 待审批计划。 */
@@ -94,13 +105,28 @@ public class TaskService {
     /** 创建任务（迭代 11：携带前端权限快照）。 */
     @Transactional
     public TaskRecord create(String goal, FilePermissionPolicy permission) {
+        return create(goal, permission, null);
+    }
+
+    /** 创建任务（迭代 13 I13-5：支持请求级临时凭据，credential 不落库）。 */
+    @Transactional
+    public TaskRecord create(String goal, FilePermissionPolicy permission, EphemeralCredential credential) {
         if (goal == null || goal.isBlank()) {
             throw new IllegalArgumentException("操作失败：任务目标不能为空。");
         }
-        TaskPlan plan = plannerAgent.plan(goal.trim());
-        String permissionJson = permission == null ? null : toPermissionJson(permission);
         TaskRecord record = new TaskRecord(UUID.randomUUID().toString(), goal.trim(),
-                TaskStatus.PENDING, toJson(plan), 0, permissionJson);
+                TaskStatus.PENDING, null, 0, permission == null ? null : toPermissionJson(permission));
+        if (credential != null) {
+            record.setModelSource("EPHEMERAL");
+            ephemeralCredentials.put(record.getId(), credential);
+            TaskPlan plan = plannerAgent.plan(goal.trim(), registry.ephemeralClient(credential, false));
+            record.setPlanJson(toJson(plan));
+        } else {
+            record.setModelSource("PLATFORM");
+            record.setModelSlotId(null);
+            TaskPlan plan = plannerAgent.plan(goal.trim());
+            record.setPlanJson(toJson(plan));
+        }
         return repository.save(record);
     }
 
@@ -116,6 +142,53 @@ public class TaskService {
                 .sorted((a, b) -> b.getCreatedAt().compareTo(a.getCreatedAt()))
                 .limit(Math.min(Math.max(limit, 1), 100))
                 .toList();
+    }
+
+    /**
+     * 迭代 13 I13-6：启动清理器——EPHEMERAL 任务重启后凭据已丢，直接 FAILED 提示重提；
+     * PLATFORM 任务中断标 FAILED + recoverable，可手动 continue。
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    @Transactional
+    public void recoverInterruptedTasks() {
+        for (TaskRecord record : repository.findAll()) {
+            if (record.getStatus() == TaskStatus.DONE || record.getStatus() == TaskStatus.CANCELLED) {
+                continue;
+            }
+            if ("EPHEMERAL".equals(record.getModelSource())) {
+                ephemeralCredentials.remove(record.getId());
+                record.setStatus(TaskStatus.FAILED);
+                record.setRecoverable(false);
+                record.setError("服务重启，临时模型凭据已失效，请重新提交任务。");
+                repository.save(record);
+                continue;
+            }
+            if (record.getStatus() == TaskStatus.RUNNING || record.getStatus() == TaskStatus.PENDING_APPROVAL
+                    || record.getStatus() == TaskStatus.REVIEW || record.getStatus() == TaskStatus.RETRY) {
+                record.setStatus(TaskStatus.FAILED);
+                record.setRecoverable(true);
+                record.setError("服务重启导致任务中断，凭据可用，可点击继续执行。");
+                repository.save(record);
+            }
+        }
+    }
+
+    /** 迭代 13 I13-6：重启中断任务的手动恢复（保守策略：清结果整体重跑，副作用步骤重新审批）。 */
+    @Transactional
+    public TaskRecord resume(String id) {
+        TaskRecord record = get(id);
+        if (record.getStatus() != TaskStatus.FAILED || !record.isRecoverable()) {
+            throw new IllegalArgumentException("操作失败：该任务不可继续执行，请重新提交。");
+        }
+        TaskPlan plan = parse(record.getPlanJson());
+        resetPlanForRerun(record, plan);
+        record.setStatus(TaskStatus.RUNNING);
+        record.setRecoverable(false);
+        record.setError(null);
+        repository.save(record);
+        eventPublisher.publish(record, "resumed");
+        executeUntilBlocked(record);
+        return repository.save(record);
     }
 
     /**
@@ -170,6 +243,7 @@ public class TaskService {
                 record.setError("用户手动终止");
                 cancelFlags.computeIfAbsent(id, k -> new AtomicBoolean()).set(true);
                 permissionRequests.cancelChannel(id);
+                ephemeralCredentials.remove(id);
                 repository.save(record);
                 eventPublisher.publish(record, "cancelled");
                 log.info("任务 {} 被用户终止", id);
@@ -280,6 +354,7 @@ public class TaskService {
                 record.setStatus(TaskStatus.FAILED);
                 record.setError(cause.getMessage());
                 cancelFlags.remove(record.getId());
+                ephemeralCredentials.remove(record.getId());
                 repository.save(record);
                 eventPublisher.publish(record, "failed");
                 return;
@@ -305,10 +380,23 @@ public class TaskService {
             FilePermissionPolicy policy = parsePermission(record.getPermissionJson());
             ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
                     vaticaTools, policy, record.getId());
-            return executorAgent.executeStep(record.getGoal(), step, previous, callbacks);
+            return executorAgent.executeStep(record.getGoal(), step, previous, callbacks,
+                    clientFor(record, true));
         } catch (RuntimeException e) {
             throw new IllegalStateException("步骤 " + step.getId() + " 执行失败：" + e.getMessage(), e);
         }
+    }
+
+    /** 迭代 13 I13-5：按任务模型来源解析客户端；临时凭据仅内存，缺失即失败。 */
+    private ChatClient clientFor(TaskRecord record, boolean withTools) {
+        if ("EPHEMERAL".equals(record.getModelSource())) {
+            EphemeralCredential credential = ephemeralCredentials.get(record.getId());
+            if (credential == null) {
+                throw new IllegalStateException("操作失败：本任务的临时模型凭据已失效（服务重启），请重新提交任务。");
+            }
+            return registry.ephemeralClient(credential, withTools);
+        }
+        return withTools ? registry.defaultClient() : registry.judgeClient();
     }
 
     /** 当前步之前所有已完成步骤的结果（按序，波内并行步骤共享的只读上下文）。 */
@@ -328,13 +416,14 @@ public class TaskService {
         }
         JudgeAgent.Evaluation eval;
         try {
-            eval = judgeAgent.evaluate(record.getGoal(), plan);
+            eval = judgeAgent.evaluate(record.getGoal(), plan, clientFor(record, false));
         } catch (Exception e) {
             log.error("任务 {} 评测异常", record.getId(), e);
             TaskStateMachine.requireTransition(TaskStatus.REVIEW, TaskStatus.FAILED);
             record.setStatus(TaskStatus.FAILED);
             record.setError("评测异常：" + e.getMessage());
             cancelFlags.remove(record.getId());
+            ephemeralCredentials.remove(record.getId());
             repository.save(record);
             eventPublisher.publish(record, "failed");
             return;
@@ -348,6 +437,7 @@ public class TaskService {
             TaskStateMachine.requireTransition(TaskStatus.REVIEW, TaskStatus.DONE);
             record.setStatus(TaskStatus.DONE);
             cancelFlags.remove(record.getId());
+            ephemeralCredentials.remove(record.getId());
             log.info("任务 {} 评测通过（{} 分），交付", record.getId(), eval.score());
             repository.save(record);
             eventPublisher.publish(record, "done");

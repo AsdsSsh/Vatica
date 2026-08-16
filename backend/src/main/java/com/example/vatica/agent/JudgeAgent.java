@@ -71,11 +71,16 @@ public class JudgeAgent {
      * 评测：规则校验先行（硬失败不烧 token）→ LLM 评分卡 → 解析降级。
      */
     public Evaluation evaluate(String goal, TaskPlan plan) {
+        return evaluate(goal, plan, judgeClient);
+    }
+
+    /** 迭代 13 I13-5：任务级临时/指定客户端评测。 */
+    public Evaluation evaluate(String goal, TaskPlan plan, ChatClient client) {
         Evaluation ruleFail = ruleCheck(plan);
         if (ruleFail != null) {
             return ruleFail;
         }
-        String raw = judgeClient.prompt().system(SYSTEM_PROMPT).user(userPrompt(goal, plan)).call().content();
+        String raw = client.prompt().system(SYSTEM_PROMPT).user(userPrompt(goal, plan)).call().content();
         Evaluation eval = parse(raw);
         if (eval != null) {
             return eval;

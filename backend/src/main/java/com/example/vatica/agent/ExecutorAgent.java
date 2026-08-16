@@ -48,7 +48,13 @@ public class ExecutorAgent {
      */
     public String executeStep(String goal, TaskStep step, List<String> previousResults,
             ToolCallback[] toolCallbacks) {
-        var prompt = executorClient.prompt()
+        return executeStep(goal, step, previousResults, toolCallbacks, executorClient);
+    }
+
+    /** 迭代 13 I13-5：任务级临时/指定客户端执行。 */
+    public String executeStep(String goal, TaskStep step, List<String> previousResults,
+            ToolCallback[] toolCallbacks, ChatClient client) {
+        var prompt = client.prompt()
                 .system(SYSTEM_PROMPT)
                 .user("任务目标：" + goal);
         if (previousResults != null && !previousResults.isEmpty()) {

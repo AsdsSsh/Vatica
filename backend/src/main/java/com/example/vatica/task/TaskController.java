@@ -34,10 +34,10 @@ public class TaskController {
         this.mapper = mapper;
     }
 
-    /** 一句话创建任务：Planner 拆解 → 返回计划（PENDING 待审批）；迭代 11 起携带权限快照。 */
+    /** 一句话创建任务：Planner 拆解 → 返回计划（PENDING 待审批）；迭代 11 起携带权限快照，迭代 13 支持临时凭据。 */
     @PostMapping
     public TaskDetailDto create(@RequestBody TaskCreateRequest body) {
-        TaskRecord record = taskService.create(body.goal(), body.permission());
+        TaskRecord record = taskService.create(body.goal(), body.permission(), body.credential());
         return detail(record);
     }
 
@@ -57,6 +57,12 @@ public class TaskController {
     @PostMapping("/{id}/cancel")
     public TaskDetailDto cancel(@PathVariable String id) {
         return detail(taskService.cancel(id));
+    }
+
+    /** 迭代 13 I13-6：服务重启中断后的手动继续执行（仅 recoverable 任务）。 */
+    @PostMapping("/{id}/resume")
+    public TaskDetailDto resume(@PathVariable String id) {
+        return detail(taskService.resume(id));
     }
 
     /** 步骤级进度事件（迭代 7 I7-1）：SSE 订阅任务进度，订阅即回放当前快照。 */
@@ -93,6 +99,6 @@ public class TaskController {
         return new TaskDetailDto(r.getId(), r.getGoal(), r.getStatus().name(),
                 r.getCreatedAt().toString(), r.getCurrentStep(), r.getPendingStepId(),
                 r.getScore(), r.getVerdict() == null ? null : r.getVerdict().name(),
-                r.getReworkCount(), r.getError(), plan);
+                r.getReworkCount(), r.getError(), plan, r.isRecoverable());
     }
 }

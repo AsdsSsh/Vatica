@@ -245,7 +245,7 @@ export default function StepPanel() {
   }
 
   /** 审批/返工/终止动作：异步发起，UI 由 SSE 事件驱动更新（不阻塞等待同步执行完成）。 */
-  async function runAction(action: "approve" | "rework" | "cancel") {
+  async function runAction(action: "approve" | "rework" | "cancel" | "resume") {
     if (!selectedId) return;
     setBusy(true);
     setApprovalOpen(false);
@@ -455,6 +455,17 @@ export default function StepPanel() {
                   onClick={() => runAction("cancel")}
                 >
                   终止
+                </Button>
+              )}
+              {detail.status === "FAILED" && detail.recoverable && (
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={<ReloadOutlined />}
+                  loading={busy}
+                  onClick={() => runAction("resume")}
+                >
+                  继续执行
                 </Button>
               )}
               {(detail.status === "DONE" || detail.status === "NEEDS_REVISION") && (

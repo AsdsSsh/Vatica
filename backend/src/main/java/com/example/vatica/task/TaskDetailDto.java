@@ -10,8 +10,9 @@ package com.example.vatica.task;
  * @param score       Judge 评分（未评测为 null）
  * @param verdict     PASS / FAIL（未评测为 null）
  * @param error       失败/终止/评测不合格原因（正常为 null）
+ * @param recoverable 迭代 13：服务重启中断后是否可"继续执行"
  */
 public record TaskDetailDto(String id, String goal, String status, String createdAt,
         int currentStep, int pendingStepId, Integer score, String verdict, int reworkCount,
-        String error, Object plan) {
+        String error, Object plan, boolean recoverable) {
 }

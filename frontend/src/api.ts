@@ -271,6 +271,8 @@ export interface TaskDetail {
   error: string | null;
   /** 任务计划（后端解析后的 JSON 对象；数据损坏时为提示字符串）。 */
   plan?: { steps?: TaskStep[] } | string;
+  /** 迭代 13：服务重启中断后是否可"继续执行"。 */
+  recoverable: boolean;
 }
 
 /** SSE 进度事件负载 = 完整任务快照 + 事件类型。 */
@@ -296,8 +298,8 @@ export async function fetchTaskDetail(id: string): Promise<TaskDetail> {
   return (await getJson(`/api/task/${id}`)).json();
 }
 
-/** 任务动作：approve（审批计划/步骤）/ rework（人工返工）/ cancel（终止）。 */
-export async function taskAction(id: string, action: "approve" | "rework" | "cancel"): Promise<TaskDetail> {
+/** 任务动作：approve（审批计划/步骤）/ rework（人工返工）/ cancel（终止）/ resume（继续执行，迭代 13）。 */
+export async function taskAction(id: string, action: "approve" | "rework" | "cancel" | "resume"): Promise<TaskDetail> {
   return (await post(`/api/task/${id}/${action}`, {})).json();
 }
 

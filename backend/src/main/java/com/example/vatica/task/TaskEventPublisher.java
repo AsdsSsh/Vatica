@@ -91,6 +91,7 @@ public class TaskEventPublisher {
         snap.put("verdict", r.getVerdict() == null ? null : r.getVerdict().name());
         snap.put("reworkCount", r.getReworkCount());
         snap.put("error", r.getError());
+        snap.put("recoverable", r.isRecoverable());
         try {
             snap.put("plan", mapper.readValue(r.getPlanJson(), Object.class));
         } catch (Exception e) {

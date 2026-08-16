@@ -62,7 +62,12 @@ public class PlannerAgent {
      * 规划：返回步骤计划（解析失败降级为单步计划）。
      */
     public TaskPlan plan(String goal) {
-        String raw = plannerClient.prompt().system(SYSTEM_PROMPT).user(goal).call().content();
+        return plan(goal, plannerClient);
+    }
+
+    /** 迭代 13 I13-5：任务级临时/指定客户端规划（平台默认仍走注入客户端）。 */
+    public TaskPlan plan(String goal, ChatClient client) {
+        String raw = client.prompt().system(SYSTEM_PROMPT).user(goal).call().content();
         TaskPlan plan = parse(raw);
         if (plan == null) {
             log.warn("规划输出无法解析，降级为单步计划。原始输出片段：{}", snippet(raw));
