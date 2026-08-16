@@ -21,7 +21,6 @@ import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.setup.OpenAiSetup;
-import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
@@ -42,17 +41,15 @@ import org.springframework.stereotype.Component;
 public class ModelRegistry {
 
     private final ModelConfigService config;
-    private final ToolCallbackProvider vaticaTools;
     private final ObjectProvider<SyncMcpToolCallbackProvider> mcpToolProvider;
     private final ToolCallingManager toolCallingManager;
 
     /** 客户端缓存：key = slotId + 配置指纹。 */
     private final ConcurrentHashMap<String, ChatClient> clients = new ConcurrentHashMap<>();
 
-    public ModelRegistry(ModelConfigService config, ToolCallbackProvider vaticaTools,
+    public ModelRegistry(ModelConfigService config,
             ObjectProvider<SyncMcpToolCallbackProvider> mcpToolProvider, ToolCallingManager toolCallingManager) {
         this.config = config;
-        this.vaticaTools = vaticaTools;
         this.mcpToolProvider = mcpToolProvider;
         this.toolCallingManager = toolCallingManager;
     }
@@ -125,12 +122,13 @@ public class ModelRegistry {
     private ChatClient build(ModelSlot slot, boolean withTools) {
         ChatClient.Builder builder = ChatClient.builder(buildModel(slot));
         if (withTools) {
+            // 迭代 12 热修：本地工具由 ChatController/TaskService 按请求用
+            // PermissionBoundToolCallbacks/ToolActivityCallbacks 注入；
+            // 这里只注册 MCP 远程工具兜底——若再注册 vaticaTools 会与请求级
+            // ToolCallback[] 叠加成同名重复，触发 ToolCallingChatOptions 校验异常。
             SyncMcpToolCallbackProvider mcpTools = mcpToolProvider.getIfAvailable();
-            if (mcpTools == null) {
-                builder.defaultTools(vaticaTools);
-            } else {
-                // 迭代 8 韧性包装：MCP 远程工具失败不拖垮对话
-                builder.defaultTools(vaticaTools, new McpToolProviderGuard(mcpTools));
+            if (mcpTools != null) {
+                builder.defaultTools(new McpToolProviderGuard(mcpTools));
             }
         }
         return builder.build();

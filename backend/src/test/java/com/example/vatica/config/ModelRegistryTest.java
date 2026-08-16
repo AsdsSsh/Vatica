@@ -17,8 +17,6 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.openai.OpenAiChatModel;
-import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.ObjectProvider;
 
 /** 动态模型注册表单测（迭代 8.5）：双协议构建 / 路由与快速失败 / 配置指纹缓存。 */
@@ -39,7 +37,6 @@ class ModelRegistryTest {
                         new OpenAiDefaultsProperties.Chat("deepseek-v4-flash", 0.7)),
                 new ModelProperties(new ModelProperties.Qwen("", "", "", null)));
         registry = new ModelRegistry(config,
-                (ToolCallbackProvider) () -> new ToolCallback[0],
                 mcpProvider(null),
                 ToolCallingManager.builder().build());
     }
