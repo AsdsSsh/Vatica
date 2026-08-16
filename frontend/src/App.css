@@ -280,13 +280,15 @@ body {
   align-items: center;
   margin: 2px 8px;
   padding: 9px 12px 9px 14px;
+  border: 1px solid transparent;
   border-radius: var(--vatica-radius-sm);
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .session-item:hover {
   background: var(--vatica-hover);
+  border-color: var(--vatica-text-secondary);
 }
 
 .session-item.active {
@@ -327,12 +329,14 @@ body {
 /* ─── 右栏：任务列表选中态 ─── */
 
 .task-item {
+  border: 1px solid transparent;
   border-radius: var(--vatica-radius-sm);
-  transition: background 0.15s ease;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .task-item:hover {
   background: var(--vatica-hover);
+  border-color: var(--vatica-text-secondary);
 }
 
 .task-item.active {
@@ -395,7 +399,7 @@ body {
 }
 
 .suggestion-card:hover {
-  border-color: var(--vatica-indigo);
+  border-color: var(--vatica-text);
   background: var(--vatica-hover);
   transform: translateY(-1px);
 }

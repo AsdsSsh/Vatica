@@ -112,7 +112,8 @@ function App() {
       theme={{
         algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm,
         token: {
-          colorPrimary: "#F99C00",
+          // skills.sh 风格：主按钮用灰白而非彩色
+          colorPrimary: isDark ? "#EDEDED" : "#171717",
           colorInfo: "#F99C00",
           colorSuccess: "#00BB7F",
           colorWarning: "#F99C00",
@@ -127,6 +128,21 @@ function App() {
           Layout: {
             bodyBg: "transparent",
             siderBg: "transparent",
+          },
+          Button: {
+            primaryColor: isDark ? "#0A0A0A" : "#FFFFFF",
+            primaryShadow: "none",
+            defaultShadow: "none",
+            defaultBg: isDark ? "#171717" : "#FFFFFF",
+            defaultColor: isDark ? "#EDEDED" : "#171717",
+            defaultBorderColor: isDark ? "#292929" : "#E6E6E6",
+            defaultHoverBg: isDark ? "#1F1F1F" : "#F2F2F2",
+            defaultHoverColor: isDark ? "#FFFFFF" : "#000000",
+            defaultHoverBorderColor: isDark ? "#EDEDED" : "#171717",
+            defaultActiveBg: isDark ? "#292929" : "#EBEBEB",
+            defaultActiveColor: isDark ? "#FFFFFF" : "#000000",
+            defaultActiveBorderColor: isDark ? "#EDEDED" : "#171717",
+            textHoverBg: isDark ? "#1F1F1F" : "#F2F2F2",
           },
         },
       }}
