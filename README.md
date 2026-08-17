@@ -386,6 +386,15 @@ curl localhost:8080/api/task/不存在   # {"message":"操作失败：任务不�
 - **AgentScope 双运行时**：`-Pagentscope` 隔离构建；`AgentRuntime` / `LegacyRuntime` / `AgentScopeRuntime`；单 Agent 与双 Agent 黑板 POC 用 Qwen 真实模型 + 真实 Vatica 工具实测；生产运行时定版 **LegacyRuntime**
 - 回归：`mvn test` 285 → **341** 全绿 + `npm run build` 通过 + headless Chrome 鉴权冒烟 13 项；对照报告见 `docs/20260817_iteration15/report.md`
 
+### 迭代 16：统一 SSE 事件网关
+
+- **统一事件契约**：聊天、任务、权限、工具、reasoning、usage 和 Agent 事件统一为 `{id,type,data,ts}` 信封；`SseEventGateway` 负责 channel 订阅、256 条有界回放环和连接清理
+- **续传语义**：任务事件接口接受 `Last-Event-ID`；首次订阅只发送当前快照，断线重连只补发游标后的事件，避免重复旧聊天和失效权限请求
+- **统一前端客户端**：`fetchSse` 支持 Authorization 头、SSE comment 心跳、Abort、指数退避重连、Last-Event-ID 和 512 条事件 id 去重；聊天与任务面板移除各自的手写解析路径
+- **连接保活**：服务端每 15 秒发送 `keepalive` comment；权限请求为不可回放的一次性事件，断连由 channel cleanup 取消等待
+- **边界**：当前回放环为单实例内存实现；多实例部署前需要替换为 Redis pub/sub/stream，HTTP + SSE 契约无需变化
+- 回归：后端 `mvn test` **341 项全绿** + 前端 `npm run build` 通过
+
 ### 迭代 2.5 新增配置（application.yml，均可调）
 
 | 配置 | 默认 | 说明 |

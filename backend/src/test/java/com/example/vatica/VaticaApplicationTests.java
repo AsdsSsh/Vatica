@@ -43,4 +43,13 @@ class VaticaApplicationTests {
 				.andExpect(content().string(containsString("\"expiresAt\"")));
 	}
 
+	/** 迭代 16：SSE 续传请求头进入 OpenAPI 契约，前端不得自行猜接口字段。 */
+	@Test
+	void openApiContainsSseResumeHeader() throws Exception {
+		mvc.perform(get("/v3/api-docs"))
+				.andExpect(status().isOk())
+				.andExpect(content().string(containsString("/api/task/{id}/events")))
+				.andExpect(content().string(containsString("Last-Event-ID")));
+	}
+
 }

@@ -12,6 +12,7 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import com.example.vatica.event.SseEventSink;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
@@ -28,13 +29,21 @@ public final class TracedToolCallbacks {
     private static final Logger log = LoggerFactory.getLogger(TracedToolCallbacks.class);
 
     private final ObjectMapper mapper;
-    private final SseEmitter emitter;
+    private final SseEventSink eventSink;
     private final AgentTraceRecordRepository traceRepository;
 
     public TracedToolCallbacks(ObjectMapper mapper, SseEmitter emitter,
             AgentTraceRecordRepository traceRepository) {
         this.mapper = mapper;
-        this.emitter = emitter;
+        this.eventSink = emitter == null ? null : emitterSink(mapper, emitter);
+        this.traceRepository = traceRepository;
+    }
+
+    /** 聊天生产链路：事件通过统一网关发布，不直接写 SseEmitter。 */
+    public TracedToolCallbacks(ObjectMapper mapper, SseEventSink eventSink,
+            AgentTraceRecordRepository traceRepository) {
+        this.mapper = mapper;
+        this.eventSink = eventSink;
         this.traceRepository = traceRepository;
     }
 
@@ -43,9 +52,14 @@ public final class TracedToolCallbacks {
         this(mapper, emitter, null);
     }
 
+    /** 聊天生产链路：事件通过统一网关发布，不落库。 */
+    public TracedToolCallbacks(ObjectMapper mapper, SseEventSink eventSink) {
+        this(mapper, eventSink, null);
+    }
+
     /** 任务：落 agent_trace；无 SSE 订阅者时零开销。 */
     public TracedToolCallbacks(ObjectMapper mapper, AgentTraceRecordRepository traceRepository) {
-        this(mapper, null, traceRepository);
+        this(mapper, (SseEmitter) null, traceRepository);
     }
 
     public ToolCallback[] wrap(ToolCallback[] callbacks, TraceContext.Snapshot trace) {
@@ -111,14 +125,22 @@ public final class TracedToolCallbacks {
     }
 
     private void send(Map<String, Object> payload) {
-        if (emitter == null) {
+        if (eventSink == null) {
             return;
         }
-        try {
-            emitter.send(SseEmitter.event().name("tool_activity").data(mapper.writeValueAsString(payload)));
-        } catch (IOException e) {
-            // 客户端已断连：连接收尾由 ChatController 的 send 失败路径统一处理
-        }
+        eventSink.emit("tool_activity", payload);
+    }
+
+    private static SseEventSink emitterSink(ObjectMapper mapper, SseEmitter emitter) {
+        return (type, payload) -> {
+            try {
+                emitter.send(SseEmitter.event().name(type).data(mapper.writeValueAsString(payload)));
+                return true;
+            } catch (IOException | IllegalStateException e) {
+                // 兼容旧测试构造器；生产链路由网关负责连接收尾。
+                return false;
+            }
+        };
     }
 
     private static Map<String, Object> startPayload(String tool, TraceContext.Snapshot trace,

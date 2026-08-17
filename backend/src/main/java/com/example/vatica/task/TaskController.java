@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -78,10 +79,11 @@ public class TaskController {
         return detail(taskService.resume(id));
     }
 
-    /** 步骤级进度事件（迭代 7 I7-1）：SSE 订阅任务进度，订阅即回放当前快照。 */
+    /** 步骤级进度事件（迭代 7 I7-1；迭代 16 I16-3）：支持 JWT 头和 Last-Event-ID 续传。 */
     @GetMapping(value = "/{id}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter events(@PathVariable String id) {
-        return eventPublisher.subscribe(taskService.get(id));
+    public SseEmitter events(@PathVariable String id,
+            @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId) {
+        return eventPublisher.subscribe(taskService.get(id), lastEventId);
     }
 
     /** 单任务详情。 */

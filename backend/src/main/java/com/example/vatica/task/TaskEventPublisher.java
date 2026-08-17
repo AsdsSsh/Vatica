@@ -1,25 +1,21 @@
 package com.example.vatica.task;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.time.Duration;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import com.example.vatica.permission.PermissionEventPublisher;
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.TenantChannels;
+import com.example.vatica.event.SseEventGateway;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
- * 任务进度事件发布（迭代 7 I7-1）：按任务 id 维护 SSE 订阅者注册表，
- * 执行器在状态/步骤流转时广播快照事件（前端步骤面板实时打勾）。
+ * 任务进度事件发布（迭代 7 I7-1；迭代 16 I16-2/I16-3）：按任务 channel
+ * 发布统一 SSE 快照事件，订阅和回放交给 {@link SseEventGateway}。
  *
  * <p>设计要点：
  * <ul>
@@ -33,52 +29,30 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 @Component
 public class TaskEventPublisher {
 
-    private static final Logger log = LoggerFactory.getLogger(TaskEventPublisher.class);
-
     private static final long SUBSCRIBER_TIMEOUT_MS = 5 * 60 * 1000L;
 
-    private final Map<String, Set<SseEmitter>> subscribers = new ConcurrentHashMap<>();
     private final ObjectMapper mapper;
-    private final PermissionEventPublisher permissionEvents;
+    private final SseEventGateway gateway;
 
-    public TaskEventPublisher(ObjectMapper mapper, PermissionEventPublisher permissionEvents) {
+    @Autowired
+    public TaskEventPublisher(ObjectMapper mapper, SseEventGateway gateway) {
         this.mapper = mapper;
-        this.permissionEvents = permissionEvents;
+        this.gateway = gateway;
     }
 
-    /** 订阅任务进度：立即回放当前快照，随后持续推送；同时订阅同 channel 的文件权限事件（迭代 11）。 */
-    public SseEmitter subscribe(TaskRecord record) {
+    /** 订阅任务进度：首次订阅回放当前快照，重连按 Last-Event-ID 回放缺失事件。 */
+    public SseEmitter subscribe(TaskRecord record, String lastEventId) {
         String channel = channel(record);
-        SseEmitter emitter = new SseEmitter(SUBSCRIBER_TIMEOUT_MS);
-        Set<SseEmitter> set = subscribers.computeIfAbsent(channel, k -> ConcurrentHashMap.newKeySet());
-        set.add(emitter);
-        permissionEvents.subscribe(channel, emitter);
-        emitter.onTimeout(() -> remove(channel, emitter));
-        emitter.onError(e -> remove(channel, emitter));
-        emitter.onCompletion(() -> remove(channel, emitter));
-        try {
-            emitter.send(SseEmitter.event().name("task").data(toJson(snapshot(record, "snapshot"))));
-        } catch (IOException e) {
-            remove(channel, emitter);
-        }
-        return emitter;
+        SseEventGateway.InitialEvent initial = lastEventId == null || lastEventId.isBlank()
+                ? new SseEventGateway.InitialEvent("task_snapshot", snapshot(record, "snapshot"))
+                : null;
+        return gateway.subscribe(channel, lastEventId, Duration.ofMillis(SUBSCRIBER_TIMEOUT_MS), initial);
     }
 
     /** 广播任务快照（无订阅者时零开销）。 */
     public void publish(TaskRecord record, String type) {
         String channel = channel(record);
-        Set<SseEmitter> set = subscribers.get(channel);
-        if (set == null || set.isEmpty()) {
-            return;
-        }
-        String json = toJson(snapshot(record, type));
-        for (SseEmitter emitter : set) {
-            try {
-                emitter.send(SseEmitter.event().name("task").data(json));
-            } catch (Exception e) {
-                remove(channel, emitter);
-            }
-        }
+        gateway.publish(channel, "task_snapshot", snapshot(record, type));
     }
 
     private Map<String, Object> snapshot(TaskRecord r, String type) {
@@ -102,23 +76,6 @@ public class TaskEventPublisher {
             snap.put("plan", List.of());
         }
         return snap;
-    }
-
-    private String toJson(Map<String, Object> snapshot) {
-        try {
-            return mapper.writeValueAsString(snapshot);
-        } catch (Exception e) {
-            log.warn("任务事件序列化失败", e);
-            return "{}";
-        }
-    }
-
-    private void remove(String channel, SseEmitter emitter) {
-        Set<SseEmitter> set = subscribers.get(channel);
-        if (set != null) {
-            set.remove(emitter);
-        }
-        permissionEvents.unsubscribe(channel, emitter);
     }
 
     private static String channel(TaskRecord record) {

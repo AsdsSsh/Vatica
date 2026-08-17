@@ -1,6 +1,5 @@
 package com.example.vatica.controller;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -12,6 +11,7 @@ import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.config.ReasoningMode;
 import com.example.vatica.context.ContextAssembler;
 import com.example.vatica.context.ContextBudget;
+import com.example.vatica.event.SseEventGateway;
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
 import com.example.vatica.auth.TenantChannels;
@@ -30,10 +30,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -80,13 +82,16 @@ public class ChatController {
     private final FilePermissionRequestService permissionRequests;
     private final ObjectMapper mapper;
     private final ContextBudget contextBudget;
+    private final SseEventGateway eventGateway;
 
     /** 活跃流式连接注册表：可观测 + 断连清理（迭代 5 任务终止/迭代 7 前端联调可复用）。 */
     private final Set<SseEmitter> activeEmitters = ConcurrentHashMap.newKeySet();
 
+    @Autowired
     public ChatController(ModelRegistry registry, ChatProperties chatProperties, SessionMemory sessionMemory,
             ToolCallbackProvider vaticaTools, PermissionEventPublisher permissionEvents,
-            FilePermissionRequestService permissionRequests, ObjectMapper mapper, ContextBudget contextBudget) {
+            FilePermissionRequestService permissionRequests, ObjectMapper mapper, ContextBudget contextBudget,
+            SseEventGateway eventGateway) {
         this.registry = registry;
         this.chatProperties = chatProperties;
         this.sessionMemory = sessionMemory;
@@ -95,6 +100,15 @@ public class ChatController {
         this.permissionRequests = permissionRequests;
         this.mapper = mapper;
         this.contextBudget = contextBudget;
+        this.eventGateway = eventGateway;
+    }
+
+    /** 测试/兼容构造器；生产装配使用统一网关 Bean。 */
+    public ChatController(ModelRegistry registry, ChatProperties chatProperties, SessionMemory sessionMemory,
+            ToolCallbackProvider vaticaTools, PermissionEventPublisher permissionEvents,
+            FilePermissionRequestService permissionRequests, ObjectMapper mapper, ContextBudget contextBudget) {
+        this(registry, chatProperties, sessionMemory, vaticaTools, permissionEvents, permissionRequests,
+                mapper, contextBudget, new SseEventGateway(mapper));
     }
 
     /** 可用模型清单（迭代 7 模型选择器；迭代 8.5 起来自动态注册表；迭代 9 类型化 DTO）。 */
@@ -154,15 +168,15 @@ public class ChatController {
         }
     }
 
-    /** SSE 流式对话（打字机效果；迭代 11 增加权限请求事件） */
+    /** SSE 流式对话（迭代 16：统一事件信封 + fetch-SSE + Last-Event-ID）。 */
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter stream(@RequestBody ChatRequest request) {
+    public SseEmitter stream(@RequestBody ChatRequest request,
+            @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId) {
         RequestIdentity identity = RequestIdentityContext.require();
         ChatClient client = resolveClient(request);
-        SseEmitter emitter = new SseEmitter(chatProperties.sse().timeout().toMillis());
-        activeEmitters.add(emitter);
         String channel = TenantChannels.chat(identity, request.sessionId());
-        permissionEvents.subscribe(channel, emitter);
+        SseEmitter emitter = eventGateway.subscribe(channel, lastEventId, chatProperties.sse().timeout());
+        activeEmitters.add(emitter);
         // 迭代 15 I15-13：本次流式请求的用量上下文（advisor 读取，收尾发 usage 事件）
         UsageContext.set(usageSnapshot(request, identity));
 
@@ -171,7 +185,9 @@ public class ChatController {
         // 迭代 15 I15-3：Self-Refine 重试（权限最内层，重试也重新过权限与身份快照）
         callbacks = new RetryableToolCallbacks().wrap(callbacks);
         // 迭代 15 I15-1：升级迭代 12 的 tool_activity——补 traceId 与脱敏输入/输出摘要
-        callbacks = new TracedToolCallbacks(mapper, emitter).wrap(callbacks, chatTrace(identity, request.sessionId()));
+        callbacks = new TracedToolCallbacks(mapper,
+                (type, payload) -> eventGateway.publish(channel, type, payload))
+                .wrap(callbacks, chatTrace(identity, request.sessionId()));
 
         StringBuilder reply = new StringBuilder();
         Disposable[] subscription = new Disposable[1];
@@ -180,7 +196,6 @@ public class ChatController {
                 subscription[0].dispose();
             }
             activeEmitters.remove(emitter);
-            permissionEvents.unsubscribe(channel, emitter);
             permissionRequests.cancelChannel(channel);
             UsageContext.clear();
             log.debug("SSE 流式收尾：session={}，剩余活跃连接={}", request.sessionId(), activeEmitters.size());
@@ -204,12 +219,9 @@ public class ChatController {
                             // 迭代 15 I15-7：reasoning_content 走独立 SSE 事件，文本照旧逐块输出
                             String reasoning = reasoningContent(response);
                             if (reasoning != null && !reasoning.isBlank()) {
-                                try {
-                                    emitter.send(SseEmitter.event().name("reasoning")
-                                            .data(mapper.writeValueAsString(Map.of("content", reasoning))));
-                                } catch (IOException e) {
+                                if (!eventGateway.publish(channel, "reasoning", Map.of("content", reasoning))) {
                                     cleanup.run();
-                                    emitter.completeWithError(e);
+                                    emitter.complete();
                                     return;
                                 }
                             }
@@ -220,12 +232,10 @@ public class ChatController {
                                 return;
                             }
                             reply.append(chunk);
-                            try {
-                                emitter.send(chunk);
-                            } catch (IOException e) {
+                            if (!eventGateway.publish(channel, "chat_text", chunk)) {
                                 // 客户端已断连：停止上游、结束会话
                                 cleanup.run();
-                                emitter.completeWithError(e);
+                                emitter.complete();
                             }
                         },
                         error -> {
@@ -237,9 +247,10 @@ public class ChatController {
                             String usageJson = UsageContext.takeLastUsageJson();
                             if (usageJson != null) {
                                 try {
-                                    emitter.send(SseEmitter.event().name("usage").data(usageJson));
-                                } catch (IOException e) {
-                                    // 客户端断连：下方 cleanup 统一收尾
+                                    eventGateway.publish(channel, "usage",
+                                            mapper.readValue(usageJson, Object.class));
+                                } catch (Exception e) {
+                                    log.warn("usage SSE 事件转换失败", e);
                                 }
                             }
                             RequestIdentityContext.callWith(identity, () -> {
@@ -251,6 +262,11 @@ public class ChatController {
                         });
 
         return emitter;
+    }
+
+    /** 测试/兼容入口：没有续传游标时从当前请求开始。 */
+    public SseEmitter stream(ChatRequest request) {
+        return stream(request, null);
     }
 
     /** 迭代 15 I15-7：从 ChatResponse 提取思考内容（优先消息级，其次响应级；不存在返回 null）。 */

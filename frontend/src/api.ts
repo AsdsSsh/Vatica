@@ -323,6 +323,154 @@ export interface UsageSummary {
   contextFillRatio: number | null;
 }
 
+/** 迭代 16 I16-2：所有 SSE 业务事件的统一信封。 */
+export interface SseEventEnvelope<T = unknown> {
+  id: string;
+  type: string;
+  data: T;
+  ts: string;
+}
+
+class NonRetryableSseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NonRetryableSseError";
+  }
+}
+
+function parseSseEnvelope(eventName: string, eventId: string, dataLines: string[]): SseEventEnvelope {
+  if (dataLines.length === 0) return { id: eventId, type: eventName, data: null, ts: "" };
+  const raw = dataLines.join("\n");
+  let parsed: unknown = raw;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    // 兼容旧服务端的纯文本 data 帧。
+  }
+  if (parsed && typeof parsed === "object") {
+    const candidate = parsed as { id?: unknown; type?: unknown; data?: unknown; ts?: unknown };
+    if (typeof candidate.type === "string" && "data" in candidate) {
+      return {
+        id: typeof candidate.id === "string" ? candidate.id : eventId,
+        type: candidate.type,
+        data: candidate.data,
+        ts: typeof candidate.ts === "string" ? candidate.ts : "",
+      };
+    }
+  }
+  return { id: eventId, type: eventName, data: parsed, ts: "" };
+}
+
+async function* parseSseBody(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEventEnvelope> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let eventName = "message";
+  let eventId = "";
+  let dataLines: string[] = [];
+  const flush = (): SseEventEnvelope | null => {
+    if (dataLines.length === 0) {
+      eventName = "message";
+      eventId = "";
+      return null;
+    }
+    const event = parseSseEnvelope(eventName, eventId, dataLines);
+    eventName = "message";
+    eventId = "";
+    dataLines = [];
+    return event;
+  };
+  const consumeLine = (line: string): SseEventEnvelope | null => {
+    if (line.endsWith("\r")) line = line.slice(0, -1);
+    if (line === "") return flush();
+    if (line.startsWith(":")) return null;
+    if (line.startsWith("event:")) {
+      eventName = line.slice(6).trim();
+    } else if (line.startsWith("id:")) {
+      eventId = line.slice(3).trim();
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).replace(/^ /, ""));
+    }
+    return null;
+  };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let index: number;
+      while ((index = buffer.indexOf("\n")) >= 0) {
+        const event = consumeLine(buffer.slice(0, index));
+        buffer = buffer.slice(index + 1);
+        if (event) yield event;
+      }
+    }
+    buffer += decoder.decode();
+    if (buffer) {
+      const event = consumeLine(buffer);
+      if (event) yield event;
+    }
+    const event = flush();
+    if (event) yield event;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/**
+ * 迭代 16 I16-3：统一 fetch-SSE 客户端。
+ * `reconnect=true` 时会携带最近事件 id 自动重连，并按 id 去重回放帧。
+ */
+export async function* fetchSse<T = unknown>(
+  path: string,
+  init: RequestInit = {},
+  signal?: AbortSignal,
+  reconnect = false,
+): AsyncGenerator<SseEventEnvelope<T>> {
+  const effectiveSignal = signal ?? init.signal;
+  let lastEventId = "";
+  let retryCount = 0;
+  const seenIds = new Set<string>();
+  while (!effectiveSignal?.aborted) {
+    try {
+      const headers = new Headers(init.headers);
+      headers.set("Accept", "text/event-stream");
+      if (lastEventId) headers.set("Last-Event-ID", lastEventId);
+      const res = await fetch(`${getApiBase()}${path}`, { ...init, headers, signal: effectiveSignal });
+      if (!res.ok) {
+        const error = await toRequestError(res, `SSE 请求失败（HTTP ${res.status}）`);
+        if (res.status < 500) throw new NonRetryableSseError(error.message);
+        throw error;
+      }
+      if (!res.body) throw new Error(`SSE 响应没有可读流（HTTP ${res.status}）`);
+      retryCount = 0;
+      for await (const event of parseSseBody(res.body)) {
+        if (event.id && seenIds.has(event.id)) continue;
+        if (event.id) {
+          seenIds.add(event.id);
+          if (seenIds.size > 512) seenIds.delete(seenIds.values().next().value ?? "");
+          lastEventId = event.id;
+        }
+        yield event as SseEventEnvelope<T>;
+      }
+      if (!reconnect) return;
+    } catch (error) {
+      if (effectiveSignal?.aborted) return;
+      if (!reconnect || error instanceof NonRetryableSseError || isAuthExpiredError(error)) throw error;
+    }
+    retryCount += 1;
+    if (retryCount > 8) throw new Error("SSE 连接重试次数过多，请稍后重试");
+    const delay = Math.min(250 * 2 ** (retryCount - 1), 4_000);
+    await new Promise<void>((resolve, reject) => {
+      const timer = window.setTimeout(resolve, delay);
+      effectiveSignal?.addEventListener("abort", () => {
+        window.clearTimeout(timer);
+        reject(new DOMException("Aborted", "AbortError"));
+      }, { once: true });
+    });
+  }
+}
+
 export type ChatStreamEvent =
   | { kind: "text"; content: string }
   | { kind: "reasoning"; content: string }
@@ -343,75 +491,31 @@ export async function* streamChat(
   credential?: EphemeralCredential,
   deepThinking = false,
 ): AsyncGenerator<ChatStreamEvent> {
-  // 迭代 13.5：credential 与 model 二选一（后端约定两者同时出现快速失败）
-  const res = await post(
-    "/api/chat/stream",
-    {
-      message,
-      sessionId,
-      permission,
-      deepThinking,
-      mailCredential: getEphemeralMailCredential(),
-      ...(credential ? { credential } : { model }),
-    },
-    signal,
-  );
-  if (!res.body) {
-    throw new Error(`请求失败（HTTP ${res.status}）`);
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let eventName = "message";
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let idx: number;
-      while ((idx = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, idx).trimEnd();
-        buffer = buffer.slice(idx + 1);
-        if (line.startsWith("event:")) {
-          eventName = line.slice(6).trim();
-        } else if (line.startsWith("data:")) {
-          const payload = line.slice(5).replace(/^ /, "");
-          if (eventName === "permission_request") {
-            try {
-              yield { kind: "permission", request: JSON.parse(payload) as FilePermissionRequest };
-            } catch {
-              // 忽略坏帧
-            }
-          } else if (eventName === "usage") {
-            try {
-              yield { kind: "usage", usage: JSON.parse(payload) as UsageSummary };
-            } catch {
-              // 忽略坏帧
-            }
-          } else if (eventName === "reasoning") {
-            try {
-              const parsed = JSON.parse(payload) as { content?: string };
-              if (parsed && typeof parsed.content === "string") {
-                yield { kind: "reasoning", content: parsed.content };
-              }
-            } catch {
-              // 忽略坏帧
-            }
-          } else if (eventName === "tool_activity") {
-            try {
-              yield { kind: "tool", activity: JSON.parse(payload) as ToolActivity };
-            } catch {
-              // 忽略坏帧
-            }
-          } else {
-            yield { kind: "text", content: payload };
-          }
-          eventName = "message";
-        }
-      }
+  const body = {
+    message,
+    sessionId,
+    permission,
+    deepThinking,
+    mailCredential: getEphemeralMailCredential(),
+    ...(credential ? { credential } : { model }),
+  };
+  for await (const event of fetchSse<unknown>("/api/chat/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  }, signal)) {
+    if (event.type === "permission_request") {
+      yield { kind: "permission", request: event.data as FilePermissionRequest };
+    } else if (event.type === "usage") {
+      yield { kind: "usage", usage: event.data as UsageSummary };
+    } else if (event.type === "reasoning") {
+      const data = event.data as { content?: unknown };
+      if (data && typeof data.content === "string") yield { kind: "reasoning", content: data.content };
+    } else if (event.type === "tool_activity") {
+      yield { kind: "tool", activity: event.data as ToolActivity };
+    } else if (typeof event.data === "string") {
+      yield { kind: "text", content: event.data };
     }
-  } finally {
-    reader.releaseLock();
   }
 }
 
@@ -861,10 +965,8 @@ export async function taskAction(id: string, action: "approve" | "rework" | "can
 }
 
 /**
- * 订阅任务进度事件（迭代 7 I7-1；迭代 13.5 改为 fetch-SSE）：
- * EventSource 无法带 Authorization 头，云端后端开启 JWT 鉴权后 401 永远连不上；
- * 这里用 fetch 读取 SSE 流并统一解析 `task` / `permission_request` 事件。
- * 订阅即收到后端回放的当前快照。返回取消订阅函数（abort 请求）。
+ * 订阅任务进度事件（迭代 16 I16-4）：
+ * 使用统一 fetch-SSE，自动携带 JWT、Last-Event-ID，断线后回放并按 id 去重。
  */
 export function subscribeTaskEvents(
   id: string,
@@ -875,48 +977,14 @@ export function subscribeTaskEvents(
   let cancelled = false;
   void (async () => {
     try {
-      const res = await fetch(`${getApiBase()}/api/task/${id}/events`, {
-        headers: { Accept: "text/event-stream", ...authHeaders() },
-        signal: controller.signal,
-      });
-      if (!res.ok) throw await toRequestError(res, `订阅任务进度失败（HTTP ${res.status}）`);
-      if (!res.body) throw new Error(`请求失败（HTTP ${res.status}）`);
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let eventName = "task";
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          let idx: number;
-          while ((idx = buffer.indexOf("\n")) >= 0) {
-            const line = buffer.slice(0, idx).trimEnd();
-            buffer = buffer.slice(idx + 1);
-            if (line.startsWith("event:")) {
-              eventName = line.slice(6).trim();
-            } else if (line.startsWith("data:")) {
-              const payload = line.slice(5).replace(/^ /, "");
-              if (eventName === "permission_request") {
-                try {
-                  onPermission?.(JSON.parse(payload) as FilePermissionRequest);
-                } catch {
-                  // 忽略坏帧
-                }
-              } else {
-                try {
-                  onEvent(JSON.parse(payload) as TaskEvent);
-                } catch {
-                  // 忽略坏帧（连接抖动时重新订阅即可拿到完整快照）
-                }
-              }
-              eventName = "task";
-            }
-          }
+      for await (const event of fetchSse<unknown>(`/api/task/${encodeURIComponent(id)}/events`, {
+        headers: authHeaders(),
+      }, controller.signal, true)) {
+        if (event.type === "permission_request") {
+          onPermission?.(event.data as FilePermissionRequest);
+        } else if (event.type === "task_snapshot" || event.type === "task") {
+          onEvent(event.data as TaskEvent);
         }
-      } finally {
-        reader.releaseLock();
       }
     } catch (e) {
       if (cancelled || controller.signal.aborted) return;   // 主动取消不告警
