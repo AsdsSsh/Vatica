@@ -7,6 +7,7 @@ import static org.mockito.Mockito.when;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Instant;
 
 import com.example.vatica.config.AppStateProperties;
 import com.example.vatica.secret.FileMasterKeyProvider;
@@ -32,6 +33,7 @@ class JwtServiceTest {
         assertThat(claims.orgId()).isEqualTo(7L);
         assertThat(claims.role()).isEqualTo(AppUser.ROLE_ORG_ADMIN);
         assertThat(claims.username()).isEqualTo("alice");
+        assertThat(claims.expiresAt()).isAfter(Instant.now());
     }
 
     @Test

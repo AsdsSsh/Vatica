@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   App,
   Button,
@@ -41,6 +41,7 @@ import {
   fetchWorkspaceFiles,
   getEphemeralMailCredential,
   importCalendar,
+  isAuthExpiredError,
   saveUserMailSettings,
   testUserMailSettings,
   uploadWorkspaceFile,
@@ -49,6 +50,7 @@ import {
   type UserMailSettingsView,
   type WorkspaceEntry,
 } from "../api";
+import { useAuth } from "../auth";
 
 interface Props { open: boolean; onClose: () => void }
 
@@ -70,6 +72,7 @@ function saveBlob(blob: Blob, filename: string) {
 /** 迭代 14：云文件、待办、日历与个人邮箱的统一工作台。 */
 export default function PersonalWorkspacePanel({ open, onClose }: Props) {
   const { message } = App.useApp();
+  const { status: authStatus, user: authUser } = useAuth();
   const [files, setFiles] = useState<WorkspaceEntry[]>([]);
   const [todos, setTodos] = useState<TodoView[]>([]);
   const [events, setEvents] = useState<CalendarEventView[]>([]);
@@ -81,6 +84,8 @@ export default function PersonalWorkspacePanel({ open, onClose }: Props) {
   const [eventEnd, setEventEnd] = useState("");
   const [mailMode, setMailMode] = useState<UserMailSettingsView["credentialMode"]>("EPHEMERAL");
   const [mailForm] = Form.useForm<MailForm>();
+  // 迭代 14.5：账号切换时先清空上一账号的工作台数据，再拉取新账号
+  const previousAuthKey = useRef<string | null>(null);
 
   async function refresh() {
     setBusy(true);
@@ -103,20 +108,47 @@ export default function PersonalWorkspacePanel({ open, onClose }: Props) {
         password: local?.password,
       });
     } catch (e) {
-      message.error((e as Error).message);
+      if (isAuthExpiredError(e)) {
+        // 401 已由 api.ts 统一清理并全局提示，这里只清掉上一账号的数据
+        setFiles([]);
+        setTodos([]);
+        setEvents([]);
+      } else {
+        message.error((e as Error).message);
+      }
     } finally {
       setBusy(false);
     }
   }
 
-  useEffect(() => { if (open) void refresh(); }, [open]);
+  const authKey =
+    authStatus === "authenticated" || authStatus === "local"
+      ? `${authUser?.orgId ?? "-"}:${authUser?.userId ?? "-"}`
+      : authStatus;
+
+  useEffect(() => {
+    if (!open) return;
+    if (previousAuthKey.current !== authKey) {
+      previousAuthKey.current = authKey;
+      setFiles([]);
+      setTodos([]);
+      setEvents([]);
+      setMailMode("EPHEMERAL");
+      mailForm.resetFields();
+    }
+    if (authStatus !== "authenticated" && authStatus !== "local") return;
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, authKey, authStatus]);
 
   async function addTodoItem() {
     if (!todoTitle.trim()) return;
     try {
       setTodos(await addTodo(todoTitle.trim(), todoDue));
       setTodoTitle(""); setTodoDue("");
-    } catch (e) { message.error((e as Error).message); }
+    } catch (e) {
+      if (!isAuthExpiredError(e)) message.error((e as Error).message);
+    }
   }
 
   async function addEventItem() {
@@ -126,7 +158,9 @@ export default function PersonalWorkspacePanel({ open, onClose }: Props) {
         summary: eventSummary.trim(), start: eventStart, end: eventEnd, rrule: null,
       }));
       setEventSummary(""); setEventStart(""); setEventEnd("");
-    } catch (e) { message.error((e as Error).message); }
+    } catch (e) {
+      if (!isAuthExpiredError(e)) message.error((e as Error).message);
+    }
   }
 
   async function saveMail() {
@@ -136,7 +170,7 @@ export default function PersonalWorkspacePanel({ open, onClose }: Props) {
       message.success(values.credentialMode === "EPHEMERAL" ? "邮箱已保存，密码仅保留在本机" : "邮箱已加密保存");
       mailForm.setFieldValue("password", undefined);
     } catch (e) {
-      if (e instanceof Error) message.error(e.message);
+      if (e instanceof Error && !isAuthExpiredError(e)) message.error(e.message);
     }
   }
 
@@ -150,7 +184,7 @@ export default function PersonalWorkspacePanel({ open, onClose }: Props) {
       } : undefined);
       message.success(result.message);
     } catch (e) {
-      if (e instanceof Error) message.error(e.message);
+      if (e instanceof Error && !isAuthExpiredError(e)) message.error(e.message);
     }
   }
 
@@ -163,7 +197,9 @@ export default function PersonalWorkspacePanel({ open, onClose }: Props) {
               <Flex justify="space-between" align="center">
                 <Typography.Text type="secondary">当前账号的隔离工作区</Typography.Text>
                 <Upload showUploadList={false} beforeUpload={(file) => {
-                  void uploadWorkspaceFile(file).then(() => refresh()).catch((e: Error) => message.error(e.message));
+                  void uploadWorkspaceFile(file).then(() => refresh()).catch((e: Error) => {
+                    if (!isAuthExpiredError(e)) message.error(e.message);
+                  });
                   return false;
                 }}><Button icon={<UploadOutlined />}>上传</Button></Upload>
               </Flex>
@@ -217,7 +253,9 @@ export default function PersonalWorkspacePanel({ open, onClose }: Props) {
               </Flex>
               <Flex justify="flex-end" gap={8}>
                 <Upload accept=".ics,text/calendar" showUploadList={false} beforeUpload={(file) => {
-                  void importCalendar(file).then(setEvents).catch((e: Error) => message.error(e.message)); return false;
+                  void importCalendar(file).then(setEvents).catch((e: Error) => {
+                    if (!isAuthExpiredError(e)) message.error(e.message);
+                  }); return false;
                 }}><Button icon={<ImportOutlined />}>导入 ICS</Button></Upload>
                 <Button icon={<ExportOutlined />} onClick={() => void exportCalendar().then((blob) => saveBlob(blob, "vatica-calendar.ics"))}>导出 ICS</Button>
               </Flex>

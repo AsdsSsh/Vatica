@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { App, Flex, Form, Input, InputNumber, Modal, Select, Switch, Typography } from "antd";
-import { fetchIntegrationSettings, saveIntegrationSettings, type IntegrationSettingsView } from "../api";
+import { fetchIntegrationSettings, isAuthExpiredError, saveIntegrationSettings, type IntegrationSettingsView } from "../api";
 
 /**
  * 平台外部服务设置（迭代 14：用户邮箱已迁入个人工作台）：AMAP / 数据库。
@@ -23,7 +23,7 @@ export default function IntegrationSettingsPanel({ open, onClose }: Props) {
     try {
       setView(await fetchIntegrationSettings());
     } catch (e) {
-      message.error(`读取外部服务配置失败：${(e as Error).message}`);
+      if (!isAuthExpiredError(e)) message.error(`读取外部服务配置失败：${(e as Error).message}`);
     }
   }
 
@@ -68,7 +68,7 @@ export default function IntegrationSettingsPanel({ open, onClose }: Props) {
       message.success("已保存；AMAP 与数据库配置重启后端后生效");
       onClose();
     } catch (e) {
-      message.error((e as Error).message);
+      if (!isAuthExpiredError(e)) message.error((e as Error).message);
     } finally {
       setBusy(false);
     }

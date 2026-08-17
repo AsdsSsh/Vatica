@@ -40,6 +40,8 @@ import {
   fetchUserModelSlots,
   getEphemeralUserModelKey,
   streamChat,
+  AUTH_EXPIRED_EVENT,
+  isAuthExpiredError,
   type EphemeralCredential,
   type FilePermissionRequest,
   type ModelInfo,
@@ -49,6 +51,8 @@ import {
 import { loadPermissionPolicy } from "../permissions";
 import { useBackendStatus } from "../backendStatus";
 import { useTheme } from "../theme";
+import { useAuth } from "../auth";
+import { accountStorageScope } from "../accountScope";
 import Markdown from "./Markdown";
 import VaticaMark from "./VaticaMark";
 import ModelSettings from "./ModelSettings";
@@ -82,6 +86,10 @@ interface Props {
 
 const MODEL_STORAGE_KEY = "vatica.model";
 
+function modelStorageKey(): string {
+  return `${MODEL_STORAGE_KEY}.${accountStorageScope()}`;
+}
+
 const SUGGESTIONS: { title: string; prompt: string }[] = [
   { title: "整理下周日程", prompt: "帮我查看下周的日历，并为每场会议创建准备待办" },
   { title: "生成周报 Word", prompt: "读取工作区里的本周工作记录，生成一份周报 Word 和统计 Excel" },
@@ -91,7 +99,7 @@ const SUGGESTIONS: { title: string; prompt: string }[] = [
 
 function readSavedModel(): string | undefined {
   try {
-    return localStorage.getItem(MODEL_STORAGE_KEY) ?? undefined;
+    return localStorage.getItem(modelStorageKey()) ?? undefined;
   } catch {
     return undefined;
   }
@@ -112,6 +120,7 @@ export default function ChatPanel({
   const { token } = theme.useToken();
   const { isDark, setMode } = useTheme();
   const { online, refresh: refreshBackend } = useBackendStatus();
+  const { status: authStatus, user: authUser } = useAuth();
 
   const [input, setInput] = useState("");
   const [model, setModel] = useState<string | undefined>(readSavedModel);
@@ -138,6 +147,8 @@ export default function ChatPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<TextAreaRef>(null);
   const autoScrollRef = useRef(true);
+  /** 迭代 14.5：账号身份变化时清掉上一账号的用户模型/模型选择等内存态。 */
+  const previousAuthKey = useRef<string | null>(null);
 
   /** 智能滚动（U2）：只有原本就在底部附近才跟随新内容；用户上翻历史不拽回。 */
   function scrollToBottom(behavior: ScrollBehavior) {
@@ -181,9 +192,32 @@ export default function ChatPanel({
       });
   }, []);
 
+  const authKey =
+    authStatus === "authenticated" || authStatus === "local"
+      ? `${authUser?.orgId ?? "-"}:${authUser?.userId ?? "-"}`
+      : authStatus;
+
+  // 迭代 14.5：账号切换/退出时清空上一账号的用户模型内存态；登录/本地模式自动重载
   useEffect(() => {
-    if (online) loadModels();
-  }, [online, loadModels]);
+    if (previousAuthKey.current !== null && previousAuthKey.current !== authKey) {
+      setUserSlots([]);
+      setModel((prev) => (prev?.startsWith("user:") ? undefined : prev));
+    }
+    previousAuthKey.current = authKey;
+    if (online && authStatus !== "loading" && authStatus !== "anonymous") {
+      void loadModels();
+    }
+  }, [authKey, authStatus, online, loadModels]);
+
+  // 迭代 14.5：401 统一收口后的全局提示只在此处弹一次，各请求组件不再重复弹错
+  useEffect(() => {
+    const onExpired = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: string }>).detail;
+      message.error(detail?.message ?? "登录已过期，请重新登录。");
+    };
+    window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
+  }, [message]);
 
   /** 展示权限弹窗并等待用户决定（streamChat 暂停在此处，后端工具同步等待）。 */
   function askPermission(request: FilePermissionRequest): Promise<boolean> {
@@ -257,6 +291,10 @@ export default function ChatPanel({
   async function send() {
     const text = input.trim();
     if (!text || streaming || !online) return;
+    if (authStatus === "anonymous") {
+      message.error("请先在右上角账号中登录，再使用云端能力。");
+      return;
+    }
     const selectedSlot = model?.startsWith("user:")
       ? userSlots.find((s) => `user:${s.id}` === model)
       : undefined;
@@ -310,7 +348,9 @@ export default function ChatPanel({
       const reason =
         (e as Error)?.name === "AbortError"
           ? "（已停止）"
-          : `（连接中断：${(e as Error)?.message ?? "未知错误"}）`;
+          : isAuthExpiredError(e)
+            ? "（登录已过期，请重新登录）"
+            : `（连接中断：${(e as Error)?.message ?? "未知错误"}）`;
       onUpdateMessage(assistantId, (m) => ({ ...m, note: reason }));
     } finally {
       abortRef.current = null;
@@ -368,7 +408,7 @@ export default function ChatPanel({
               const next = String(v);
               setModel(next);
               try {
-                localStorage.setItem(MODEL_STORAGE_KEY, next);
+                localStorage.setItem(modelStorageKey(), next);
               } catch {
                 // 忽略
               }
@@ -409,7 +449,7 @@ export default function ChatPanel({
               onClick={() => setMode(isDark ? "light" : "dark")}
             />
           </Tooltip>
-          <Tooltip title="账号（登录/注册）">
+          <Tooltip title={authStatus === "authenticated" && authUser ? `账号：${authUser.username}` : "账号（登录/注册）"}>
             <Button
               size="small"
               type="text"

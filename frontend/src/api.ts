@@ -7,6 +7,8 @@
  * - 错误契约：后端非 2xx 统一返回 {message}，这里解析并透出服务端消息。
  */
 
+import { accountStorageScope } from "./accountScope";
+
 // ═══ API 基地址（迭代 9 I9-4 可配置）═══
 
 const DEFAULT_API_BASE = "http://localhost:8080";
@@ -45,8 +47,25 @@ export function setApiBase(base: string): void {
 // ═══ 请求与错误契约（迭代 9 I9-3）═══
 
 // ═══ 鉴权（迭代 13 I13-7）：JWT 存 localStorage，请求统一带 Authorization ═══
+// 迭代 14.5：受保护请求首次 401 统一清理 Token + 广播，避免各组件各写一套逻辑。
 
 const AUTH_TOKEN_KEY = "vatica.authToken";
+/** 无效/过期 Token 被统一清理后广播的事件（只对同一 token 广播一次，避免重复弹错）。 */
+export const AUTH_EXPIRED_EVENT = "vatica-auth-expired";
+
+export class AuthExpiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AuthExpiredError";
+  }
+}
+
+/** 统一 401 收口后抛出的错误；组件捕获到它时不再各自弹错（登录态消息由全局监听负责）。 */
+export function isAuthExpiredError(e: unknown): boolean {
+  return e instanceof Error && e.name === "AuthExpiredError";
+}
+
+let handledExpiredToken: string | null = null;
 
 export function getAuthToken(): string | null {
   try {
@@ -58,8 +77,12 @@ export function getAuthToken(): string | null {
 
 export function setAuthToken(token: string | null): void {
   try {
-    if (token) localStorage.setItem(AUTH_TOKEN_KEY, token);
-    else localStorage.removeItem(AUTH_TOKEN_KEY);
+    if (token) {
+      localStorage.setItem(AUTH_TOKEN_KEY, token);
+      handledExpiredToken = null;
+    } else {
+      localStorage.removeItem(AUTH_TOKEN_KEY);
+    }
   } catch {
     // 隐私模式忽略
   }
@@ -74,13 +97,27 @@ export interface AuthResponse {
   role: string;
 }
 
+/** 当前用户契约（迭代 14.5 I14.5-1，后端 CurrentUserResponse）。 */
+export interface CurrentUserView {
+  userId: number | null;
+  username: string;
+  orgId: number | null;
+  role: string;
+  expiresAt: string | null;
+}
+
+/** 服务端身份是账号态唯一事实源；鉴权关闭时返回 role=LOCAL 的本地学习模式。 */
+export async function fetchCurrentUser(): Promise<CurrentUserView> {
+  return (await getJson("/api/auth/me")).json();
+}
+
 export async function registerUser(username: string, password: string, orgName?: string): Promise<AuthResponse> {
   const res = await fetch(`${getApiBase()}/api/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password, orgName }),
   });
-  if (!res.ok) throw await toRequestError(res, "注册失败");
+  if (!res.ok) throw await toRequestError(res, "注册失败", false);
   return res.json();
 }
 
@@ -90,7 +127,7 @@ export async function loginUser(username: string, password: string): Promise<Aut
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password }),
   });
-  if (!res.ok) throw await toRequestError(res, "登录失败");
+  if (!res.ok) throw await toRequestError(res, "登录失败", false);
   return res.json();
 }
 
@@ -99,8 +136,12 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-/** 后端统一错误响应 {message}；解析失败（网关/网络层非 JSON 体）时回退兜底文案。 */
-async function toRequestError(res: Response, fallback: string): Promise<Error> {
+/**
+ * 后端统一错误响应 {message}；解析失败（网关/网络层非 JSON 体）时回退兜底文案。
+ * 迭代 14.5：handleAuthExpiry=true 时对受保护请求的 401 统一收口——
+ * 清 Token、广播 vatica-auth-changed / vatica-auth-expired，且同一 token 只处理一次。
+ */
+async function toRequestError(res: Response, fallback: string, handleAuthExpiry = true): Promise<Error> {
   let message = "";
   try {
     const body = (await res.json()) as { message?: string };
@@ -108,7 +149,17 @@ async function toRequestError(res: Response, fallback: string): Promise<Error> {
   } catch {
     // 保持兜底文案
   }
-  return new Error(message || fallback);
+  const text = message || fallback;
+  if (res.status === 401 && handleAuthExpiry) {
+    const token = getAuthToken();
+    if (token && handledExpiredToken !== token) {
+      handledExpiredToken = token;
+      setAuthToken(null);
+      window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, { detail: { message: text } }));
+    }
+    return new AuthExpiredError(text);
+  }
+  return new Error(text);
 }
 
 async function post(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
@@ -185,10 +236,15 @@ export interface MailConnectionSettings {
 
 const EPHEMERAL_MAIL_KEY = "vatica.ephemeralMail";
 
+/** 迭代 14.5：邮箱本机密码按账号分桶，切换账号后不会读到上一账号的密码。 */
+function ephemeralMailStorageKey(): string {
+  return `${EPHEMERAL_MAIL_KEY}.${accountStorageScope()}`;
+}
+
 export function saveEphemeralMailCredential(value: MailConnectionSettings | null): void {
   try {
-    if (value) localStorage.setItem(EPHEMERAL_MAIL_KEY, JSON.stringify(value));
-    else localStorage.removeItem(EPHEMERAL_MAIL_KEY);
+    if (value) localStorage.setItem(ephemeralMailStorageKey(), JSON.stringify(value));
+    else localStorage.removeItem(ephemeralMailStorageKey());
   } catch {
     // 隐私模式忽略
   }
@@ -196,7 +252,7 @@ export function saveEphemeralMailCredential(value: MailConnectionSettings | null
 
 export function getEphemeralMailCredential(): MailConnectionSettings | undefined {
   try {
-    const raw = localStorage.getItem(EPHEMERAL_MAIL_KEY);
+    const raw = localStorage.getItem(ephemeralMailStorageKey());
     return raw ? (JSON.parse(raw) as MailConnectionSettings) : undefined;
   } catch {
     return undefined;
@@ -209,10 +265,15 @@ export function getEphemeralMailCredential(): MailConnectionSettings | undefined
 
 const USER_MODEL_KEY_PREFIX = "vatica.userModelKey.";
 
+/** 迭代 14.5：仅本机模型 Key 按账号分桶，A 的 Key 不会被 B 的槽位读到。 */
+function userModelStorageKey(slotId: string): string {
+  return `${USER_MODEL_KEY_PREFIX}${accountStorageScope()}.${slotId}`;
+}
+
 export function saveEphemeralUserModelKey(slotId: string, apiKey: string | null): void {
   try {
-    if (apiKey) localStorage.setItem(USER_MODEL_KEY_PREFIX + slotId, apiKey);
-    else localStorage.removeItem(USER_MODEL_KEY_PREFIX + slotId);
+    if (apiKey) localStorage.setItem(userModelStorageKey(slotId), apiKey);
+    else localStorage.removeItem(userModelStorageKey(slotId));
   } catch {
     // 隐私模式忽略
   }
@@ -220,7 +281,7 @@ export function saveEphemeralUserModelKey(slotId: string, apiKey: string | null)
 
 export function getEphemeralUserModelKey(slotId: string): string | null {
   try {
-    return localStorage.getItem(USER_MODEL_KEY_PREFIX + slotId);
+    return localStorage.getItem(userModelStorageKey(slotId));
   } catch {
     return null;
   }

@@ -21,6 +21,7 @@ import {
   createUserModelSlot,
   deleteUserModelSlot,
   fetchUserModelSlots,
+  isAuthExpiredError,
   saveEphemeralUserModelKey,
   setUserModelCredentialMode,
   updateUserModelSlot,
@@ -66,7 +67,11 @@ export default function UserModelsPanel({ open, onClose, onChanged }: Props) {
     try {
       setSlots(await fetchUserModelSlots());
     } catch (e) {
-      message.error(`读取我的模型失败：${(e as Error).message}`);
+      if (isAuthExpiredError(e)) {
+        setSlots([]);
+      } else {
+        message.error(`读取我的模型失败：${(e as Error).message}`);
+      }
     }
   }
 
@@ -121,7 +126,7 @@ export default function UserModelsPanel({ open, onClose, onChanged }: Props) {
       await reload();
       onChanged?.();
     } catch (e) {
-      message.error((e as Error).message);
+      if (!isAuthExpiredError(e)) message.error((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -139,7 +144,7 @@ export default function UserModelsPanel({ open, onClose, onChanged }: Props) {
       await reload();
       onChanged?.();
     } catch (e) {
-      message.error((e as Error).message);
+      if (!isAuthExpiredError(e)) message.error((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -251,7 +256,7 @@ export default function UserModelsPanel({ open, onClose, onChanged }: Props) {
                           await reload();
                           onChanged?.();
                         } catch (e) {
-                          message.error((e as Error).message);
+                          if (!isAuthExpiredError(e)) message.error((e as Error).message);
                         }
                       }}
                     >

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { App, Button, Flex, Modal, Select, Space, Switch, Typography } from "antd";
 import { CloudServerOutlined } from "@ant-design/icons";
-import { fetchPermissionPolicy, saveServerPermissionPolicy } from "../api";
+import { fetchPermissionPolicy, isAuthExpiredError, saveServerPermissionPolicy } from "../api";
 import {
   DEFAULT_PERMISSION_POLICY,
   loadPermissionPolicy,
@@ -42,7 +42,7 @@ export default function FilePermissionSettings({ open, onClose }: Props) {
       message.success("文件权限已保存到服务端");
       onClose();
     } catch (e) {
-      message.error((e as Error).message);
+      if (!isAuthExpiredError(e)) message.error((e as Error).message);
     } finally {
       setLoading(false);
     }

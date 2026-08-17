@@ -19,6 +19,7 @@ import {
 import { DeleteOutlined, EditOutlined, PlusOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import {
   fetchModelSlots,
+  isAuthExpiredError,
   saveModelSlots,
   testModelConnection,
   type ModelSlot,
@@ -73,7 +74,9 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
         setSlots(list);
         setBaseline(JSON.stringify(list));
       })
-      .catch((e) => message.error(`读取模型配置失败：${(e as Error).message}`));
+      .catch((e: Error) => {
+        if (!isAuthExpiredError(e)) message.error(`读取模型配置失败：${e.message}`);
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -151,7 +154,7 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
       onSaved();
       onClose();
     } catch (e) {
-      message.error(`保存失败：${(e as Error).message}`);
+      if (!isAuthExpiredError(e)) message.error(`保存失败：${(e as Error).message}`);
     } finally {
       setSaving(false);
     }
@@ -167,7 +170,7 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
         message.error(`连接失败：${result.error ?? "未知错误"}`);
       }
     } catch (e) {
-      message.error(`测试请求失败：${(e as Error).message}`);
+      if (!isAuthExpiredError(e)) message.error(`测试请求失败：${(e as Error).message}`);
     } finally {
       setTestingId(null);
     }

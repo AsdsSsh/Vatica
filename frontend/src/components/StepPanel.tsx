@@ -28,6 +28,7 @@ import {
   denyPermissionRequest,
   fetchRecentTasks,
   fetchTaskDetail,
+  isAuthExpiredError,
   subscribeTaskEvents,
   taskAction,
   type FilePermissionRequest,
@@ -38,6 +39,7 @@ import {
 } from "../api";
 import { loadPermissionPolicy } from "../permissions";
 import { useBackendStatus } from "../backendStatus";
+import { useAuth } from "../auth";
 import PermissionRequestModal from "./PermissionRequestModal";
 
 const STATUS_COLOR: Record<string, string> = {
@@ -89,6 +91,7 @@ function relativeTime(createdAt: string): string {
 export default function StepPanel() {
   const { message } = App.useApp();
   const { online } = useBackendStatus();
+  const { status: authStatus, user: authUser } = useAuth();
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<TaskDetail | null>(null);
@@ -145,14 +148,29 @@ export default function StepPanel() {
       const list = await fetchRecentTasks();
       setTasks(list);
       syncSubscriptions(list);
-    } catch {
-      message.error("任务列表加载失败（后端未启动？）");
+    } catch (e) {
+      if (!isAuthExpiredError(e)) message.error("任务列表加载失败（后端未启动？）");
     }
   }, [syncSubscriptions]);
 
+  // 迭代 14.5：账号切换/退出时清空任务列表、详情与全部 SSE 订阅，再按新账号重新加载
+  const authKey =
+    authStatus === "authenticated" || authStatus === "local"
+      ? `${authUser?.orgId ?? "-"}:${authUser?.userId ?? "-"}`
+      : authStatus;
   useEffect(() => {
-    refreshTasks();
-  }, [refreshTasks]);
+    taskSubscriptions.current.forEach((close) => close());
+    taskSubscriptions.current.clear();
+    setTasks([]);
+    setDetail(null);
+    setSelectedId(null);
+    setApprovalOpen(false);
+    setPermissionRequests([]);
+    prevStatus.current = null;
+    if (online && authStatus !== "loading" && authStatus !== "anonymous") {
+      void refreshTasks();
+    }
+  }, [authKey, online, authStatus, refreshTasks]);
 
   // 组件卸载时关闭全部任务订阅
   useEffect(() => {
@@ -163,13 +181,6 @@ export default function StepPanel() {
     };
   }, []);
 
-  // 迭代 12 I12-2：后端恢复在线后自动刷新任务列表（模型列表由 ChatPanel 负责）
-  useEffect(() => {
-    if (online) {
-      void refreshTasks();
-    }
-  }, [online, refreshTasks]);
-
   // 选中任务 → 拉详情（SSE 订阅由 syncSubscriptions 统一维护，切换任务不再断权限通道）
   useEffect(() => {
     if (!selectedId) return;
@@ -178,7 +189,9 @@ export default function StepPanel() {
       .then((d) => {
         if (!disposed) setDetail(d);
       })
-      .catch(() => message.error("任务详情加载失败"));
+      .catch((e: Error) => {
+        if (!disposed && !isAuthExpiredError(e)) message.error("任务详情加载失败");
+      });
     return () => {
       disposed = true;
     };
@@ -209,7 +222,7 @@ export default function StepPanel() {
       prevStatus.current = null; // 让审批弹窗对新任务触发一次
       refreshTasks();
     } catch (e) {
-      message.error((e as Error).message);
+      if (!isAuthExpiredError(e)) message.error((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -227,7 +240,7 @@ export default function StepPanel() {
         await denyPermissionRequest(request.requestId);
       }
     } catch (e) {
-      message.error(`权限请求处理失败：${(e as Error).message}`);
+      if (!isAuthExpiredError(e)) message.error(`权限请求处理失败：${(e as Error).message}`);
     } finally {
       setPermissionDeciding(false);
       setPermissionRequests((prev) => prev.filter((p) => p.requestId !== request.requestId));
@@ -244,7 +257,7 @@ export default function StepPanel() {
       setDetail(d); // 动作响应先落一次（SSE 事件随后持续更新）
       refreshTasks();
     } catch (e) {
-      message.error((e as Error).message);
+      if (!isAuthExpiredError(e)) message.error((e as Error).message);
     } finally {
       setBusy(false);
     }

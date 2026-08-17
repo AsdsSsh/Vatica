@@ -1,11 +1,20 @@
 package com.example.vatica;
 
+import static org.hamcrest.Matchers.containsString;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.test.web.servlet.MockMvc;
 
 /**
  * 全上下文冒烟（迭代 5 起加 H2 数据源——测试零外部依赖）：
  * MCP 客户端禁用（暂无远程连接配置，测试环境不依赖外部 MCP 服务）；数据源用 H2 MySQL 兼容模式。
+ * 迭代 14.5：补 OpenAPI 契约断言——/api/auth/me 与 CurrentUserResponse 进入契约。
  */
 @SpringBootTest(properties = {
         "spring.ai.mcp.client.enabled=false",
@@ -14,10 +23,24 @@ import org.springframework.boot.test.context.SpringBootTest;
         "spring.datasource.username=sa",
         "spring.datasource.password=",
         "spring.jpa.hibernate.ddl-auto=create-drop" })
+@AutoConfigureMockMvc
 class VaticaApplicationTests {
+
+	@Autowired
+	MockMvc mvc;
 
 	@Test
 	void contextLoads() {
+	}
+
+	/** 迭代 14.5：后端契约（DTO → OpenAPI）是前端 api.ts 的唯一事实来源。 */
+	@Test
+	void openApiContainsCurrentUserContract() throws Exception {
+		mvc.perform(get("/v3/api-docs"))
+				.andExpect(status().isOk())
+				.andExpect(content().string(containsString("\"/api/auth/me\"")))
+				.andExpect(content().string(containsString("CurrentUserResponse")))
+				.andExpect(content().string(containsString("\"expiresAt\"")));
 	}
 
 }

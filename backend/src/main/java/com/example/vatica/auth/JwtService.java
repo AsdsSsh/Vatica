@@ -5,7 +5,6 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
-import java.util.Map;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -32,7 +31,8 @@ public final class JwtService {
         this.signingKey = derive(masterKey.rawKey());
     }
 
-    public record Claims(Long userId, Long orgId, String role, String username) {
+    /** token 声明（迭代 14.5：补 expiresAt，供 /api/auth/me 回显到期时间）。 */
+    public record Claims(Long userId, Long orgId, String role, String username, Instant expiresAt) {
     }
 
     public String issue(AppUser user) {
@@ -81,7 +81,7 @@ public final class JwtService {
                 throw new IllegalArgumentException("token 内容非法");
             }
             return new Claims(userId, orgId, node.path("role").asText("MEMBER"),
-                    node.path("name").asText(""));
+                    node.path("name").asText(""), Instant.ofEpochSecond(exp));
         } catch (IllegalArgumentException e) {
             throw e;
         } catch (Exception e) {

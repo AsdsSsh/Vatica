@@ -3,6 +3,7 @@
  * 桌面应用重启后会话列表与消息不丢；超限按"最多会话数 / 单会话消息数 / 单条消息字符数"裁剪。
  */
 import { createSession, type ChatMessage, type ChatSession } from "./types";
+import { accountStorageScope } from "./accountScope";
 
 const LEGACY_STORAGE_KEY = "vatica.sessions.v1";
 const STORAGE_KEY_PREFIX = "vatica.sessions.v2.";
@@ -62,23 +63,7 @@ export function saveSessions(sessions: ChatSession[]): void {
   }
 }
 
-/** 本地快照按 JWT 的 org/user 分桶；这里只用于缓存命名，权限仍以服务端验签结果为准。 */
+/** 本地快照按 JWT 的 org/user 分桶（迭代 14.5：统一走 accountStorageScope）；权限仍以服务端验签结果为准。 */
 function storageKey(): string {
-  const token = localStorage.getItem("vatica.authToken");
-  if (!token) return STORAGE_KEY_PREFIX + "local";
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3) throw new Error("invalid token");
-    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-    const payload = JSON.parse(atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, "="))) as {
-      sub?: number | string;
-      org?: number | string;
-    };
-    if (payload.sub == null || payload.org == null) throw new Error("missing subject");
-    return `${STORAGE_KEY_PREFIX}org-${payload.org}.user-${payload.sub}`;
-  } catch {
-    // 畸形/旧格式 token 也独立分桶，避免回退到本地缓存造成账号间内容泄漏。
-    const parts = token.split(".");
-    return STORAGE_KEY_PREFIX + "token-" + (parts[parts.length - 1]?.slice(0, 16) ?? "unknown");
-  }
+  return STORAGE_KEY_PREFIX + accountStorageScope();
 }

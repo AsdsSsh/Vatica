@@ -370,6 +370,14 @@ curl localhost:8080/api/task/不存在   # {"message":"操作失败：任务不�
 - **部署开关**：本地学习模式可保持 `vatica.auth.enabled=false`；云部署必须设为 `true`。工作区根可通过 `vatica.workspace.base-dir` 配置
 - 详细设计、DDL 审阅稿和验证记录见 `docs/20260816_feature_tenant_isolation/`
 
+### 迭代 14.5：登录态与账号中心收口
+
+- **身份唯一事实源**：`GET /api/auth/me` 返回 `userId/username/orgId/role/expiresAt`；鉴权关闭时返回 `role=LOCAL` 的本地学习模式，前端不再用“本地是否存在 Token”判断登录
+- **账号页双态**：未登录显示登录/注册；已登录回显用户名、组织、角色与 Token 到期时间，支持退出登录；本地模式显示明确说明
+- **401 统一收口**：受保护请求首次 401 自动清 Token、广播 `vatica-auth-expired` 并只弹一次全局提示，其余组件按 `AuthExpiredError` 静默
+- **账号切换隔离**：会话、任务、用户模型、个人工作台在切换账号时先清旧账号内存态再加载新账号；会话缓存、仅本机模型 Key、邮箱本机密码与模型选择均按 `org/user` 分桶
+- 回归：`mvn test` 281 → **285** 全绿 + `npm run build` 通过 + headless Chrome 云账号 13 项 / 本地模式 2 项冒烟通过（脚本 `frontend/smoke-auth.mjs`）
+
 ### 迭代 2.5 新增配置（application.yml，均可调）
 
 | 配置 | 默认 | 说明 |
