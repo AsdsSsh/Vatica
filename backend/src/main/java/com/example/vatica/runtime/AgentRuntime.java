@@ -2,8 +2,14 @@ package com.example.vatica.runtime;
 
 import java.util.List;
 
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.tool.ToolCallback;
+
 import com.example.vatica.auth.RequestIdentity;
+import com.example.vatica.config.ModelSlot;
 import com.example.vatica.permission.FilePermissionPolicy;
+import com.example.vatica.runtime.AgentRegistry.AgentDefinition;
+import com.example.vatica.task.TaskPlan.TaskStep;
 
 /**
  * 迭代 15 I15-17：双运行时边界——LegacyRuntime（Spring AI 现状实现）与
@@ -16,6 +22,40 @@ public interface AgentRuntime {
 
     record PovResult(String answer, List<String> toolTraces, long durationMs) {
     }
+
+    /** 迭代 17A：Vatica 编排层交给运行时的单步骤快照。 */
+    record StepRequest(String goal, TaskStep step, List<String> context, String reflectionFeedback,
+            RequestIdentity identity, ToolCallback[] toolCallbacks, ChatClient legacyClient,
+            ModelSlot modelSlot, AgentDefinition agent, String sessionId) {
+        public StepRequest {
+            context = context == null ? List.of() : List.copyOf(context);
+            toolCallbacks = toolCallbacks == null ? new ToolCallback[0] : toolCallbacks.clone();
+        }
+
+        @Override
+        public ToolCallback[] toolCallbacks() {
+            return toolCallbacks.clone();
+        }
+    }
+
+    /** 直连模型运行时返回的最小用量快照；null 表示 provider 未返回 usage。 */
+    record StepUsage(int inputTokens, int outputTokens, int totalTokens, long cacheReadTokens) {
+    }
+
+    record StepResult(String answer, List<String> toolTraces, long durationMs, StepUsage usage) {
+        public StepResult {
+            answer = answer == null ? "" : answer;
+            toolTraces = toolTraces == null ? List.of() : List.copyOf(toolTraces);
+        }
+
+        /** LegacyRuntime 的用量由 Spring AI UsageAdvisor 负责，保持旧构造兼容。 */
+        public StepResult(String answer, List<String> toolTraces, long durationMs) {
+            this(answer, toolTraces, durationMs, null);
+        }
+    }
+
+    /** 生产任务主链的唯一运行时入口；业务状态不进入运行时。 */
+    StepResult executeStep(StepRequest request);
 
     /** 单 Agent 工具链 POC：目标 + 身份 + 权限快照 → 最终回答与工具轨迹。 */
     PovResult runSingleAgent(String goal, RequestIdentity identity, FilePermissionPolicy permission);

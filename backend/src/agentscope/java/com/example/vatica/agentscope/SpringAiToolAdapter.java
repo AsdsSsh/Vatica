@@ -2,7 +2,6 @@ package com.example.vatica.agentscope;
 
 import java.util.Map;
 
-import com.example.vatica.trace.TraceSanitizer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.agentscope.core.message.ToolResultBlock;
@@ -54,7 +53,8 @@ final class SpringAiToolAdapter implements AgentTool {
             try {
                 String input = mapper.writeValueAsString(param.getInput());
                 String output = delegate.call(input);
-                return ToolResultBlock.text(TraceSanitizer.outputSummary(output, null));
+                // 模型必须看到完整工具结果；脱敏摘要只用于外层 trace，不能污染业务数据。
+                return ToolResultBlock.text(output == null ? "" : output);
             } catch (RuntimeException e) {
                 return ToolResultBlock.error(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
             }

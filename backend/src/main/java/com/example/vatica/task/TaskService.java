@@ -15,7 +15,6 @@ import org.slf4j.LoggerFactory;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
@@ -26,7 +25,6 @@ import org.springframework.transaction.annotation.Transactional;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 
-import com.example.vatica.agent.ExecutorAgent;
 import com.example.vatica.agent.JudgeAgent;
 import com.example.vatica.agent.PlannerAgent;
 import com.example.vatica.auth.RequestIdentity;
@@ -35,11 +33,17 @@ import com.example.vatica.auth.TenantChannels;
 import com.example.vatica.config.EphemeralCredential;
 import com.example.vatica.config.JudgeProperties;
 import com.example.vatica.config.ModelRegistry;
+import com.example.vatica.config.ModelSlot;
 import com.example.vatica.context.ContextBudget;
 import com.example.vatica.mail.MailConnectionSettings;
 import com.example.vatica.permission.FilePermissionPolicy;
 import com.example.vatica.permission.FilePermissionRequestService;
 import com.example.vatica.permission.PermissionBoundToolCallbacks;
+import com.example.vatica.runtime.AgentRegistry;
+import com.example.vatica.runtime.AgentRuntime;
+import com.example.vatica.runtime.AgentRuntimeFactory;
+import com.example.vatica.runtime.AgentRuntimeProperties;
+import com.example.vatica.runtime.AgentToolCatalog;
 import com.example.vatica.task.TaskPlan.TaskStep;
 import com.example.vatica.trace.AgentTraceRecord;
 import com.example.vatica.trace.AgentTraceRecordRepository;
@@ -47,6 +51,7 @@ import com.example.vatica.trace.ReasoningContext;
 import com.example.vatica.trace.TraceContext;
 import com.example.vatica.trace.TracedToolCallbacks;
 import com.example.vatica.tool.RetryableToolCallbacks;
+import com.example.vatica.usage.DirectModelUsageRecorder;
 import com.example.vatica.usage.UsageContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -70,19 +75,21 @@ public class TaskService {
     private static final Logger log = LoggerFactory.getLogger(TaskService.class);
 
     private final PlannerAgent plannerAgent;
-    private final ExecutorAgent executorAgent;
     private final JudgeAgent judgeAgent;
     private final JudgeProperties judgeProps;
     private final TaskRecordRepository repository;
     private final ObjectMapper mapper;
     private final Executor parallelExecutor;
     private final TaskEventPublisher eventPublisher;
-    private final ToolCallbackProvider vaticaTools;
+    private final AgentToolCatalog agentTools;
     private final FilePermissionRequestService permissionRequests;
     private final ModelRegistry registry;
     private final AgentTraceRecordRepository traceRepository;
     private final TaskBlackboard blackboard;
     private final ContextBudget contextBudget;
+    private final AgentRuntimeFactory runtimeFactory;
+    private final AgentRegistry agentRegistry;
+    private final DirectModelUsageRecorder directUsage;
 
     /** 终止标志（迭代 7 I7-4）：取消接口与执行线程的协作式协调点（波次粒度生效）。 */
     private final Map<String, AtomicBoolean> cancelFlags = new ConcurrentHashMap<>();
@@ -97,26 +104,29 @@ public class TaskService {
     @PersistenceContext
     private EntityManager entityManager;
 
-    public TaskService(PlannerAgent plannerAgent, ExecutorAgent executorAgent, JudgeAgent judgeAgent,
+    public TaskService(PlannerAgent plannerAgent, JudgeAgent judgeAgent,
             JudgeProperties judgeProps, TaskRecordRepository repository, ObjectMapper mapper,
             @Qualifier("taskParallelExecutor") Executor parallelExecutor, TaskEventPublisher eventPublisher,
-            ToolCallbackProvider vaticaTools, FilePermissionRequestService permissionRequests,
+            AgentToolCatalog agentTools, FilePermissionRequestService permissionRequests,
             ModelRegistry registry, AgentTraceRecordRepository traceRepository, TaskBlackboard blackboard,
-            ContextBudget contextBudget) {
+            ContextBudget contextBudget, AgentRuntimeFactory runtimeFactory, AgentRegistry agentRegistry,
+            DirectModelUsageRecorder directUsage) {
         this.plannerAgent = plannerAgent;
-        this.executorAgent = executorAgent;
         this.judgeAgent = judgeAgent;
         this.judgeProps = judgeProps;
         this.repository = repository;
         this.mapper = mapper;
         this.parallelExecutor = parallelExecutor;
         this.eventPublisher = eventPublisher;
-        this.vaticaTools = vaticaTools;
+        this.agentTools = agentTools;
         this.permissionRequests = permissionRequests;
         this.registry = registry;
         this.traceRepository = traceRepository;
         this.blackboard = blackboard;
         this.contextBudget = contextBudget;
+        this.runtimeFactory = runtimeFactory;
+        this.agentRegistry = agentRegistry;
+        this.directUsage = directUsage;
     }
 
     /** 创建任务：Planner 拆解 → PENDING 待审批计划。 */
@@ -442,7 +452,7 @@ public class TaskService {
             FilePermissionPolicy policy = parsePermission(record.getPermissionJson());
             RequestIdentity identity = identityOf(record);
             ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
-                    vaticaTools, policy, TenantChannels.task(identity, record.getId()), identity,
+                    agentTools::callbacks, policy, TenantChannels.task(identity, record.getId()), identity,
                     ephemeralMailCredentials.get(record.getId()));
             // 迭代 15 I15-3：retryable 工具错误重试 1 次（权限最内层，重试也重新校验身份/权限）
             callbacks = new RetryableToolCallbacks().wrap(callbacks);
@@ -451,13 +461,33 @@ public class TaskService {
                     TenantChannels.task(identity, record.getId()), record.getId(), step.getId(),
                     identity.userId(), identity.orgId(), true);
             callbacks = new TracedToolCallbacks(mapper, traceRepository).wrap(callbacks, trace);
+            // 迭代 17A：角色工具白名单是机械门禁，位于 prompt 之外，模型无法请求未注册工具。
+            var agent = agentRegistry.resolve(step.getAgent());
+            step.setAgent(agent.id());
+            callbacks = agentRegistry.allowedCallbacks(agent.id(), callbacks);
             boolean platformQuota = !"EPHEMERAL".equals(record.getModelSource());
             UsageContext.set(usageSnapshot(record, "EXECUTOR", step.getId(), "LOW",
                     contextBudget.executorTokens(), platformQuota));
             String result;
             try {
-                result = executorAgent.executeStep(record.getGoal(), step, context, callbacks,
-                        clientFor(record, true), reflection);
+                AgentRuntime runtime = runtimeFactory.runtime();
+                AgentRuntime.StepRequest request = new AgentRuntime.StepRequest(
+                        record.getGoal(), step, context, reflection, identity, callbacks,
+                        clientFor(record, true), modelSlotFor(record, agent.modelCapability()), agent,
+                        record.getId() + ":step:" + step.getId());
+                if (AgentRuntimeProperties.AGENTSCOPE.equals(runtime.name())) {
+                    DirectModelUsageRecorder.Reservation reservation = directUsage.begin();
+                    try {
+                        AgentRuntime.StepResult stepResult = runtime.executeStep(request);
+                        directUsage.complete(reservation, stepResult.usage(), stepResult.durationMs());
+                        result = stepResult.answer();
+                    } catch (RuntimeException | Error e) {
+                        directUsage.abort(reservation);
+                        throw e;
+                    }
+                } else {
+                    result = runtime.executeStep(request).answer();
+                }
             } finally {
                 UsageContext.clear();
             }
@@ -477,11 +507,23 @@ public class TaskService {
             if (credential == null) {
                 throw new IllegalStateException("操作失败：本任务的临时模型凭据已失效（服务重启），请重新提交任务。");
             }
-            return registry.ephemeralClient(credential, withTools,
+            return registry.ephemeralClient(credential, false,
                     withTools ? com.example.vatica.config.ReasoningMode.LOW
                             : com.example.vatica.config.ReasoningMode.HIGH);
         }
-        return withTools ? registry.executorClient() : registry.judgeClient();
+        return withTools ? registry.taskExecutorClient() : registry.judgeClient();
+    }
+
+    /** AgentScope 使用与 legacy 执行角色一致的模型槽位；临时凭据仍只从任务内存快照读取。 */
+    private ModelSlot modelSlotFor(TaskRecord record, String capability) {
+        if ("EPHEMERAL".equals(record.getModelSource())) {
+            EphemeralCredential credential = ephemeralCredentials.get(record.getId());
+            if (credential == null) {
+                throw new IllegalStateException("操作失败：本任务的临时模型凭据已失效（服务重启），请重新提交任务。");
+            }
+            return credential.toSlot();
+        }
+        return registry.activeSlotFor(capability);
     }
 
     /** REVIEW 段：Judge 评分 → PASS 交付 DONE；FAIL 自动返工（限次）或超限 NEEDS_REVISION；评测异常 FAILED。 */

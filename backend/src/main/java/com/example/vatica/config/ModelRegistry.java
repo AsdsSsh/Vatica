@@ -109,6 +109,11 @@ public class ModelRegistry {
         return roleFailoverClient(ModelSlot.CAP_CHAT_REASON, true, ReasoningMode.LOW);
     }
 
+    /** 迭代 17A：任务工具全部按请求注入，客户端不再携带可绕过角色门禁的默认 MCP 工具。 */
+    public ChatClient taskExecutorClient() {
+        return roleFailoverClient(ModelSlot.CAP_CHAT_REASON, false, ReasoningMode.LOW);
+    }
+
     /** 规划专用客户端：无工具 + HIGH 深思（规划只分解不执行）。 */
     public ChatClient plannerClient() {
         return roleFailoverClient(ModelSlot.CAP_PLANNER, false, ReasoningMode.HIGH);
@@ -184,6 +189,12 @@ public class ModelRegistry {
                 .filter(s -> s.capabilities().contains(capability))
                 .toList();
         return matching.isEmpty() ? List.of(defaultSlot()) : matching;
+    }
+
+    /** 迭代 17A：AgentScope 按执行角色取得当前生效槽位，沿用既有能力标签与故障转移偏移。 */
+    public ModelSlot activeSlotFor(String capability) {
+        List<ModelSlot> slots = slotsForRole(capability);
+        return slots.get(currentRoleOffset(capability) % slots.size());
     }
 
     /**

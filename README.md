@@ -12,7 +12,7 @@
 
 | 端 | 技术 |
 |---|---|
-| 后端 | Spring Boot 4.1 + Spring AI 2.0 + MCP Java SDK + Apache POI + JavaMail（Java 21，虚拟线程并行） |
+| 后端 | Spring Boot 4.1 + Spring AI 2.0 + AgentScope Java 2.0.2 + MCP Java SDK + Apache POI + JavaMail（Java 21，虚拟线程并行） |
 | 前端 | Tauri 2 + React 19 + Ant Design 6 + @uiw/react-md-editor（桌面应用） |
 | 模型 | DeepSeek（OpenAI 兼容 API，可换通义千问） |
 | 测试 | JUnit 5 + AssertJ（工具层/状态机单测）+ GreenMail（邮件集成测试） |
@@ -36,6 +36,15 @@
 2. `cd backend && mvn spring-boot:run`
 3. 验证流式对话：
    `curl -N -X POST localhost:8080/api/chat/stream -H "Content-Type: application/json" -d "{\"message\":\"你好\"}"`
+
+迭代 17A 起，普通 Maven 构建已包含 AgentScope，任务步骤默认由 `AgentScopeRuntime` 执行，
+无需再添加 `-Pagentscope`。若模型使用 Anthropic 协议，或需要紧急回滚，可在启动前设置：
+
+```powershell
+$env:VATICA_AGENT_RUNTIME = "legacy"   # 当前 PowerShell 会话生效
+mvn spring-boot:run
+# 需要持久化到新终端时：setx VATICA_AGENT_RUNTIME legacy
+```
 
 ### 常见坑（迭代 2.5 归档）
 
@@ -383,7 +392,7 @@ curl localhost:8080/api/task/不存在   # {"message":"操作失败：任务不�
 - **范式**：聊天显式 ReAct trace（脱敏 `agent_trace` + SSE）；任务 Reflexion（Judge 反馈注入 Executor/Planner，限 1 次重规划）；Self-Refine（retryable 错误抖动退避重试 1 次）；`ReasoningMode` 快慢分离（聊天“深思”开关）
 - **上下文**：TokenEstimator/ContextBudget/ContextTrimmer；三层会话记忆（中期摘要异步单飞 + 水位线）；`TaskBlackboard` dependsOn 最小上下文 + 滚动笔记；工具输出 8k 截断
 - **观测**：`vatica_usage` + UsageAdvisor + 平台日配额；SSE `usage` 事件；`/api/usage/today`、`/api/usage/requests/{id}`；槽位 `promptCacheKey`
-- **AgentScope 双运行时**：`-Pagentscope` 隔离构建；`AgentRuntime` / `LegacyRuntime` / `AgentScopeRuntime`；单 Agent 与双 Agent 黑板 POC 用 Qwen 真实模型 + 真实 Vatica 工具实测；生产运行时定版 **LegacyRuntime**
+- **AgentScope 双运行时（当期结论）**：`-Pagentscope` 隔离构建；`AgentRuntime` / `LegacyRuntime` / `AgentScopeRuntime`；单 Agent 与双 Agent 黑板 POC 用 Qwen 真实模型 + 真实 Vatica 工具实测；迭代 15 当时生产默认仍为 **LegacyRuntime**，迭代 17A 已切换
 - 回归：`mvn test` 285 → **341** 全绿 + `npm run build` 通过 + headless Chrome 鉴权冒烟 13 项；对照报告见 `docs/20260817_iteration15/report.md`
 
 ### 迭代 16：统一 SSE 事件网关
@@ -394,6 +403,16 @@ curl localhost:8080/api/task/不存在   # {"message":"操作失败：任务不�
 - **连接保活**：服务端每 15 秒发送 `keepalive` comment；权限请求为不可回放的一次性事件，断连由 channel cleanup 取消等待
 - **边界**：当前回放环为单实例内存实现；多实例部署前需要替换为 Redis pub/sub/stream，HTTP + SSE 契约无需变化
 - 回归：后端 `mvn test` **341 项全绿** + 前端 `npm run build` 通过
+
+### 迭代 17A：AgentScope 生产基线
+
+- **生产主链**：`TaskService` 通过统一 `AgentRuntime.executeStep` 执行步骤，默认实现为 `AgentScopeRuntime`；Planner、HITL、波次调度、Judge、JPA、多租户和权限仍由 Vatica 持有，未建立第二套状态机
+- **角色路由**：`AgentRegistry` 注册 `document / pim / workspace / research / general`；Planner 每步输出 `agent`，空值或非法值机械回退 `general`
+- **工具门禁**：本地工具与 MCP 工具先合并，再经过权限、重试、trace 装饰，最后按角色白名单裁剪；AgentScope Toolkit 只能注册裁剪后的 schema
+- **构建与回滚**：AgentScope 2.0.2 进入普通 Maven 构建，默认 `vatica.agent.runtime=agentscope`；设置 `VATICA_AGENT_RUNTIME=legacy` 并重启即可回滚。当前 AgentScope 模型适配仅支持 OpenAI 兼容协议，Anthropic 槽位暂走 legacy
+- **用量兼容**：AgentScope 直连模型的 token 用量继续写入 `vatica_usage` 并参与平台日配额；失败调用释放预留，Legacy 不重复记账
+- **验收**：零外网 OpenAI 兼容端点真实穿过 `TaskService → AgentScope ReAct → H2`，验证 `research` 仅获得 `text_stats / calculator`；完成报告见 `docs/20260818_iteration17a/report.md`
+- **回归**：后端 `mvn test` **共 354 项，0 failure、0 error、2 项真实 Qwen POC 按环境条件跳过** + 前端 `npm run build` 通过
 
 ### 迭代 2.5 新增配置（application.yml，均可调）
 

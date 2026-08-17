@@ -93,8 +93,9 @@ public class ChatConfig {
     /** 迭代 5 I5-1：Planner Agent（迭代 15 起工具清单从 ToolCallbackProvider 动态生成）。 */
     @Bean
     PlannerAgent plannerAgent(ChatClient plannerChatClient, ObjectMapper objectMapper,
-            org.springframework.ai.tool.ToolCallbackProvider vaticaTools) {
-        return new PlannerAgent(plannerChatClient, objectMapper, vaticaTools);
+            com.example.vatica.runtime.AgentToolCatalog agentTools,
+            com.example.vatica.runtime.AgentRegistry agentRegistry) {
+        return new PlannerAgent(plannerChatClient, objectMapper, agentTools::callbacks, agentRegistry);
     }
 
     /** 迭代 5：Executor Agent（复用主客户端全部工具）。 */

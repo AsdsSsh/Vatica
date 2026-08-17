@@ -49,8 +49,8 @@ class PlannerAgentTest {
     void parsesValidJsonPlan() {
         when(callSpec.content()).thenReturn("""
                 {"steps":[
-                  {"description":"读取数据文件","needsApproval":false},
-                  {"description":"发送邮件通知","needsApproval":true}
+                  {"description":"读取数据文件","agent":"workspace","needsApproval":false},
+                  {"description":"发送邮件通知","agent":"pim","needsApproval":true}
                 ]}""");
 
         TaskPlan plan = planner.plan("生成周报并邮件通知");
@@ -58,7 +58,9 @@ class PlannerAgentTest {
         assertThat(plan.getSteps()).hasSize(2);
         assertThat(plan.getSteps().get(0).getDescription()).contains("读取数据");
         assertThat(plan.getSteps().get(0).isNeedsApproval()).isFalse();
+        assertThat(plan.getSteps().get(0).getAgent()).isEqualTo("workspace");
         assertThat(plan.getSteps().get(1).isNeedsApproval()).isTrue();
+        assertThat(plan.getSteps().get(1).getAgent()).isEqualTo("pim");
     }
 
     /** markdown 代码围栏包裹的 JSON → 剥除后正常解析 */
@@ -113,6 +115,21 @@ class PlannerAgentTest {
         when(callSpec.content()).thenReturn(null);
 
         assertThat(planner.plan("目标Y").getSteps()).hasSize(1);
+    }
+
+    /** 迭代 17A：旧计划缺字段、模型输出未知角色均确定性回退 general。 */
+    @Test
+    void missingOrUnknownAgentFallsBackToGeneral() {
+        when(callSpec.content()).thenReturn("""
+                {"steps":[
+                  {"description":"A","needsApproval":false},
+                  {"description":"B","agent":"invented-role","needsApproval":false}
+                ]}""");
+
+        TaskPlan plan = planner.plan("目标");
+
+        assertThat(plan.getSteps()).extracting(TaskStep::getAgent)
+                .containsExactly("general", "general");
     }
 
     /** 归一化：步骤重编号 1..n（不信任模型编号） */

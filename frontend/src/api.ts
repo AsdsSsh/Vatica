@@ -874,6 +874,8 @@ export async function testUserMailSettings(settings?: MailConnectionSettings): P
 export interface TaskStep {
   id: number;
   description: string;
+  /** 迭代 17A：document / pim / workspace / research / general。 */
+  agent: string;
   needsApproval: boolean;
   approved: boolean;
   result: string | null;

@@ -21,13 +21,15 @@ class MailToolsTest {
 
     @BeforeEach
     void setUp() {
+        ServerSetup smtp = new ServerSetup(0, null, ServerSetup.PROTOCOL_SMTP).dynamicPort();
+        ServerSetup imap = new ServerSetup(0, null, ServerSetup.PROTOCOL_IMAP).dynamicPort();
         greenMail = new GreenMail(new ServerSetup[] {
-                new ServerSetup(3025, null, ServerSetup.PROTOCOL_SMTP),
-                new ServerSetup(3143, null, ServerSetup.PROTOCOL_IMAP) });
+                smtp, imap });
         greenMail.setUser("user@example.com", "user@example.com", "password");
         greenMail.start();
         mailTools = new MailTools(new MailProperties(
-                "localhost", 3143, "localhost", 3025, "user@example.com", "password"));
+                "localhost", greenMail.getImap().getPort(),
+                "localhost", greenMail.getSmtp().getPort(), "user@example.com", "password"));
     }
 
     @AfterEach

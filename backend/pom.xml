@@ -76,6 +76,38 @@
 			<artifactId>spring-ai-starter-mcp-client</artifactId>
 		</dependency>
 
+		<!-- 迭代 17A：AgentScope 进入生产默认构建；Vatica 继续持有状态机/权限/HITL。 -->
+		<dependency>
+			<groupId>io.agentscope</groupId>
+			<artifactId>agentscope-core</artifactId>
+			<version>2.0.2</version>
+			<!-- Spring AI 2.0 使用 victools 5（Jackson 3）；AgentScope 的 4.38 会覆盖它并破坏工具 schema。 -->
+			<exclusions>
+				<exclusion>
+					<groupId>com.github.victools</groupId>
+					<artifactId>jsonschema-generator</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>com.github.victools</groupId>
+					<artifactId>jsonschema-module-jackson</artifactId>
+				</exclusion>
+				<!-- AgentScope 自带 MCP SDK 0.17；项目的 Spring AI 2.0 需要 MCP SDK 2.0。 -->
+				<exclusion>
+					<groupId>io.modelcontextprotocol.sdk</groupId>
+					<artifactId>mcp</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>com.networknt</groupId>
+					<artifactId>json-schema-validator</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<dependency>
+			<groupId>io.agentscope</groupId>
+			<artifactId>agentscope-extensions-model-openai</artifactId>
+			<version>2.0.2</version>
+		</dependency>
+
 		<!-- 迭代 9 I9-2：前后端分离——OpenAPI 契约（springdoc）。
 		     3.1.0 面向 Spring Boot 4（模块化 starter 命名：spring-boot-tomcat / spring-boot-health）；
 		     Swagger UI 开发期可视化契约，/v3/api-docs 为前后端唯一事实来源 -->
@@ -142,55 +174,32 @@
 		</dependency>
 	</dependencies>
 
-	<!-- 迭代 15 I15-16：AgentScope 隔离构建——默认 profile 不加载 AgentScope 依赖；
-	     需要运行 POC/对照实验时显式 -Pagentscope，并把 src/agentscope/java 加入源码根。 -->
-	<profiles>
-		<profile>
-			<id>agentscope</id>
-			<dependencies>
-				<dependency>
-					<groupId>io.agentscope</groupId>
-					<artifactId>agentscope-core</artifactId>
-					<version>2.0.2</version>
-				</dependency>
-				<dependency>
-					<groupId>io.agentscope</groupId>
-					<artifactId>agentscope-extensions-model-openai</artifactId>
-					<version>2.0.2</version>
-				</dependency>
-			</dependencies>
-			<build>
-				<plugins>
-					<plugin>
-						<groupId>org.codehaus.mojo</groupId>
-						<artifactId>build-helper-maven-plugin</artifactId>
-						<version>3.6.1</version>
-						<executions>
-							<execution>
-								<id>add-agentscope-source</id>
-								<phase>generate-sources</phase>
-								<goals><goal>add-source</goal></goals>
-								<configuration>
-									<sources><source>src/agentscope/java</source></sources>
-								</configuration>
-							</execution>
-							<execution>
-								<id>add-agentscope-test-source</id>
-								<phase>generate-test-sources</phase>
-								<goals><goal>add-test-source</goal></goals>
-								<configuration>
-									<sources><source>src/agentscope/test</source></sources>
-								</configuration>
-							</execution>
-						</executions>
-					</plugin>
-				</plugins>
-			</build>
-		</profile>
-	</profiles>
-
 	<build>
 		<plugins>
+			<!-- AgentScope 源码保留独立目录以标清框架边界，但已属于默认生产构建。 -->
+			<plugin>
+				<groupId>org.codehaus.mojo</groupId>
+				<artifactId>build-helper-maven-plugin</artifactId>
+				<version>3.6.1</version>
+				<executions>
+					<execution>
+						<id>add-agentscope-source</id>
+						<phase>generate-sources</phase>
+						<goals><goal>add-source</goal></goals>
+						<configuration>
+							<sources><source>src/agentscope/java</source></sources>
+						</configuration>
+					</execution>
+					<execution>
+						<id>add-agentscope-test-source</id>
+						<phase>generate-test-sources</phase>
+						<goals><goal>add-test-source</goal></goals>
+						<configuration>
+							<sources><source>src/agentscope/test</source></sources>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>

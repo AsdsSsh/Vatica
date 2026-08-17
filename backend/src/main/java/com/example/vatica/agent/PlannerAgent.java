@@ -15,6 +15,7 @@ import org.springframework.ai.tool.ToolCallbackProvider;
 import com.example.vatica.task.ReflectionFeedback;
 import com.example.vatica.task.TaskPlan;
 import com.example.vatica.task.TaskPlan.TaskStep;
+import com.example.vatica.runtime.AgentRegistry;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -42,41 +43,50 @@ public class PlannerAgent {
 
     private static final String SYSTEM_PROMPT = """
             你是任务规划 Agent。把用户目标拆解为可执行的步骤，只输出一个 JSON 对象（不要 markdown 代码块、不要任何解释文字），格式：
-            {"steps":[{"description":"步骤描述：具体、可执行、写明要调用哪个工具","needsApproval":false,"dependsOn":[]}]}
+            {"steps":[{"description":"步骤描述：具体、可执行、写明要调用哪个工具","agent":"workspace","needsApproval":false,"dependsOn":[]}]}
             规则：
             1. 步骤 1-8 个，按执行顺序排列；
             2. 涉及发送邮件、覆盖用户已有文件、删除数据等不可逆操作的步骤，needsApproval 必须为 true，其余为 false；
             3. 涉及具体时间/地点/数字的步骤，描述里注明"数据必须来自工具返回，不得编造"；
             4. 没有先后依赖的步骤声明可并行：dependsOn 填依赖的前序步骤编号列表（从 1 开始、只能引用编号更小的步骤）；
                完全独立的步骤填 []（例如两个互不依赖的查询步骤都写 []）；省略该字段 = 默认依赖上一步（顺序执行）；
-            5. 不要发明不存在的工具，只使用"当前可用工具"清单里的工具；
-            6. 涉及用户指定的具体文件路径时，步骤描述里直接使用该路径（先 list_files 确认存在性也是可以的）；
+            5. 每个步骤必须从"当前可用角色"中选择 agent；一个步骤需要跨角色工具时拆成有依赖关系的多个步骤；
+            6. 不要发明不存在的工具，只使用"当前可用工具"清单里的工具；
+            7. 涉及用户指定的具体文件路径时，步骤描述里直接使用该路径（先 list_files 确认存在性也是可以的）；
                未授权目录会在执行时自动触发用户授权弹窗，因此**永远不要要求用户手动添加授权目录或修改权限设置**。""";
 
     private static final String REVISE_SYSTEM_PROMPT = """
             你是任务规划 Agent。上一轮计划执行后质量评测不合格，请根据反馈修订计划，只输出一个 JSON 对象
             （不要 markdown 代码块、不要任何解释文字），格式：
-            {"steps":[{"description":"步骤描述：具体、可执行、写明要调用哪个工具","needsApproval":false,"dependsOn":[]}]}
+            {"steps":[{"description":"步骤描述：具体、可执行、写明要调用哪个工具","agent":"workspace","needsApproval":false,"dependsOn":[]}]}
             修订规则：
             1. 只针对反馈中失败的步骤改进：换更合适的工具、补充校验步骤、明确数据来源或拆分过大的步骤；
             2. 仍然正确的步骤可以保留，但输出必须包含完整步骤列表（不要省略）；
             3. 不得改变任务目标、不得扩大任务范围、不得新增用户没要求的工作；
             4. 步骤 1-8 个；不可逆操作 needsApproval=true；dependsOn 规则与首次规划一致；
-            5. 只使用系统提供的工具，不要发明不存在的工具。""";
+            5. 每步必须选择当前可用角色之一；只使用系统提供的工具，不要发明不存在的工具。""";
 
     private final ChatClient plannerClient;
     private final ObjectMapper mapper;
     private final ToolCallbackProvider toolProvider;
+    private final AgentRegistry agentRegistry;
 
     public PlannerAgent(ChatClient plannerClient, ObjectMapper mapper) {
-        this(plannerClient, mapper, null);
+        this(plannerClient, mapper, null, new AgentRegistry());
     }
 
     /** 迭代 15 I15-12：工具清单从 ToolCallbackProvider 动态生成，防系统提示与注册工具漂移。 */
     public PlannerAgent(ChatClient plannerClient, ObjectMapper mapper, ToolCallbackProvider toolProvider) {
+        this(plannerClient, mapper, toolProvider, new AgentRegistry());
+    }
+
+    /** 迭代 17A：角色清单来自 AgentRegistry，模型输出统一做合法化回退。 */
+    public PlannerAgent(ChatClient plannerClient, ObjectMapper mapper, ToolCallbackProvider toolProvider,
+            AgentRegistry agentRegistry) {
         this.plannerClient = plannerClient;
         this.mapper = mapper;
         this.toolProvider = toolProvider;
+        this.agentRegistry = agentRegistry;
     }
 
     /**
@@ -109,7 +119,7 @@ public class PlannerAgent {
      * 解析失败返回上一轮计划本身（回退旧计划，不改变目标/不扩大范围）。
      */
     public TaskPlan revise(String goal, TaskPlan previous, ReflectionFeedback feedback) {
-        String revisePrompt = REVISE_SYSTEM_PROMPT + toolListSuffix();
+        String revisePrompt = REVISE_SYSTEM_PROMPT + roleListSuffix() + toolListSuffix();
         TaskPlan structured = structuredPlan(plannerClient, revisePrompt,
                 reviseUserPrompt(goal, previous, feedback));
         if (structured != null && !structured.getSteps().isEmpty()) {
@@ -128,7 +138,11 @@ public class PlannerAgent {
 
     /** 迭代 15 I15-12：系统提示 + 动态工具清单（provider 缺失时回退已知本地工具名，测试/降级友好）。 */
     private String systemPrompt() {
-        return SYSTEM_PROMPT + toolListSuffix();
+        return SYSTEM_PROMPT + roleListSuffix() + toolListSuffix();
+    }
+
+    private String roleListSuffix() {
+        return "\n当前可用角色：" + agentRegistry.plannerPrompt() + "。";
     }
 
     private String toolListSuffix() {
@@ -184,7 +198,7 @@ public class PlannerAgent {
     }
 
     /** 归一化：重编号、截断超长计划、清空结果字段、解析依赖（迭代 6）。 */
-    private static TaskPlan normalize(TaskPlan plan) {
+    private TaskPlan normalize(TaskPlan plan) {
         List<TaskStep> steps = plan.getSteps();
         if (steps.size() > MAX_STEPS) {
             steps = steps.subList(0, MAX_STEPS);
@@ -193,6 +207,7 @@ public class PlannerAgent {
         for (TaskStep step : steps) {
             step.setId(i);
             step.setResult(null);
+            step.setAgent(agentRegistry.normalizeId(step.getAgent()));
             step.setDependsOn(normalizeDependencies(step.getDependsOn(), i));
             i++;
         }

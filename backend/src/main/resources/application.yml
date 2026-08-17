@@ -70,6 +70,9 @@ spring:
 vatica:
   app:
     state-dir: ./.vatica
+  # 迭代 17A：生产默认 AgentScope；紧急回滚设置 VATICA_AGENT_RUNTIME=legacy 后重启。
+  agent:
+    runtime: ${VATICA_AGENT_RUNTIME:agentscope}
   # 迭代 14：云端文件固定落在 {base-dir}/{orgId}/{userId}/，客户端只传相对路径
   workspace:
     base-dir: ./workspace

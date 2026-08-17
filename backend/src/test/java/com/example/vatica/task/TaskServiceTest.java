@@ -48,6 +48,7 @@ import com.example.vatica.task.TaskPlan.TaskStep;
  */
 @SpringBootTest(properties = {
         "spring.ai.mcp.client.enabled=false",
+        "vatica.agent.runtime=legacy",
         "spring.datasource.url=jdbc:h2:mem:vatica-task;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",

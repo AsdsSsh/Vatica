@@ -6,6 +6,7 @@ import java.util.List;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 
+import com.example.vatica.agent.ExecutorAgent;
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
 import com.example.vatica.auth.TenantChannels;
@@ -24,16 +25,32 @@ public class LegacyRuntime implements AgentRuntime {
     private final ModelRegistry registry;
     private final ToolCallbackProvider vaticaTools;
     private final ObjectMapper mapper;
+    private final ExecutorAgent executorAgent;
 
     public LegacyRuntime(ModelRegistry registry, ToolCallbackProvider vaticaTools, ObjectMapper mapper) {
+        this(registry, vaticaTools, mapper, new ExecutorAgent(registry.defaultClient()));
+    }
+
+    public LegacyRuntime(ModelRegistry registry, ToolCallbackProvider vaticaTools, ObjectMapper mapper,
+            ExecutorAgent executorAgent) {
         this.registry = registry;
         this.vaticaTools = vaticaTools;
         this.mapper = mapper;
+        this.executorAgent = executorAgent;
     }
 
     @Override
     public String name() {
         return "legacy";
+    }
+
+    @Override
+    public StepResult executeStep(StepRequest request) {
+        long start = System.nanoTime();
+        String answer = RequestIdentityContext.callWith(request.identity(), () -> executorAgent.executeStep(
+                request.goal(), request.step(), request.context(), request.toolCallbacks(),
+                request.legacyClient(), request.reflectionFeedback()));
+        return new StepResult(answer, List.of(), (System.nanoTime() - start) / 1_000_000);
     }
 
     @Override

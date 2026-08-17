@@ -50,6 +50,8 @@ public class TaskPlan {
 
         private int id;
         private String description;
+        /** 迭代 17A：执行角色 id；旧计划缺失或非法值在执行前回退 general。 */
+        private String agent;
         private boolean needsApproval;
         /** 用户已审批通过（执行流据此跳过审批点；返工需重新审批，迭代 5.5 语义）。 */
         private boolean approved;
@@ -83,6 +85,14 @@ public class TaskPlan {
 
         public void setDescription(String description) {
             this.description = description;
+        }
+
+        public String getAgent() {
+            return agent;
+        }
+
+        public void setAgent(String agent) {
+            this.agent = agent;
         }
 
         public boolean isNeedsApproval() {

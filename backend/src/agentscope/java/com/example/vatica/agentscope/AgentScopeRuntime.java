@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
@@ -13,7 +14,9 @@ import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.config.ModelSlot;
 import com.example.vatica.permission.FilePermissionPolicy;
 import com.example.vatica.permission.PermissionBoundToolCallbacks;
+import com.example.vatica.runtime.AgentRegistry;
 import com.example.vatica.runtime.AgentRuntime;
+import com.example.vatica.trace.TraceSanitizer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.agentscope.core.ReActAgent;
@@ -21,6 +24,7 @@ import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.message.ToolUseBlock;
 import io.agentscope.core.message.UserMessage;
+import io.agentscope.core.model.ChatUsage;
 import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.ToolChoice;
@@ -48,16 +52,57 @@ public class AgentScopeRuntime implements AgentRuntime {
     private final ModelRegistry registry;
     private final ToolCallbackProvider vaticaTools;
     private final ObjectMapper mapper;
+    private final AgentRegistry agentRegistry;
+    private final Function<ModelSlot, Model> modelFactory;
 
     public AgentScopeRuntime(ModelRegistry registry, ToolCallbackProvider vaticaTools, ObjectMapper mapper) {
+        this(registry, vaticaTools, mapper, new AgentRegistry());
+    }
+
+    public AgentScopeRuntime(ModelRegistry registry, ToolCallbackProvider vaticaTools, ObjectMapper mapper,
+            AgentRegistry agentRegistry) {
+        this(registry, vaticaTools, mapper, agentRegistry, AgentScopeRuntime::buildModel);
+    }
+
+    AgentScopeRuntime(ModelRegistry registry, ToolCallbackProvider vaticaTools, ObjectMapper mapper,
+            AgentRegistry agentRegistry, Function<ModelSlot, Model> modelFactory) {
         this.registry = registry;
         this.vaticaTools = vaticaTools;
         this.mapper = mapper;
+        this.agentRegistry = agentRegistry;
+        this.modelFactory = modelFactory;
     }
 
     @Override
     public String name() {
         return "agentscope";
+    }
+
+    /** 迭代 17A：生产任务步骤入口。工具已由 Vatica 完成权限、重试、Trace 与角色裁剪。 */
+    @Override
+    public StepResult executeStep(StepRequest request) {
+        long start = System.nanoTime();
+        return RequestIdentityContext.callWith(request.identity(), () -> {
+            List<String> traces = new ArrayList<>();
+            var role = request.agent() == null
+                    ? agentRegistry.resolve(request.step().getAgent()) : request.agent();
+            String system = """
+                    你是 Vatica 执行 Agent。只执行当前步骤，只使用工具返回的数据，工具未返回的数据不得编造。
+                    工具失败时如实说明原因，不得假装成功。身份、权限、审批与任务状态由 Vatica 管理。
+                    """ + role.systemPrompt();
+            ToolKitContext kit = buildToolkit(request.modelSlot(), request.toolCallbacks(), traces,
+                    "vatica-" + role.id(), system, Set.of(), request.sessionId());
+            try {
+                AgentReply reply = callAgent(kit.agent(), stepPrompt(request), request.identity(), request.sessionId());
+                ChatUsage usage = reply.usage();
+                StepUsage stepUsage = usage == null ? null : new StepUsage(
+                        usage.getInputTokens(), usage.getOutputTokens(), usage.getTotalTokens(),
+                        usage.getCachedTokens());
+                return new StepResult(reply.answer(), traces, (System.nanoTime() - start) / 1_000_000, stepUsage);
+            } finally {
+                kit.agent().close();
+            }
+        });
     }
 
     @Override
@@ -68,7 +113,7 @@ public class AgentScopeRuntime implements AgentRuntime {
             ToolKitContext kit = buildToolkit(identity, permission, traces,
                     "vatica-poc", "你是 Vatica 执行 Agent。只使用工具返回的数据。", Set.of());
             try {
-                String answer = callAgent(kit.agent(), goal, identity);
+                String answer = callAgent(kit.agent(), goal, identity).answer();
                 return new PovResult(answer, traces, (System.nanoTime() - start) / 1_000_000);
             } finally {
                 kit.agent().close();
@@ -88,10 +133,10 @@ public class AgentScopeRuntime implements AgentRuntime {
             ToolKitContext workspace = buildToolkit(identity, permission, traces,
                     "vatica-workspace", "你是工作台 Agent，只使用 calculator 工具。", Set.of("calculator"));
             try {
-                String note = callAgent(document.agent(), "分析并总结：\n" + goal, identity);
+                String note = callAgent(document.agent(), "分析并总结：\n" + goal, identity).answer();
                 String summary = callAgent(workspace.agent(),
                         "原始目标：\n" + goal + "\n\n【黑板 note】\n" + note
-                                + "\n\n请基于 note 给出最终结果，必要时调用 calculator。", identity);
+                                + "\n\n请基于 note 给出最终结果，必要时调用 calculator。", identity).answer();
                 return new PovResult(summary, traces, (System.nanoTime() - start) / 1_000_000);
             } finally {
                 document.agent().close();
@@ -124,26 +169,39 @@ public class AgentScopeRuntime implements AgentRuntime {
         });
     }
 
-    private String callAgent(ReActAgent agent, String message, RequestIdentity identity) {
+    private AgentReply callAgent(ReActAgent agent, String message, RequestIdentity identity) {
+        return callAgent(agent, message, identity, "poc-" + UUID.randomUUID());
+    }
+
+    private AgentReply callAgent(ReActAgent agent, String message, RequestIdentity identity, String sessionId) {
         RuntimeContext context = RuntimeContext.builder()
                 .userId(String.valueOf(identity.userId()))
-                .sessionId("poc-" + UUID.randomUUID())
+                .sessionId(sessionId)
                 .build();
         var reply = agent.call(java.util.List.of(new UserMessage(message)), context).block();
-        return reply == null || reply.getTextContent() == null ? "" : reply.getTextContent();
+        return reply == null
+                ? new AgentReply("", null)
+                : new AgentReply(reply.getTextContent() == null ? "" : reply.getTextContent(), reply.getChatUsage());
     }
 
     private ToolKitContext buildToolkit(RequestIdentity identity, FilePermissionPolicy permission,
             List<String> traces, String agentName, String sysPrompt, Set<String> allowedTools) {
         ModelSlot slot = registry.defaultSlot();
-        Model model = buildModel(slot);
-        Toolkit toolkit = new Toolkit();
-        toolkit.setChunkCallback((use, result) -> traces.add(agentName + ":" + use.getName()
-                + " -> " + (result.getOutput().isEmpty() ? "(empty)" : result.getOutput().get(0).toString())
-                + " [" + result.getState() + "]"));
         String channel = TenantChannels.chat(identity, "poc-agentscope");
         ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
                 vaticaTools, permission, channel, identity, null);
+        return buildToolkit(slot, callbacks, traces, agentName, sysPrompt, allowedTools, "poc-session");
+    }
+
+    private ToolKitContext buildToolkit(ModelSlot slot, ToolCallback[] callbacks, List<String> traces,
+            String agentName, String sysPrompt, Set<String> allowedTools, String sessionId) {
+        Model model = modelFactory.apply(slot);
+        Toolkit toolkit = new Toolkit();
+        toolkit.setChunkCallback((use, result) -> {
+            String output = result.getOutput().isEmpty() ? "(empty)" : result.getOutput().get(0).toString();
+            traces.add(agentName + ":" + use.getName() + " -> "
+                    + TraceSanitizer.outputSummary(output, null) + " [" + result.getState() + "]");
+        });
         List<String> registered = new ArrayList<>();
         for (ToolCallback callback : callbacks) {
             String toolName = callback.getToolDefinition().name();
@@ -153,29 +211,26 @@ public class AgentScopeRuntime implements AgentRuntime {
             toolkit.registerAgentTool(new SpringAiToolAdapter(callback, mapper));
             registered.add(toolName);
         }
-        GenerateOptions.Builder options = GenerateOptions.builder().reasoningEffort("none");
-        if (registered.size() == 1) {
-            options.toolChoice(new ToolChoice.Specific(registered.get(0)));
-        } else {
-            options.toolChoice(new ToolChoice.Auto());
-        }
+        GenerateOptions.Builder options = GenerateOptions.builder().reasoningEffort("none")
+                .toolChoice(new ToolChoice.Auto());
         ReActAgent agent = ReActAgent.builder()
                 .name(agentName)
                 .sysPrompt(sysPrompt)
                 .model(model)
                 .toolkit(toolkit)
-                .maxIters(5)
-                .defaultSessionId("poc-session")
+                .maxIters(8)
+                .defaultSessionId(sessionId)
                 .generateOptions(options.build())
                 .build();
-        log.info("AgentScope POC agent={} toolkit={} schemas={}",
+        log.info("AgentScope agent={} toolkit={} schemas={}",
                 agentName, registered, toolkit.getToolSchemas().size());
         return new ToolKitContext(toolkit, agent);
     }
 
-    private Model buildModel(ModelSlot slot) {
+    private static Model buildModel(ModelSlot slot) {
         if (!ModelSlot.PROTOCOL_OPENAI.equals(slot.protocol())) {
-            throw new IllegalArgumentException("操作失败：AgentScope POC 当前仅支持 OpenAI 兼容协议槽位。");
+            throw new IllegalArgumentException("操作失败：AgentScope 当前仅支持 OpenAI 兼容协议槽位；"
+                    + "可临时设置 VATICA_AGENT_RUNTIME=legacy 使用 Anthropic 槽位。");
         }
         boolean deepseek = slot.baseUrl() != null
                 && slot.baseUrl().toLowerCase(java.util.Locale.ROOT).contains("deepseek");
@@ -189,6 +244,23 @@ public class AgentScopeRuntime implements AgentRuntime {
                 .build();
     }
 
+    private static String stepPrompt(StepRequest request) {
+        StringBuilder prompt = new StringBuilder("任务目标：").append(request.goal()).append('\n');
+        if (!request.context().isEmpty()) {
+            prompt.append("依赖步骤结果与任务笔记（参考，不要重复执行）：\n");
+            for (String item : request.context()) {
+                prompt.append("- ").append(item).append('\n');
+            }
+        }
+        if (request.reflectionFeedback() != null && !request.reflectionFeedback().isBlank()) {
+            prompt.append("上一轮质量评测反馈：\n").append(request.reflectionFeedback())
+                    .append("\n本轮必须针对性修复，但不得改变目标或扩大范围。\n");
+        }
+        return prompt.append("现在执行步骤（第 ").append(request.step().getId()).append(" 步）：")
+                .append(request.step().getDescription())
+                .append("\n完成后用一句话总结本步骤结果（含关键数据）。").toString();
+    }
+
     @SuppressWarnings("unchecked")
     private Map<String, Object> readMap(String json) {
         try {
@@ -199,5 +271,8 @@ public class AgentScopeRuntime implements AgentRuntime {
     }
 
     private record ToolKitContext(Toolkit toolkit, ReActAgent agent) {
+    }
+
+    private record AgentReply(String answer, ChatUsage usage) {
     }
 }

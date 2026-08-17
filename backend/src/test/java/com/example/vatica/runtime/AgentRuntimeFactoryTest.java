@@ -1,35 +1,34 @@
 package com.example.vatica.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.ToolCallbackProvider;
 
+import com.example.vatica.agent.ExecutorAgent;
 import com.example.vatica.config.ModelRegistry;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-/** 迭代 15 I15-17：默认 legacy；agentscope 未随默认 profile 构建时快速失败并提示。 */
+/** 迭代 17A：默认 agentscope，legacy 仍可配置回滚。 */
 class AgentRuntimeFactoryTest {
 
     @Test
-    void defaultsToLegacyRuntime() {
+    void defaultsToAgentScopeRuntime() {
         AgentRuntimeFactory factory = new AgentRuntimeFactory(mock(ModelRegistry.class),
                 mock(ToolCallbackProvider.class), new ObjectMapper(),
-                new AgentRuntimeProperties(null));
+                new AgentRuntimeProperties(null), mock(ExecutorAgent.class), new AgentRegistry());
 
-        assertThat(factory.runtime().name()).isEqualTo("legacy");
+        assertThat(factory.runtime().name()).isEqualTo("agentscope");
+        assertThat(factory.runtime()).isSameAs(factory.runtime());
     }
 
     @Test
-    void agentscopeWithoutProfileFailsWithActionableMessage() {
+    void explicitLegacyRuntimeRemainsAvailableForRollback() {
         AgentRuntimeFactory factory = new AgentRuntimeFactory(mock(ModelRegistry.class),
                 mock(ToolCallbackProvider.class), new ObjectMapper(),
-                new AgentRuntimeProperties("agentscope"));
+                new AgentRuntimeProperties("legacy"), mock(ExecutorAgent.class), new AgentRegistry());
 
-        assertThatThrownBy(factory::runtime)
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("agentscope");
+        assertThat(factory.runtime().name()).isEqualTo("legacy");
     }
 }
