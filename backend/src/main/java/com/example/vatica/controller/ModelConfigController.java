@@ -56,7 +56,7 @@ public class ModelConfigController {
                 ? "…" + (key.length() <= 4 ? key : key.substring(key.length() - 4))
                 : null;
         return new ModelSlotView(slot.id(), slot.name(), slot.protocol(), slot.baseUrl(), slot.model(),
-                slot.temperature(), slot.enabled(), set, hint);
+                slot.temperature(), slot.enabled(), slot.capabilities(), slot.promptCacheKey(), set, hint);
     }
 
     /** 连通性测试：测试的是界面当前编辑的槽位内容，不要求先保存。 */

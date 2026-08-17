@@ -11,11 +11,14 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import com.example.vatica.trace.AgentTraceRecord;
+import com.example.vatica.trace.AgentTraceRecordRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * 任务接口（迭代 5 I5-3；迭代 5.5 返工；迭代 7 终止 + 步骤级进度事件）：
  * 创建任务（一句话）→ 审批计划/步骤 → 查询进度 → 人工返工 → 终止 → SSE 订阅进度。
+ * 迭代 15 I15-1：新增任务执行轨迹查询（脱敏摘要级）。
  *
  * <p>注意（已知边界）：审批接口<b>同步</b>执行到下一个审批点或终态才返回；
  * 步骤级实时进度经 {@code GET /{id}/events}（SSE）推送，订阅即回放当前快照。
@@ -24,14 +27,23 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 @RequestMapping("/api/task")
 public class TaskController {
 
+    /** 迭代 15 I15-1：agent_trace 查询契约。 */
+    public record AgentTraceView(String id, Integer stepId, String traceId, String toolName,
+            String inputSummary, String outputSummary, int outputLength, long durationMs,
+            String status, String error, String createdAt) {
+    }
+
     private final TaskService taskService;
     private final TaskEventPublisher eventPublisher;
     private final ObjectMapper mapper;
+    private final AgentTraceRecordRepository traceRepository;
 
-    public TaskController(TaskService taskService, TaskEventPublisher eventPublisher, ObjectMapper mapper) {
+    public TaskController(TaskService taskService, TaskEventPublisher eventPublisher, ObjectMapper mapper,
+            AgentTraceRecordRepository traceRepository) {
         this.taskService = taskService;
         this.eventPublisher = eventPublisher;
         this.mapper = mapper;
+        this.traceRepository = traceRepository;
     }
 
     /** 一句话创建任务：Planner 拆解 → 返回计划（PENDING 待审批）；迭代 11 起携带权限快照，迭代 13 支持临时凭据。 */
@@ -76,6 +88,21 @@ public class TaskController {
     @GetMapping("/{id}")
     public TaskDetailDto get(@PathVariable String id) {
         return detail(taskService.get(id));
+    }
+
+    /** 迭代 15 I15-1：任务执行轨迹（先按 taskId 校验归属，再返回该任务的脱敏 trace）。 */
+    @GetMapping("/{id}/traces")
+    public List<AgentTraceView> traces(@PathVariable String id) {
+        taskService.get(id);   // 404 + 租户隔离语义与任务详情一致
+        return traceRepository.findByTaskIdOrderByCreatedAtAscIdAsc(id).stream()
+                .map(TaskController::traceView)
+                .toList();
+    }
+
+    private static AgentTraceView traceView(AgentTraceRecord r) {
+        return new AgentTraceView(r.getId(), r.getStepId(), r.getTraceId(), r.getToolName(),
+                r.getInputSummary(), r.getOutputSummary(), r.getOutputLength(), r.getDurationMs(),
+                r.getStatus(), r.getError(), r.getCreatedAt() == null ? null : r.getCreatedAt().toString());
     }
 
     /** 最近任务列表。 */

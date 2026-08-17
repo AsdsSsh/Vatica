@@ -9,6 +9,7 @@ import {
   List,
   Modal,
   Space,
+  Table,
   Tag,
   Typography,
 } from "antd";
@@ -17,6 +18,7 @@ import {
   ClockCircleOutlined,
   ExclamationCircleOutlined,
   CloudOutlined,
+  FileSearchOutlined,
   PlusOutlined,
   ReloadOutlined,
   StopOutlined,
@@ -28,9 +30,11 @@ import {
   denyPermissionRequest,
   fetchRecentTasks,
   fetchTaskDetail,
+  fetchTaskTraces,
   isAuthExpiredError,
   subscribeTaskEvents,
   taskAction,
+  type AgentTraceView,
   type FilePermissionRequest,
   type TaskDetail,
   type TaskSummary,
@@ -101,6 +105,11 @@ export default function StepPanel() {
   const [permissionRequests, setPermissionRequests] = useState<FilePermissionRequest[]>([]);
   const [permissionDeciding, setPermissionDeciding] = useState(false);
   const [permissionRemember, setPermissionRemember] = useState(true);
+  // 迭代 15 I15-1：步骤执行轨迹（agent_trace 查询弹窗）
+  const [traceOpen, setTraceOpen] = useState(false);
+  const [traceStepId, setTraceStepId] = useState<number | null>(null);
+  const [traces, setTraces] = useState<AgentTraceView[]>([]);
+  const [traceLoading, setTraceLoading] = useState(false);
   const prevStatus = useRef<string | null>(null);
   const selectedIdRef = useRef<string | null>(null);
   selectedIdRef.current = selectedId;
@@ -263,6 +272,23 @@ export default function StepPanel() {
     }
   }
 
+  /** 迭代 15 I15-1：打开某一步骤的执行轨迹（Action/Observation 脱敏摘要）。 */
+  async function openStepTraces(stepId: number) {
+    if (!selectedId) return;
+    setTraceStepId(stepId);
+    setTraceOpen(true);
+    setTraceLoading(true);
+    setTraces([]);
+    try {
+      const all = await fetchTaskTraces(selectedId);
+      setTraces(all.filter((t) => t.stepId === stepId));
+    } catch (e) {
+      if (!isAuthExpiredError(e)) message.error(`读取执行轨迹失败：${(e as Error).message}`);
+    } finally {
+      setTraceLoading(false);
+    }
+  }
+
   const steps: TaskStep[] =
     detail?.plan && typeof detail.plan === "object" && Array.isArray(detail.plan.steps)
       ? detail.plan.steps
@@ -410,6 +436,17 @@ export default function StepPanel() {
                             {s.result}
                           </Typography.Paragraph>
                         )}
+                        {done && (
+                          <Button
+                            type="link"
+                            size="small"
+                            icon={<FileSearchOutlined />}
+                            style={{ paddingInline: 0, fontSize: 11 }}
+                            onClick={() => void openStepTraces(s.id)}
+                          >
+                            这步怎么做的
+                          </Button>
+                        )}
                       </div>
                     </Flex>
                   </List.Item>
@@ -523,6 +560,55 @@ export default function StepPanel() {
             />
           </div>
         )}
+      </Modal>
+
+      {/* 迭代 15 I15-1：步骤执行轨迹（脱敏摘要级） */}
+      <Modal
+        title={`步骤 ${traceStepId ?? "-"} 执行轨迹`}
+        open={traceOpen}
+        onCancel={() => setTraceOpen(false)}
+        footer={<Button onClick={() => setTraceOpen(false)}>关闭</Button>}
+        width={860}
+      >
+        <Table<AgentTraceView>
+          size="small"
+          rowKey="id"
+          loading={traceLoading}
+          dataSource={traces}
+          pagination={false}
+          locale={{ emptyText: "该步骤还没有工具调用记录" }}
+          columns={[
+            {
+              title: "工具", dataIndex: "toolName", width: 130,
+              render: (v: string) => <Typography.Text className="vatica-mono" style={{ fontSize: 12 }}>{v}</Typography.Text>,
+            },
+            {
+              title: "状态", dataIndex: "status", width: 80,
+              render: (v: string) => (
+                <Tag color={v === "SUCCESS" ? "success" : "error"}>
+                  {v === "SUCCESS" ? "成功" : "失败"}
+                </Tag>
+              ),
+            },
+            { title: "耗时", dataIndex: "durationMs", width: 90, render: (v: number) => `${v} ms` },
+            {
+              title: "输入（脱敏摘要）", dataIndex: "inputSummary",
+              render: (v: string) => (
+                <Typography.Paragraph style={{ fontSize: 11, marginBottom: 0 }} ellipsis={{ rows: 1, expandable: true, symbol: "展开" }}>
+                  {v}
+                </Typography.Paragraph>
+              ),
+            },
+            {
+              title: "输出（头尾摘要）", dataIndex: "outputSummary",
+              render: (v: string, r) => (
+                <Typography.Paragraph style={{ fontSize: 11, marginBottom: 0 }} ellipsis={{ rows: 1, expandable: true, symbol: "展开" }}>
+                  {v || (r.error ? `失败：${r.error}` : "-")}
+                </Typography.Paragraph>
+              ),
+            },
+          ]}
+        />
       </Modal>
 
       {/* 文件权限请求弹窗（迭代 11 引入；迭代 12 I12-6 统一为共享组件） */}

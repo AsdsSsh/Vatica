@@ -36,6 +36,18 @@ public class ChatSessionRecord {
     @Column(nullable = false, length = 80)
     private String title;
 
+    /** 迭代 15 I15-9：中期滚动摘要。 */
+    @Column(columnDefinition = "TEXT")
+    private String summaryText;
+
+    /** 已并入摘要的最大消息 seq（水位线；0 = 尚未摘要）。 */
+    @Column(nullable = false)
+    private long summaryThroughSeq = 0;
+
+    /** 当前摘要的 token 估算（观测用）。 */
+    @Column(nullable = false)
+    private int summaryTokens = 0;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -68,4 +80,11 @@ public class ChatSessionRecord {
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
     public void setTitle(String title) { this.title = title; }
+
+    public String getSummaryText() { return summaryText; }
+    public void setSummaryText(String summaryText) { this.summaryText = summaryText; }
+    public long getSummaryThroughSeq() { return summaryThroughSeq; }
+    public void setSummaryThroughSeq(long summaryThroughSeq) { this.summaryThroughSeq = summaryThroughSeq; }
+    public int getSummaryTokens() { return summaryTokens; }
+    public void setSummaryTokens(int summaryTokens) { this.summaryTokens = summaryTokens; }
 }

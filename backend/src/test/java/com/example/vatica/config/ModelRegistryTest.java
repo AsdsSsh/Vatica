@@ -45,7 +45,8 @@ class ModelRegistryTest {
         UserModelService userModels = mock(UserModelService.class);
         registry = new ModelRegistry(config, credentials, userModels,
                 mcpProvider(null),
-                ToolCallingManager.builder().build());
+                ToolCallingManager.builder().build(),
+                null);   // usage advisor 在纯构建测试中不参与，生产装配由 ChatConfig 注入
     }
 
     /** OpenAI 兼容协议 → OpenAiChatModel。 */
@@ -87,7 +88,7 @@ class ModelRegistryTest {
     /**
      * 迭代 10 I10-2 回归：对话客户端（带工具）与规划/评测客户端（无工具）
      * 必须缓存隔离——旧实现缓存键不含 withTools，先构建者会被另一方复用。
-     * 规划与评测同为无工具客户端，共享同一实例是允许的（职责相同）。
+     * 迭代 15 起规划与评测按能力角色分别解析（planner/judge），实例也各自独立。
      */
     @Test
     void toolModeIsPartOfCacheKey() {
@@ -97,7 +98,7 @@ class ModelRegistryTest {
 
         assertThat(chat).isNotSameAs(planner);
         assertThat(chat).isNotSameAs(judge);
-        assertThat(planner).isSameAs(judge);
+        assertThat(planner).isNotSameAs(judge);
 
         // 各自按自己的模式缓存：再次取到的是同一实例
         assertThat(registry.defaultClient()).isSameAs(chat);
@@ -117,6 +118,25 @@ class ModelRegistryTest {
                 "https://api.deepseek.com", "deep-key", "deepseek-v4-flash", 0.9, true)));
 
         assertThat(registry.clientFor("deepseek")).isNotSameAs(first);
+    }
+
+    /** 迭代 15 I15-5：按能力标签解析角色槽位；无匹配时回退默认槽位。 */
+    @Test
+    void roleResolutionUsesCapabilityTags() {
+        config.save(List.of(
+                new ModelSlot("deepseek", "DeepSeek", ModelSlot.PROTOCOL_OPENAI,
+                        "https://api.deepseek.com", "k1", "deepseek-v4-flash", 0.7, true,
+                        List.of(ModelSlot.CAP_CHAT_FAST, ModelSlot.CAP_CHAT_REASON)),
+                new ModelSlot("claude", "Claude", ModelSlot.PROTOCOL_ANTHROPIC,
+                        "https://api.anthropic.com", "k2", "claude-sonnet-4-6", 0.3, true,
+                        List.of(ModelSlot.CAP_PLANNER, ModelSlot.CAP_JUDGE, ModelSlot.CAP_SUMMARIZER))));
+
+        assertThat(registry.slotsForRole(ModelSlot.CAP_PLANNER))
+                .extracting(ModelSlot::id).containsExactly("claude");
+        assertThat(registry.slotsForRole(ModelSlot.CAP_CHAT_FAST))
+                .extracting(ModelSlot::id).containsExactly("deepseek");
+        assertThat(registry.slotsForRole("not-a-tag"))
+                .extracting(ModelSlot::id).containsExactly("deepseek");
     }
 
     private static ObjectProvider<SyncMcpToolCallbackProvider> mcpProvider(

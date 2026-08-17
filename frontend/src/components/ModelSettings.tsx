@@ -20,6 +20,7 @@ import { DeleteOutlined, EditOutlined, PlusOutlined, ThunderboltOutlined } from 
 import {
   fetchModelSlots,
   isAuthExpiredError,
+  MODEL_CAPABILITIES,
   saveModelSlots,
   testModelConnection,
   type ModelSlot,
@@ -31,7 +32,7 @@ import {
  * 保存即生效（无需重启）；"测试连接"用的是当前编辑内容，无需先保存。
  */
 
-/** 空槽位模板（新增时按协议给默认端点）。 */
+/** 空槽位模板（新增时按协议给默认端点；默认承担全部角色能力）。 */
 function blankSlot(protocol: ModelSlot["protocol"]): ModelSlot {
   return {
     id: "",
@@ -42,6 +43,8 @@ function blankSlot(protocol: ModelSlot["protocol"]): ModelSlot {
     model: "",
     temperature: 0.7,
     enabled: true,
+    capabilities: [...MODEL_CAPABILITIES],
+    promptCacheKey: "",
     apiKeySet: false,
     apiKeyHint: null,
   };
@@ -374,6 +377,24 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
             rules={[{ required: true, message: "填端点地址" }]}
           >
             <Input placeholder="https://api.deepseek.com" />
+          </Form.Item>
+          <Form.Item
+            name="capabilities"
+            label="角色能力"
+            tooltip="该槽位可被自动路由承担的角色：聊天（快/深思）、规划、评测、摘要。未勾选时仅可手动选择。"
+          >
+            <Select
+              mode="multiple"
+              allowClear
+              options={MODEL_CAPABILITIES.map((cap) => ({ value: cap, label: cap }))}
+            />
+          </Form.Item>
+          <Form.Item
+            name="promptCacheKey"
+            label="Prompt 缓存前缀"
+            tooltip="OpenAI 兼容端点可填写稳定 system prompt 的前缀标识（留空 = 不启用）"
+          >
+            <Input placeholder="如：vatica-system-v1" allowClear />
           </Form.Item>
           <Flex gap={12}>
             <Form.Item name="model" label="模型 ID" rules={[{ required: true, message: "填模型 ID" }]} style={{ flex: 1 }}>

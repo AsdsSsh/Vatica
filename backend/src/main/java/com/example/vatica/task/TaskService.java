@@ -35,11 +35,19 @@ import com.example.vatica.auth.TenantChannels;
 import com.example.vatica.config.EphemeralCredential;
 import com.example.vatica.config.JudgeProperties;
 import com.example.vatica.config.ModelRegistry;
+import com.example.vatica.context.ContextBudget;
 import com.example.vatica.mail.MailConnectionSettings;
 import com.example.vatica.permission.FilePermissionPolicy;
 import com.example.vatica.permission.FilePermissionRequestService;
 import com.example.vatica.permission.PermissionBoundToolCallbacks;
 import com.example.vatica.task.TaskPlan.TaskStep;
+import com.example.vatica.trace.AgentTraceRecord;
+import com.example.vatica.trace.AgentTraceRecordRepository;
+import com.example.vatica.trace.ReasoningContext;
+import com.example.vatica.trace.TraceContext;
+import com.example.vatica.trace.TracedToolCallbacks;
+import com.example.vatica.tool.RetryableToolCallbacks;
+import com.example.vatica.usage.UsageContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
@@ -72,6 +80,9 @@ public class TaskService {
     private final ToolCallbackProvider vaticaTools;
     private final FilePermissionRequestService permissionRequests;
     private final ModelRegistry registry;
+    private final AgentTraceRecordRepository traceRepository;
+    private final TaskBlackboard blackboard;
+    private final ContextBudget contextBudget;
 
     /** 终止标志（迭代 7 I7-4）：取消接口与执行线程的协作式协调点（波次粒度生效）。 */
     private final Map<String, AtomicBoolean> cancelFlags = new ConcurrentHashMap<>();
@@ -90,7 +101,8 @@ public class TaskService {
             JudgeProperties judgeProps, TaskRecordRepository repository, ObjectMapper mapper,
             @Qualifier("taskParallelExecutor") Executor parallelExecutor, TaskEventPublisher eventPublisher,
             ToolCallbackProvider vaticaTools, FilePermissionRequestService permissionRequests,
-            ModelRegistry registry) {
+            ModelRegistry registry, AgentTraceRecordRepository traceRepository, TaskBlackboard blackboard,
+            ContextBudget contextBudget) {
         this.plannerAgent = plannerAgent;
         this.executorAgent = executorAgent;
         this.judgeAgent = judgeAgent;
@@ -102,6 +114,9 @@ public class TaskService {
         this.vaticaTools = vaticaTools;
         this.permissionRequests = permissionRequests;
         this.registry = registry;
+        this.traceRepository = traceRepository;
+        this.blackboard = blackboard;
+        this.contextBudget = contextBudget;
     }
 
     /** 创建任务：Planner 拆解 → PENDING 待审批计划。 */
@@ -135,13 +150,24 @@ public class TaskService {
         if (credential != null) {
             record.setModelSource("EPHEMERAL");
             ephemeralCredentials.put(record.getId(), credential);
-            TaskPlan plan = plannerAgent.plan(goal.trim(), registry.ephemeralClient(credential, false));
-            record.setPlanJson(toJson(plan));
+            UsageContext.set(usageSnapshot(record, "PLANNER", null, "HIGH", contextBudget.plannerTokens(), false));
+            try {
+                TaskPlan plan = plannerAgent.plan(goal.trim(),
+                        registry.ephemeralClient(credential, false, com.example.vatica.config.ReasoningMode.HIGH));
+                record.setPlanJson(toJson(plan));
+            } finally {
+                UsageContext.clear();
+            }
         } else {
             record.setModelSource("PLATFORM");
             record.setModelSlotId(null);
-            TaskPlan plan = plannerAgent.plan(goal.trim());
-            record.setPlanJson(toJson(plan));
+            UsageContext.set(usageSnapshot(record, "PLANNER", null, "HIGH", contextBudget.plannerTokens(), true));
+            try {
+                TaskPlan plan = plannerAgent.plan(goal.trim());
+                record.setPlanJson(toJson(plan));
+            } finally {
+                UsageContext.clear();
+            }
         }
         if (mailCredential != null) {
             ephemeralMailCredentials.put(record.getId(), mailCredential);
@@ -205,6 +231,8 @@ public class TaskService {
         record.setStatus(TaskStatus.RUNNING);
         record.setRecoverable(false);
         record.setError(null);
+        record.setLastFeedbackJson(null);
+        record.setPlanRevisionCount(0);
         repository.save(record);
         eventPublisher.publish(record, "resumed");
         executeUntilBlocked(record);
@@ -300,6 +328,8 @@ public class TaskService {
         TaskPlan plan = parse(record.getPlanJson());
         resetPlanForRerun(record, plan);
         record.setReworkCount(0);   // 人工返工重置自动返工窗口（新一轮评测循环）
+        record.setLastFeedbackJson(null);   // 迭代 15：人工返工开启新一轮反思链
+        record.setPlanRevisionCount(0);
         record.setScore(null);
         record.setVerdict(null);
         record.setError(null);
@@ -342,22 +372,32 @@ public class TaskService {
                 }
             }
             // 并行执行本波：虚拟线程 + CompletableFuture（每步骤一个 Worker Agent）
-            List<String> previous = previousResults(plan, record.getCurrentStep());
+            // 迭代 15 I15-11：每个步骤独立取黑板上下文（dependsOn 摘要 + 滚动笔记），不再共享全部前序结果
+            String reflection = reflectionPrompt(record);
             List<CompletableFuture<String>> futures = new ArrayList<>();
             try {
                 eventPublisher.publish(record, "step_running");
                 for (int idx : todo) {
                     TaskStep step = plan.getSteps().get(idx);
+                    List<String> context = blackboard.contextFor(record.getGoal(), plan, step);
                     futures.add(CompletableFuture
-                            .supplyAsync(() -> execute(record, step, previous), parallelExecutor));
+                            .supplyAsync(() -> execute(record, step, context, reflection), parallelExecutor));
                 }
                 CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
                 if (isCancelled(record.getId())) {
                     futures.forEach(f -> f.cancel(true));
                     return;   // 终止在波执行期间生效：不落进度，状态保持 CANCELLED（防旧状态覆盖）
                 }
-                for (int k = 0; k < todo.size(); k++) {
-                    plan.getSteps().get(todo.get(k)).setResult(futures.get(k).join());
+                UsageContext.set(usageSnapshot(record, "SUMMARIZER", null, "DISABLED",
+                        contextBudget.summarizerTokens(), true));
+                try {
+                    for (int k = 0; k < todo.size(); k++) {
+                        TaskStep step = plan.getSteps().get(todo.get(k));
+                        blackboard.recordStepResult(plan, step, futures.get(k).join());
+                    }
+                    blackboard.mergeWaveNotes(plan);
+                } finally {
+                    UsageContext.clear();
                 }
                 record.setPlanJson(toJson(plan));
                 record.setCurrentStep(todo.get(todo.size() - 1) + 1);
@@ -396,7 +436,7 @@ public class TaskService {
     }
 
     /** 单步骤执行包装：异常附步骤号（并行波中定位失败来源）；supplyAsync 会再包一层 CompletionException。 */
-    private String execute(TaskRecord record, TaskStep step, List<String> previous) {
+    private String execute(TaskRecord record, TaskStep step, List<String> context, String reflection) {
         try {
             // 迭代 11：把任务创建时的权限快照绑定到本次步骤的全部工具调用
             FilePermissionPolicy policy = parsePermission(record.getPermissionJson());
@@ -404,33 +444,44 @@ public class TaskService {
             ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
                     vaticaTools, policy, TenantChannels.task(identity, record.getId()), identity,
                     ephemeralMailCredentials.get(record.getId()));
-            return executorAgent.executeStep(record.getGoal(), step, previous, callbacks,
-                    clientFor(record, true));
+            // 迭代 15 I15-3：retryable 工具错误重试 1 次（权限最内层，重试也重新校验身份/权限）
+            callbacks = new RetryableToolCallbacks().wrap(callbacks);
+            // 迭代 15 I15-1：权限包装在内层，trace 在最外层看到真实耗时与最终结果
+            TraceContext.Snapshot trace = new TraceContext.Snapshot(UUID.randomUUID().toString(),
+                    TenantChannels.task(identity, record.getId()), record.getId(), step.getId(),
+                    identity.userId(), identity.orgId(), true);
+            callbacks = new TracedToolCallbacks(mapper, traceRepository).wrap(callbacks, trace);
+            boolean platformQuota = !"EPHEMERAL".equals(record.getModelSource());
+            UsageContext.set(usageSnapshot(record, "EXECUTOR", step.getId(), "LOW",
+                    contextBudget.executorTokens(), platformQuota));
+            String result;
+            try {
+                result = executorAgent.executeStep(record.getGoal(), step, context, callbacks,
+                        clientFor(record, true), reflection);
+            } finally {
+                UsageContext.clear();
+            }
+            // 迭代 15 I15-7：执行器思考摘要也进 agent_trace（不存全文，与工具 trace 同源可查询）
+            persistThinkingTrace(record, step, identity, trace, ReasoningContext.take());
+            return result;
         } catch (RuntimeException e) {
             throw new IllegalStateException("步骤 " + step.getId() + " 执行失败：" + e.getMessage(), e);
         }
     }
 
-    /** 迭代 13 I13-5：按任务模型来源解析客户端；临时凭据仅内存，缺失即失败。 */
+    /** 迭代 13 I13-5：按任务模型来源解析客户端；临时凭据仅内存，缺失即失败。
+     *  迭代 15 I15-4：平台槽位走 executorClient（LOW）/judgeClient（HIGH）。 */
     private ChatClient clientFor(TaskRecord record, boolean withTools) {
         if ("EPHEMERAL".equals(record.getModelSource())) {
             EphemeralCredential credential = ephemeralCredentials.get(record.getId());
             if (credential == null) {
                 throw new IllegalStateException("操作失败：本任务的临时模型凭据已失效（服务重启），请重新提交任务。");
             }
-            return registry.ephemeralClient(credential, withTools);
+            return registry.ephemeralClient(credential, withTools,
+                    withTools ? com.example.vatica.config.ReasoningMode.LOW
+                            : com.example.vatica.config.ReasoningMode.HIGH);
         }
-        return withTools ? registry.defaultClient() : registry.judgeClient();
-    }
-
-    /** 当前步之前所有已完成步骤的结果（按序，波内并行步骤共享的只读上下文）。 */
-    private static List<String> previousResults(TaskPlan plan, int currentStep) {
-        List<String> previous = new ArrayList<>();
-        for (int i = 0; i < currentStep; i++) {
-            String result = plan.getSteps().get(i).getResult();
-            previous.add(result == null ? "" : result);
-        }
-        return previous;
+        return withTools ? registry.executorClient() : registry.judgeClient();
     }
 
     /** REVIEW 段：Judge 评分 → PASS 交付 DONE；FAIL 自动返工（限次）或超限 NEEDS_REVISION；评测异常 FAILED。 */
@@ -440,7 +491,13 @@ public class TaskService {
         }
         JudgeAgent.Evaluation eval;
         try {
-            eval = judgeAgent.evaluate(record.getGoal(), plan, clientFor(record, false));
+            UsageContext.set(usageSnapshot(record, "JUDGE", null, "HIGH", contextBudget.judgeTokens(),
+                    !"EPHEMERAL".equals(record.getModelSource())));
+            try {
+                eval = judgeAgent.evaluate(record.getGoal(), plan, clientFor(record, false));
+            } finally {
+                UsageContext.clear();
+            }
         } catch (Exception e) {
             log.error("任务 {} 评测异常", record.getId(), e);
             TaskStateMachine.requireTransition(TaskStatus.REVIEW, TaskStatus.FAILED);
@@ -480,14 +537,96 @@ public class TaskService {
             TaskStateMachine.requireTransition(TaskStatus.REVIEW, TaskStatus.RETRY);
             record.setStatus(TaskStatus.RETRY);
             record.setReworkCount(record.getReworkCount() + 1);
-            resetPlanForRerun(record, plan);
+            // 迭代 15 I15-2：持久化 Judge 反馈（含失败步骤），反馈链随返工轮次累积
+            ReflectionFeedback feedback = latestFeedback(record, eval);
+            record.setLastFeedbackJson(toJsonObject(feedback));
+            if (record.getPlanRevisionCount() < 1) {
+                // 第 1 次返工：让 Planner 针对失败步骤重规划（限 1 次）；解析失败回退旧计划
+                TaskPlan revised = plannerAgent.revise(record.getGoal(), plan, feedback);
+                record.setPlanRevisionCount(record.getPlanRevisionCount() + 1);
+                if (revised != plan) {
+                    plan = revised;
+                    record.setPlanJson(toJson(plan));
+                    record.setCurrentStep(0);
+                    record.setPendingStepId(-1);
+                } else {
+                    resetPlanForRerun(record, plan);
+                }
+            } else {
+                // 第 2 次及以后：不再重规划，只按反馈重跑（防目标漂移与无限改计划）
+                resetPlanForRerun(record, plan);
+            }
             repository.save(record);
             eventPublisher.publish(record, "retry");
             TaskStateMachine.requireTransition(TaskStatus.RETRY, TaskStatus.RUNNING);
             record.setStatus(TaskStatus.RUNNING);
-            log.info("任务 {} 评测不合格（{} 分），第 {} 次自动返工", record.getId(),
-                    eval.score(), record.getReworkCount());
+            log.info("任务 {} 评测不合格（{} 分），第 {} 次自动返工（重规划 {} 次）", record.getId(),
+                    eval.score(), record.getReworkCount(), record.getPlanRevisionCount());
             executeUntilBlocked(record);   // 递归重跑，深度由 max-auto-rework 兜底
+        }
+    }
+
+    /** 构建最新反馈：把上一轮的 summary 并入 history，形成多轮反思链。 */
+    private ReflectionFeedback latestFeedback(TaskRecord record, JudgeAgent.Evaluation eval) {
+        List<String> history = new ArrayList<>();
+        if (record.getLastFeedbackJson() != null && !record.getLastFeedbackJson().isBlank()) {
+            try {
+                ReflectionFeedback previous = mapper.readValue(record.getLastFeedbackJson(), ReflectionFeedback.class);
+                history.addAll(previous.history());
+                if (previous.summary() != null && !previous.summary().isBlank()) {
+                    history.add(previous.summary());
+                }
+            } catch (Exception e) {
+                // 旧数据损坏时丢弃历史，不影响本轮反馈
+                log.warn("任务 {} 的历史反馈不可解析，重新开始反馈链", record.getId());
+            }
+        }
+        return new ReflectionFeedback(eval.score(), eval.summary(), eval.failStepIds(), history);
+    }
+
+    /** 迭代 15 I15-13：任务各调用点用量上下文。 */
+    private UsageContext.Snapshot usageSnapshot(TaskRecord record, String requestType, Integer stepId,
+            String reasoningMode, int budgetTokens, boolean platformQuota) {
+        return new UsageContext.Snapshot(UsageContext.newRequestId(), requestType, record.getUserId(),
+                record.getOrgId(), record.getModelSlotId(), record.getId(), stepId, reasoningMode,
+                budgetTokens, null, platformQuota);
+    }
+
+    /** 迭代 15 I15-7：执行器思考摘要落 agent_trace（toolName=executor.thinking，全文不落库）。 */
+    private void persistThinkingTrace(TaskRecord record, TaskStep step, RequestIdentity identity,
+            TraceContext.Snapshot trace, String reasoning) {
+        if (reasoning == null || reasoning.isBlank()) {
+            return;
+        }
+        try {
+            int max = 2000;
+            String summary = reasoning.length() <= max ? reasoning : reasoning.substring(0, max) + "…（思考已截断）";
+            traceRepository.save(new AgentTraceRecord(UUID.randomUUID().toString(),
+                    identity.userId(), identity.orgId(), record.getId(), step.getId(), trace.traceId(),
+                    "executor.thinking", "执行步骤 " + step.getId(), summary, reasoning.length(), 0,
+                    AgentTraceRecord.STATUS_SUCCESS, null));
+        } catch (Exception e) {
+            log.warn("思考摘要写入 agent_trace 失败：task={} step={}", record.getId(), step.getId(), e);
+        }
+    }
+
+    /** Executor 注入用的人类可读反馈：包含本轮 summary 原文 + 历史反馈链。 */
+    private String reflectionPrompt(TaskRecord record) {        if (record.getLastFeedbackJson() == null || record.getLastFeedbackJson().isBlank()) {
+            return null;
+        }
+        try {
+            ReflectionFeedback feedback = mapper.readValue(record.getLastFeedbackJson(), ReflectionFeedback.class);
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < feedback.history().size(); i++) {
+                sb.append("第 ").append(i + 1).append(" 轮：").append(feedback.history().get(i)).append('\n');
+            }
+            sb.append("本轮：").append(feedback.summary());
+            if (!feedback.failStepIds().isEmpty()) {
+                sb.append("（失败步骤：").append(feedback.failStepIds()).append("）");
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "上一轮质量评测反馈：" + record.getLastFeedbackJson();
         }
     }
 
@@ -497,12 +636,15 @@ public class TaskService {
         return flag != null && flag.get();
     }
 
-    /** 返工重跑前重置计划：清步骤结果、撤审批标记（副作用步骤需重新审批=可重入设计）。 */
+    /** 返工重跑前重置计划：清步骤结果/摘要、撤审批标记、清黑板笔记（副作用步骤需重新审批=可重入设计）。 */
     private void resetPlanForRerun(TaskRecord record, TaskPlan plan) {
         for (TaskStep step : plan.getSteps()) {
             step.setResult(null);
+            step.setResultDigest(null);
             step.setApproved(false);
         }
+        plan.setGlobalNotes(null);
+        plan.setNoteThroughStepId(0);
         record.setPlanJson(toJson(plan));
         record.setCurrentStep(0);
         record.setPendingStepId(-1);
@@ -521,6 +663,14 @@ public class TaskService {
             return mapper.writeValueAsString(plan);
         } catch (Exception e) {
             throw new IllegalStateException("操作失败：计划序列化失败。" + e.getMessage(), e);
+        }
+    }
+
+    private String toJsonObject(Object value) {
+        try {
+            return mapper.writeValueAsString(value);
+        } catch (Exception e) {
+            throw new IllegalStateException("操作失败：数据序列化失败。" + e.getMessage(), e);
         }
     }
 

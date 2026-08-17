@@ -3,9 +3,12 @@ package com.example.vatica.agent;
 import java.util.List;
 
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.tool.ToolCallback;
 
 import com.example.vatica.task.TaskPlan.TaskStep;
+import com.example.vatica.trace.ReasoningContext;
 
 /**
  * Executor Agent（迭代 5）：逐步执行计划步骤（带全部工具）。
@@ -54,22 +57,63 @@ public class ExecutorAgent {
     /** 迭代 13 I13-5：任务级临时/指定客户端执行。 */
     public String executeStep(String goal, TaskStep step, List<String> previousResults,
             ToolCallback[] toolCallbacks, ChatClient client) {
+        return executeStep(goal, step, previousResults, toolCallbacks, client, null);
+    }
+
+    /**
+     * 迭代 15 I15-2 Reflexion：执行时注入上一轮 Judge 反馈，本轮必须针对性修复；
+     * 反馈只纠错，不改变任务目标或扩大范围。
+     */
+    public String executeStep(String goal, TaskStep step, List<String> previousResults,
+            ToolCallback[] toolCallbacks, ChatClient client, String reflectionFeedback) {
         var prompt = client.prompt()
                 .system(SYSTEM_PROMPT)
                 .user("任务目标：" + goal);
         if (previousResults != null && !previousResults.isEmpty()) {
-            StringBuilder ctx = new StringBuilder("已完成步骤的结果摘要（参考，不要重复执行）：\n");
+            StringBuilder ctx = new StringBuilder("依赖步骤结果与任务笔记（参考，不要重复执行）：\n");
             for (int i = 0; i < previousResults.size(); i++) {
                 ctx.append(i + 1).append(". ").append(previousResults.get(i)).append('\n');
             }
             prompt = prompt.user(ctx.toString());
         }
+        if (reflectionFeedback != null && !reflectionFeedback.isBlank()) {
+            prompt = prompt.user("上一轮质量评测反馈：\n" + reflectionFeedback
+                    + "\n本轮必须针对性修复；只使用工具返回的数据；不得改变任务目标或扩大任务范围。");
+        }
         if (toolCallbacks != null && toolCallbacks.length > 0) {
             prompt = prompt.toolCallbacks(toolCallbacks);
         }
-        return prompt.user("现在执行步骤（第 " + step.getId() + " 步）：" + step.getDescription()
-                        + "\n完成后用一句话总结本步骤结果（含关键数据）。")
-                .call()
-                .content();
+        var callSpec = prompt.user("现在执行步骤（第 " + step.getId() + " 步）：" + step.getDescription()
+                + "\n完成后用一句话总结本步骤结果（含关键数据）。").call();
+        // 迭代 15 I15-7：优先 chatResponse 取完整响应（含 reasoning 元数据）；mock/异常路径回退 content()
+        ChatResponse response = null;
+        try {
+            response = callSpec.chatResponse();
+        } catch (RuntimeException e) {
+            // 供应商/测试环境不支持时走纯文本路径
+        }
+        if (response != null && response.getResult() != null && response.getResult().getOutput() != null) {
+            ReasoningContext.set(reasoningOf(response));
+            return response.getResult().getOutput().getText();
+        }
+        return callSpec.content();
+    }
+
+    private static String reasoningOf(ChatResponse response) {
+        for (Generation generation : response.getResults()) {
+            if (generation.getOutput() != null) {
+                Object value = generation.getOutput().getMetadata().get("reasoningContent");
+                if (value != null) {
+                    return String.valueOf(value);
+                }
+            }
+        }
+        if (response.getMetadata() != null) {
+            Object value = response.getMetadata().get("reasoningContent");
+            if (value != null) {
+                return String.valueOf(value);
+            }
+        }
+        return null;
     }
 }

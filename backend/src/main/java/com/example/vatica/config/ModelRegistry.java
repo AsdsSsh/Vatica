@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.anthropic.models.messages.Model;
 import com.openai.client.OpenAIClient;
@@ -16,6 +17,7 @@ import org.springframework.ai.anthropic.AnthropicChatModel;
 import org.springframework.ai.anthropic.AnthropicChatOptions;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.openai.OpenAiChatModel;
@@ -23,6 +25,8 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.setup.OpenAiSetup;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
+
+import com.example.vatica.usage.UsageAdvisor;
 
 /**
  * 动态模型注册表（迭代 8.5 模型配置中心）：按槽位配置构建 ChatModel/ChatClient，
@@ -45,17 +49,26 @@ public class ModelRegistry {
     private final UserModelService userModels;
     private final ObjectProvider<SyncMcpToolCallbackProvider> mcpToolProvider;
     private final ToolCallingManager toolCallingManager;
+    private final UsageAdvisor usageAdvisor;
 
     /** 客户端缓存：key = slotId + 配置指纹。 */
     private final ConcurrentHashMap<String, ChatClient> clients = new ConcurrentHashMap<>();
 
+    /** 迭代 15 I15-5：每个角色在同能力槽位列表中的故障转移偏移（401/超时后推进）。 */
+    private final ConcurrentHashMap<String, AtomicInteger> roleOffsets = new ConcurrentHashMap<>();
+
+    /** 角色故障转移客户端缓存：key = 能力|工具|深思档位（内部每次 prompt 动态取偏移后的槽位）。 */
+    private final ConcurrentHashMap<String, RoleFailoverChatClient> roleClients = new ConcurrentHashMap<>();
+
     public ModelRegistry(ModelConfigService config, ModelCredentialStore credentials, UserModelService userModels,
-            ObjectProvider<SyncMcpToolCallbackProvider> mcpToolProvider, ToolCallingManager toolCallingManager) {
+            ObjectProvider<SyncMcpToolCallbackProvider> mcpToolProvider, ToolCallingManager toolCallingManager,
+            UsageAdvisor usageAdvisor) {
         this.config = config;
         this.credentials = credentials;
         this.userModels = userModels;
         this.mcpToolProvider = mcpToolProvider;
         this.toolCallingManager = toolCallingManager;
+        this.usageAdvisor = usageAdvisor;
     }
 
     /** 当前生效的槽位列表（模型选择器/设置界面数据源）。 */
@@ -83,31 +96,51 @@ public class ModelRegistry {
         if (!slot.enabled()) {
             throw new IllegalArgumentException("操作失败：模型未启用（" + slot.name() + "），请在设置中启用。");
         }
-        return cached(slot, true);
+        return cached(slot, true, ReasoningMode.DISABLED);
     }
 
-    /** 默认模型对话/执行客户端（带工具）。 */
+    /** 默认模型对话客户端（带工具；迭代 15 起默认关闭深思 = 快通道）。 */
     public ChatClient defaultClient() {
-        return clientFor(defaultSlot().id());
+        return cached(defaultSlot(), true, ReasoningMode.DISABLED);
     }
 
-    /** 规划专用客户端：无工具（规划只分解不执行）。 */
+    /** 迭代 15 I15-4：执行客户端——带工具 + LOW 深思；I15-5 执行角色复用 chat-reason 能力槽位。 */
+    public ChatClient executorClient() {
+        return roleFailoverClient(ModelSlot.CAP_CHAT_REASON, true, ReasoningMode.LOW);
+    }
+
+    /** 规划专用客户端：无工具 + HIGH 深思（规划只分解不执行）。 */
     public ChatClient plannerClient() {
-        return cached(defaultSlot(), false);
+        return roleFailoverClient(ModelSlot.CAP_PLANNER, false, ReasoningMode.HIGH);
     }
 
-    /** 评测专用客户端：无工具（评测只读材料）。 */
+    /** 评测专用客户端：无工具 + HIGH 深思（评测只读材料）。 */
     public ChatClient judgeClient() {
-        return cached(defaultSlot(), false);
+        return roleFailoverClient(ModelSlot.CAP_JUDGE, false, ReasoningMode.HIGH);
+    }
+
+    /** 迭代 15 I15-9：摘要专用客户端——无工具 + 关闭深思（摘要只压缩事实）。 */
+    public ChatClient summarizerClient() {
+        return roleFailoverClient(ModelSlot.CAP_SUMMARIZER, false, ReasoningMode.DISABLED);
     }
 
     /** 迭代 13 I13-5：请求级临时凭据客户端——每次新建，不查库、不写库、不进缓存。 */
     public ChatClient ephemeralClient(EphemeralCredential credential, boolean withTools) {
-        return build(credential.toSlot(), withTools);
+        return ephemeralClient(credential, withTools, ReasoningMode.DISABLED);
+    }
+
+    /** 迭代 15：任务角色使用临时凭据时按角色选深思档位。 */
+    public ChatClient ephemeralClient(EphemeralCredential credential, boolean withTools, ReasoningMode mode) {
+        return build(credential.toSlot(), withTools, mode);
     }
 
     /** 迭代 13 I13-4：用户自配槽位客户端（仅 ENCRYPTED_AT_REST；EPHEMERAL 需请求带 credential）。 */
     public ChatClient userClient(Long ownerId, String slotId, boolean withTools) {
+        return userClient(ownerId, slotId, withTools, ReasoningMode.DISABLED);
+    }
+
+    /** 迭代 15：用户槽位也可按角色选深思档位。 */
+    public ChatClient userClient(Long ownerId, String slotId, boolean withTools, ReasoningMode mode) {
         UserModelSlot slot = userModels.resolveSlot(ownerId, slotId);
         if (UserModelSlot.MODE_EPHEMERAL.equals(slot.getCredentialMode())) {
             throw new IllegalArgumentException("操作失败：该模型为仅本机模式，请随请求提供 credential 后重试。");
@@ -115,7 +148,71 @@ public class ModelRegistry {
         String apiKey = userModels.resolveApiKey(ownerId, slotId);
         ModelSlot model = new ModelSlot("user:" + slotId, slot.getName(), slot.getProtocol(), slot.getBaseUrl(),
                 apiKey, slot.getModel(), slot.getTemperature(), true);
-        return build(model, withTools);
+        return build(model, withTools, mode);
+    }
+
+    /** 迭代 15 I15-4：聊天“深思”开关——按当前模型槽位生成请求级 options（平台模型）。 */
+    public ChatOptions.Builder<?> reasoningOptions(String modelId, EphemeralCredential credential,
+            ReasoningMode mode) {
+        ModelSlot slot = credential != null ? credential.toSlot() : slotFor(modelId);
+        return ReasoningOptionsApplier.builder(slot, mode);
+    }
+
+    /** 用户自配槽位的深思 options（聊天选择器选中 user: 槽位时用）。 */
+    public ChatOptions.Builder<?> reasoningOptionsForUser(Long ownerId, String slotId, ReasoningMode mode) {
+        UserModelSlot slot = userModels.resolveSlot(ownerId, slotId);
+        String apiKey = userModels.resolveApiKey(ownerId, slotId);
+        ModelSlot model = new ModelSlot("user:" + slotId, slot.getName(), slot.getProtocol(), slot.getBaseUrl(),
+                apiKey, slot.getModel(), slot.getTemperature(), true);
+        return ReasoningOptionsApplier.builder(model, mode);
+    }
+
+    private ModelSlot slotFor(String modelId) {
+        if (modelId == null || modelId.isBlank()) {
+            return defaultSlot();
+        }
+        return config.slots().stream()
+                .filter(s -> s.id().equalsIgnoreCase(modelId))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("操作失败：未知模型（" + modelId + "）。"));
+    }
+
+    /** 迭代 15 I15-5：某能力的候选槽位（启用且带标签）；没有标签时回退默认槽位（旧配置兼容）。 */
+    List<ModelSlot> slotsForRole(String capability) {
+        List<ModelSlot> matching = config.slots().stream()
+                .filter(ModelSlot::enabled)
+                .filter(s -> s.capabilities().contains(capability))
+                .toList();
+        return matching.isEmpty() ? List.of(defaultSlot()) : matching;
+    }
+
+    /**
+     * 迭代 15 I15-5：角色客户端 = 每次 prompt 按当前偏移取同能力槽位；
+     * 401/超时等可转移错误发生时推进偏移，下一请求自动切备用槽位。
+     */
+    private ChatClient roleFailoverClient(String capability, boolean withTools, ReasoningMode mode) {
+        String key = capability + "|" + withTools + "|" + mode;
+        return roleClients.computeIfAbsent(key, k -> {
+            List<ModelSlot> slots = slotsForRole(capability);
+            return new RoleFailoverChatClient(
+                    () -> cached(slots.get(currentRoleOffset(capability) % slots.size()), withTools, mode),
+                    ModelRegistry::isFailoverError,
+                    () -> roleOffsets.computeIfAbsent(capability, k2 -> new AtomicInteger()).incrementAndGet());
+        });
+    }
+
+    private int currentRoleOffset(String capability) {
+        return Math.floorMod(roleOffsets.computeIfAbsent(capability, k -> new AtomicInteger()).get(), 1000);
+    }
+
+    int roleOffset(String capability) {
+        return roleOffsets.getOrDefault(capability, new AtomicInteger()).get();
+    }
+
+    private static boolean isFailoverError(RuntimeException error) {
+        String message = error.getMessage() == null ? "" : error.getMessage().toLowerCase(Locale.ROOT);
+        return message.contains("401") || message.contains("unauthorized")
+                || message.contains("timeout") || message.contains("timed out");
     }
 
     /** 连通性测试（不带工具）：发一句最短指令，成功即返回模型回复。
@@ -125,24 +222,29 @@ public class ModelRegistry {
         return client.prompt("请只回复两个字：正常").call().content();
     }
 
-    private ChatClient cached(ModelSlot slot, boolean withTools) {
+    private ChatClient cached(ModelSlot slot, boolean withTools, ReasoningMode reasoningMode) {
         // 迭代 10 I10-2：缓存键必须包含 withTools——对话（带工具）与规划/评测（无工具）
-        // 是同槽位不同职责的客户端，旧键只有 slotId+fingerprint，先构建者会被另一方复用
+        // 是同槽位不同职责的客户端；迭代 15 再补 reasoningMode，快慢分离不能共用客户端
         String id = slot.id().toLowerCase(Locale.ROOT);
-        String key = id + "|" + withTools + "|" + slot.fingerprint();
+        String key = id + "|" + withTools + "|" + reasoningMode + "|" + slot.fingerprint();
         ChatClient existing = clients.get(key);
         if (existing != null) {
             return existing;
         }
         // 迭代 10 I10-9：同槽位同职责配置变更后清理旧指纹缓存，避免长跑缓存无限增长
-        // （前缀带 withTools：只清自己这一列，不能把对话/规划评测的另一列误删）
-        String prefix = id + "|" + withTools + "|";
+        String prefix = id + "|" + withTools + "|" + reasoningMode + "|";
         clients.keySet().removeIf(k -> k.startsWith(prefix) && !k.equals(key));
-        return clients.computeIfAbsent(key, k -> build(slot, withTools));
+        return clients.computeIfAbsent(key, k -> build(slot, withTools, reasoningMode));
     }
 
-    private ChatClient build(ModelSlot slot, boolean withTools) {
+    private ChatClient build(ModelSlot slot, boolean withTools, ReasoningMode reasoningMode) {
         ChatClient.Builder builder = ChatClient.builder(buildModel(slot));
+        // 迭代 15 I15-4：深思档位进默认 options——聊天默认 DISABLED、规划/评测 HIGH、执行 LOW
+        builder.defaultOptions(ReasoningOptionsApplier.builder(slot, reasoningMode));
+        // 迭代 15 I15-13：用量观测统一挂到所有动态客户端
+        if (usageAdvisor != null) {
+            builder.defaultAdvisors(usageAdvisor);
+        }
         if (withTools) {
             // 迭代 12 热修：本地工具由 ChatController/TaskService 按请求用
             // PermissionBoundToolCallbacks/ToolActivityCallbacks 注入；

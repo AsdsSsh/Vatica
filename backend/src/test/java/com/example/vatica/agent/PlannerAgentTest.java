@@ -3,14 +3,19 @@ package com.example.vatica.agent;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.ToolCallbackProvider;
+import org.springframework.ai.tool.definition.ToolDefinition;
 
 import com.example.vatica.task.TaskPlan;
 import com.example.vatica.task.TaskPlan.TaskStep;
@@ -70,6 +75,24 @@ class PlannerAgentTest {
 
         assertThat(plan.getSteps()).hasSize(1);
         assertThat(plan.getSteps().get(0).getDescription()).isEqualTo("步骤A");
+    }
+
+    /** 迭代 15 I15-12：工具清单从 ToolCallbackProvider 动态生成，不再手写。 */
+    @Test
+    void systemPromptUsesDynamicToolList() {
+        ToolCallback callback = mock(ToolCallback.class);
+        when(callback.getToolDefinition()).thenReturn(
+                ToolDefinition.builder().name("read_file").description("d").inputSchema("{}").build());
+        ToolCallbackProvider provider = mock(ToolCallbackProvider.class);
+        when(provider.getToolCallbacks()).thenReturn(new ToolCallback[] { callback });
+        planner = new PlannerAgent(chatClient, new ObjectMapper(), provider);
+        when(callSpec.content()).thenReturn("{\"steps\":[{\"description\":\"读取文件\",\"needsApproval\":false}]}");
+
+        planner.plan("目标");
+
+        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        verify(spec, org.mockito.Mockito.atLeastOnce()).system(captor.capture());
+        assertThat(captor.getValue()).contains("当前可用工具：").contains("read_file");
     }
 
     /** 非法输出 → 降级单步计划（不阻断任务创建） */

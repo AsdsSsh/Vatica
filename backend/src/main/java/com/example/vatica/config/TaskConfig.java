@@ -3,6 +3,9 @@ package com.example.vatica.config;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
+import com.example.vatica.context.ContextBudget;
+import com.example.vatica.task.TaskBlackboard;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -18,5 +21,11 @@ public class TaskConfig {
     @Bean(name = "taskParallelExecutor")
     Executor taskParallelExecutor() {
         return Executors.newVirtualThreadPerTaskExecutor();
+    }
+
+    /** 迭代 15 I15-11：任务黑板（dependsOn 最小上下文 + 滚动笔记 + 结果摘要）。 */
+    @Bean
+    TaskBlackboard taskBlackboard(ModelRegistry registry, ContextBudget contextBudget) {
+        return new TaskBlackboard(registry, contextBudget);
     }
 }

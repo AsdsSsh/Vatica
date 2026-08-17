@@ -41,7 +41,10 @@ class JwtServiceTest {
         JwtService jwt = jwt(Duration.ofHours(1));
         String token = jwt.issue(user());
 
-        String tampered = token.substring(0, token.length() - 1) + (token.endsWith("A") ? "B" : "A");
+        int signatureStart = token.lastIndexOf('.') + 1;
+        char first = token.charAt(signatureStart);
+        String tampered = token.substring(0, signatureStart) + (first == 'A' ? 'B' : 'A')
+                + token.substring(signatureStart + 1);
 
         assertThatThrownBy(() -> jwt.verify(tampered))
                 .isInstanceOf(IllegalArgumentException.class)

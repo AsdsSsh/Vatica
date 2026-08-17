@@ -86,6 +86,14 @@ public class TaskRecord {
     @Column(length = 16)
     private TaskVerdict verdict;
 
+    /** 迭代 15 I15-2：最近一次 Judge 反馈（含失败步骤与历史评语，JSON）。 */
+    @Column(columnDefinition = "TEXT")
+    private String lastFeedbackJson;
+
+    /** 迭代 15 I15-2：自动返工期间 Planner 已重规划次数（上限 1）。 */
+    @Column(nullable = false)
+    private int planRevisionCount = 0;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -230,6 +238,22 @@ public class TaskRecord {
 
     public void setVerdict(TaskVerdict verdict) {
         this.verdict = verdict;
+    }
+
+    public String getLastFeedbackJson() {
+        return lastFeedbackJson;
+    }
+
+    public void setLastFeedbackJson(String lastFeedbackJson) {
+        this.lastFeedbackJson = lastFeedbackJson;
+    }
+
+    public int getPlanRevisionCount() {
+        return planRevisionCount;
+    }
+
+    public void setPlanRevisionCount(int planRevisionCount) {
+        this.planRevisionCount = planRevisionCount;
     }
 
     public Instant getCreatedAt() {

@@ -17,4 +17,14 @@ public interface SessionMemory {
 
     /** 记录一轮对话（user + assistant 纯文本）。 */
     void append(String sessionId, String userText, String assistantText);
+
+    /** 迭代 15 I15-9：中期滚动摘要（无摘要实现返回 null）。 */
+    default String summary(String sessionId) {
+        return null;
+    }
+
+    /** 迭代 15 I15-9：水位线之后的近期原文（默认与 history 相同）。 */
+    default List<Message> recent(String sessionId) {
+        return history(sessionId);
+    }
 }

@@ -7,6 +7,7 @@ import {
   Input,
   Select,
   Spin,
+  Switch,
   Tag,
   Tooltip,
   Typography,
@@ -46,6 +47,7 @@ import {
   type FilePermissionRequest,
   type ModelInfo,
   type ToolActivity,
+  type UsageSummary,
   type UserModelSlotView,
 } from "../api";
 import { loadPermissionPolicy } from "../permissions";
@@ -124,6 +126,7 @@ export default function ChatPanel({
 
   const [input, setInput] = useState("");
   const [model, setModel] = useState<string | undefined>(readSavedModel);
+  const [deepThinking, setDeepThinking] = useState(false);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [userSlots, setUserSlots] = useState<UserModelSlotView[]>([]);
   const [typing, setTyping] = useState(false);
@@ -140,6 +143,10 @@ export default function ChatPanel({
   const [permissionRemember, setPermissionRemember] = useState(true);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const [toolActivity, setToolActivity] = useState<ToolActivity | null>(null);
+  // 迭代 15 I15-7：思考过程折叠展示（reasoning SSE 事件累加）
+  const [reasoning, setReasoning] = useState("");
+  // 迭代 15 I15-13：本轮 token 用量（usage SSE 收尾事件）
+  const [usage, setUsage] = useState<UsageSummary | null>(null);
 
   /** 迭代 13.5：并行流可能同时提出多个权限请求，按 requestId 保存每个等待决定。 */
   const permissionResolveRef = useRef<Map<string, (approved: boolean) => void>>(new Map());
@@ -307,6 +314,8 @@ export default function ChatPanel({
     autoScrollRef.current = true;
     setShowJumpToBottom(false);
     setToolActivity(null);
+    setReasoning("");
+    setUsage(null);
     onAppendMessage({ id: crypto.randomUUID(), role: "user", content: text });
     const assistantId = crypto.randomUUID();
     onAppendMessage({ id: assistantId, role: "assistant", content: "" });
@@ -324,6 +333,7 @@ export default function ChatPanel({
         requestModel,
         controller.signal,
         credential,
+        deepThinking,
       )) {
         if (event.kind === "text") {
           if (typing) setTyping(false);
@@ -333,6 +343,10 @@ export default function ChatPanel({
           }));
         } else if (event.kind === "tool") {
           setToolActivity(event.activity);
+        } else if (event.kind === "reasoning") {
+          setReasoning((prev) => prev + event.content);
+        } else if (event.kind === "usage") {
+          setUsage(event.usage);
         } else {
           // 权限请求：等待用户决定；后端工具调用保持阻塞，批准/拒绝后模型继续
           const approved = await askPermission(event.request);
@@ -642,6 +656,19 @@ export default function ChatPanel({
             </div>
           </div>
         ))}
+        {reasoning && (
+          <details className="reasoning-block" style={{ marginBottom: 12 }}>
+            <summary style={{ cursor: "pointer", fontSize: 12, color: token.colorTextSecondary }}>
+              思考过程（点击展开）
+            </summary>
+            <Typography.Paragraph
+              type="secondary"
+              style={{ fontSize: 12, margin: "8px 0 0", whiteSpace: "pre-wrap" }}
+            >
+              {reasoning}
+            </Typography.Paragraph>
+          </details>
+        )}
         {toolActivity && (
           <div style={{ display: "flex", justifyContent: "flex-start", marginBottom: 12 }}>
             <Tag
@@ -657,12 +684,28 @@ export default function ChatPanel({
                   <LoadingOutlined />
                 )
               }
-              title={toolActivity.error ?? undefined}
+              title={
+                toolActivity.error ??
+                ([
+                  toolActivity.traceId ? `trace: ${toolActivity.traceId}` : "",
+                  toolActivity.inputSummary ? `输入：${toolActivity.inputSummary}` : "",
+                  toolActivity.outputSummary ? `输出：${toolActivity.outputSummary}` : "",
+                ].filter(Boolean).join("\n") || undefined)
+              }
             >
               {toolActivity.phase === "start" && `正在调用 ${toolActivity.tool}…`}
               {toolActivity.phase === "end" && `${toolActivity.tool} 已完成`}
               {toolActivity.phase === "failed" && `${toolActivity.tool} 执行失败`}
             </Tag>
+          </div>
+        )}
+        {usage && (
+          <div style={{ display: "flex", justifyContent: "flex-start", marginBottom: 12 }}>
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              本次 {usage.totalTokens.toLocaleString()} tokens
+              {usage.contextFillRatio != null ? ` · 上下文 ${usage.contextFillRatio}%` : ""}
+              {usage.reasoningTokens > 0 ? ` · 思考 ${usage.reasoningTokens.toLocaleString()}` : ""}
+            </Typography.Text>
           </div>
         )}
         {streaming && typing && (
@@ -690,6 +733,20 @@ export default function ChatPanel({
 
       {/* 输入区 */}
       <div style={{ padding: 12, borderTop: "1px solid var(--vatica-border)" }}>
+        {/* 迭代 15 I15-4：快慢分离——深思开关仅对本轮聊天生效 */}
+        <Flex justify="flex-end" align="center" gap={6} style={{ marginBottom: 6 }}>
+          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+            深思（慢思考）
+          </Typography.Text>
+          <Switch
+            size="small"
+            aria-label="深思开关"
+            checked={deepThinking}
+            onChange={setDeepThinking}
+            checkedChildren="开"
+            unCheckedChildren="关"
+          />
+        </Flex>
         <Flex gap={8} align="end">
           <Input.TextArea
             ref={inputRef}

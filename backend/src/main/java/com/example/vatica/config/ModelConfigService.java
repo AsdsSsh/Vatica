@@ -91,7 +91,7 @@ public class ModelConfigService {
         credentials.clearAllExcept(normalized.stream().map(ModelSlot::id).toList());
         List<ModelSlot> metadata = normalized.stream()
                 .map(s -> new ModelSlot(s.id(), s.name(), s.protocol(), s.baseUrl(), null,
-                        s.model(), s.temperature(), s.enabled()))
+                        s.model(), s.temperature(), s.enabled(), s.capabilities(), s.promptCacheKey()))
                 .toList();
         Path file = resolveFile();
         try {
@@ -111,14 +111,16 @@ public class ModelConfigService {
             ModelCredentialStore.Resolved resolved = credentials.resolve(slot.id()).orElse(null);
             if (resolved != null) {
                 return new ModelSlot(slot.id(), slot.name(), slot.protocol(), slot.baseUrl(),
-                        resolved.apiKey(), slot.model(), slot.temperature(), slot.enabled());
+                        resolved.apiKey(), slot.model(), slot.temperature(), slot.enabled(),
+                        slot.capabilities(), slot.promptCacheKey());
             }
             if (slot.apiKey() != null && !slot.apiKey().isBlank()) {
                 credentials.put(slot.id(), slot.apiKey());   // 旧明文一次性迁移
                 return slot;
             }
             return new ModelSlot(slot.id(), slot.name(), slot.protocol(), slot.baseUrl(), "",
-                    slot.model(), slot.temperature(), slot.enabled());
+                    slot.model(), slot.temperature(), slot.enabled(), slot.capabilities(),
+                    slot.promptCacheKey());
         }).toList();
     }
 
@@ -169,7 +171,7 @@ public class ModelConfigService {
                 }
             }
             normalized.add(new ModelSlot(id, name, protocol, baseUrl, apiKey, model,
-                    temperature, s.enabled()));
+                    temperature, s.enabled(), s.capabilities(), s.promptCacheKey()));
         }
         return normalized;
     }
@@ -183,11 +185,14 @@ public class ModelConfigService {
                 ? "https://api.deepseek.com"
                 : openAiDefaults.baseUrl();
         // 主模型默认始终启用（迭代 7 行为：configured 恒 true）；备用模型按 key 是否配置
+        // 迭代 15：默认槽位声明全部角色能力（未配置能力标签时仍保持旧行为可用）
+        List<String> allCaps = List.of(ModelSlot.CAP_CHAT_FAST, ModelSlot.CAP_CHAT_REASON,
+                ModelSlot.CAP_PLANNER, ModelSlot.CAP_JUDGE, ModelSlot.CAP_SUMMARIZER);
         ModelSlot deepseek = new ModelSlot("deepseek", "DeepSeek " + deepModel, ModelSlot.PROTOCOL_OPENAI,
-                deepBase, deepKey, deepModel, deepTemp, true);
+                deepBase, deepKey, deepModel, deepTemp, true, allCaps, "");
         ModelSlot qwen = new ModelSlot("qwen", "通义千问 " + modelProps.qwen().model(), ModelSlot.PROTOCOL_OPENAI,
                 modelProps.qwen().baseUrl(), modelProps.qwen().apiKey(), modelProps.qwen().model(),
-                modelProps.qwen().temperature(), modelProps.qwen().configured());
+                modelProps.qwen().temperature(), modelProps.qwen().configured(), allCaps, "");
         return List.of(deepseek, qwen);
     }
 

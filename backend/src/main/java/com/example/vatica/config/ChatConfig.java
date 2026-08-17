@@ -9,9 +9,11 @@ import com.example.vatica.agent.ExecutorAgent;
 import com.example.vatica.agent.JudgeAgent;
 import com.example.vatica.agent.PlannerAgent;
 import com.example.vatica.controller.ChatMessageRecordRepository;
+import com.example.vatica.controller.ChatSessionRecordRepository;
 import com.example.vatica.controller.InMemorySessionMemory;
 import com.example.vatica.controller.JpaSessionMemory;
 import com.example.vatica.controller.SessionMemory;
+import com.example.vatica.controller.SessionSummaryService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
@@ -27,15 +29,31 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  */
 @Configuration
 @EnableConfigurationProperties({
-        ChatProperties.class, JudgeProperties.class, ModelProperties.class, OpenAiDefaultsProperties.class })
+        ChatProperties.class, JudgeProperties.class, ModelProperties.class, OpenAiDefaultsProperties.class,
+        com.example.vatica.usage.UsageProperties.class,
+        com.example.vatica.runtime.AgentRuntimeProperties.class })
 public class ChatConfig {
 
-    /** 会话短期记忆：内存滑窗热缓存 + MySQL 落库（迭代 5 I5-4）。 */
+    /** 会话短期记忆：内存滑窗热缓存 + MySQL 落库（迭代 5 I5-4；迭代 15 增加中期摘要）。 */
     @Bean
-    SessionMemory sessionMemory(ChatMessageRecordRepository repository, ChatProperties props) {
+    SessionMemory sessionMemory(ChatMessageRecordRepository repository, ChatSessionRecordRepository sessions,
+            SessionSummaryService summaryService, ChatProperties props) {
         InMemorySessionMemory cache = new InMemorySessionMemory(
                 props.memory().maxMessages(), props.memory().maxSessions(), props.memory().maxChars());
-        return new JpaSessionMemory(cache, repository, props.memory().maxMessages());
+        return new JpaSessionMemory(cache, repository, props.memory().maxMessages(), sessions, summaryService);
+    }
+
+    /** 迭代 15 I15-8：各调用点 token 预算（先使用已定稿默认值，后续可迁配置中心）。 */
+    @Bean
+    com.example.vatica.context.ContextBudget contextBudget() {
+        return new com.example.vatica.context.ContextBudget(0, 0, 0, 0, 0);
+    }
+
+    /** 迭代 15 I15-13：用量观测 advisor（ModelRegistry 所有动态客户端统一挂载）。 */
+    @Bean
+    com.example.vatica.usage.UsageAdvisor usageAdvisor(com.example.vatica.usage.UsageRecorder recorder,
+            com.example.vatica.usage.UsageQuotaService quotaService) {
+        return new com.example.vatica.usage.UsageAdvisor(recorder, quotaService);
     }
 
     /**
@@ -72,10 +90,11 @@ public class ChatConfig {
         return new DelegatingChatClient(registry::judgeClient);
     }
 
-    /** 迭代 5 I5-1：Planner Agent。 */
+    /** 迭代 5 I5-1：Planner Agent（迭代 15 起工具清单从 ToolCallbackProvider 动态生成）。 */
     @Bean
-    PlannerAgent plannerAgent(ChatClient plannerChatClient, ObjectMapper objectMapper) {
-        return new PlannerAgent(plannerChatClient, objectMapper);
+    PlannerAgent plannerAgent(ChatClient plannerChatClient, ObjectMapper objectMapper,
+            org.springframework.ai.tool.ToolCallbackProvider vaticaTools) {
+        return new PlannerAgent(plannerChatClient, objectMapper, vaticaTools);
     }
 
     /** 迭代 5：Executor Agent（复用主客户端全部工具）。 */

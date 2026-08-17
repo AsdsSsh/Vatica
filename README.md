@@ -378,6 +378,14 @@ curl localhost:8080/api/task/不存在   # {"message":"操作失败：任务不�
 - **账号切换隔离**：会话、任务、用户模型、个人工作台在切换账号时先清旧账号内存态再加载新账号；会话缓存、仅本机模型 Key、邮箱本机密码与模型选择均按 `org/user` 分桶
 - 回归：`mvn test` 281 → **285** 全绿 + `npm run build` 通过 + headless Chrome 云账号 13 项 / 本地模式 2 项冒烟通过（脚本 `frontend/smoke-auth.mjs`）
 
+### 迭代 15：Agent 推理范式 + 上下文管理 + AgentScope
+
+- **范式**：聊天显式 ReAct trace（脱敏 `agent_trace` + SSE）；任务 Reflexion（Judge 反馈注入 Executor/Planner，限 1 次重规划）；Self-Refine（retryable 错误抖动退避重试 1 次）；`ReasoningMode` 快慢分离（聊天“深思”开关）
+- **上下文**：TokenEstimator/ContextBudget/ContextTrimmer；三层会话记忆（中期摘要异步单飞 + 水位线）；`TaskBlackboard` dependsOn 最小上下文 + 滚动笔记；工具输出 8k 截断
+- **观测**：`vatica_usage` + UsageAdvisor + 平台日配额；SSE `usage` 事件；`/api/usage/today`、`/api/usage/requests/{id}`；槽位 `promptCacheKey`
+- **AgentScope 双运行时**：`-Pagentscope` 隔离构建；`AgentRuntime` / `LegacyRuntime` / `AgentScopeRuntime`；单 Agent 与双 Agent 黑板 POC 用 Qwen 真实模型 + 真实 Vatica 工具实测；生产运行时定版 **LegacyRuntime**
+- 回归：`mvn test` 285 → **341** 全绿 + `npm run build` 通过 + headless Chrome 鉴权冒烟 13 项；对照报告见 `docs/20260817_iteration15/report.md`
+
 ### 迭代 2.5 新增配置（application.yml，均可调）
 
 | 配置 | 默认 | 说明 |

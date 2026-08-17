@@ -298,16 +298,35 @@ export interface FilePermissionRequest {
   createdAt: string;
 }
 
-/** 后端经 SSE 推送的一次工具调用活动（迭代 12 I12-4）。 */
+/** 后端经 SSE 推送的一次工具调用活动（迭代 12 I12-4；迭代 15 I15-1 补 trace 字段）。 */
 export interface ToolActivity {
   tool: string;
   phase: "start" | "end" | "failed";
   durationMs?: number;
   error?: string;
+  /** 迭代 15：本次推理链路的 trace id。 */
+  traceId?: string;
+  /** 迭代 15：脱敏后的工具输入摘要。 */
+  inputSummary?: string;
+  /** 迭代 15：工具输出头尾摘要（长输出已截断）。 */
+  outputSummary?: string;
+  /** 迭代 15：原始输出长度（判断是否被截断）。 */
+  outputLength?: number;
+}
+
+/** 迭代 15 I15-13：SSE 收尾 usage 事件。 */
+export interface UsageSummary {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  reasoningTokens: number;
+  contextFillRatio: number | null;
 }
 
 export type ChatStreamEvent =
   | { kind: "text"; content: string }
+  | { kind: "reasoning"; content: string }
+  | { kind: "usage"; usage: UsageSummary }
   | { kind: "permission"; request: FilePermissionRequest }
   | { kind: "tool"; activity: ToolActivity };
 
@@ -322,6 +341,7 @@ export async function* streamChat(
   model?: string,
   signal?: AbortSignal,
   credential?: EphemeralCredential,
+  deepThinking = false,
 ): AsyncGenerator<ChatStreamEvent> {
   // 迭代 13.5：credential 与 model 二选一（后端约定两者同时出现快速失败）
   const res = await post(
@@ -330,6 +350,7 @@ export async function* streamChat(
       message,
       sessionId,
       permission,
+      deepThinking,
       mailCredential: getEphemeralMailCredential(),
       ...(credential ? { credential } : { model }),
     },
@@ -358,6 +379,21 @@ export async function* streamChat(
           if (eventName === "permission_request") {
             try {
               yield { kind: "permission", request: JSON.parse(payload) as FilePermissionRequest };
+            } catch {
+              // 忽略坏帧
+            }
+          } else if (eventName === "usage") {
+            try {
+              yield { kind: "usage", usage: JSON.parse(payload) as UsageSummary };
+            } catch {
+              // 忽略坏帧
+            }
+          } else if (eventName === "reasoning") {
+            try {
+              const parsed = JSON.parse(payload) as { content?: string };
+              if (parsed && typeof parsed.content === "string") {
+                yield { kind: "reasoning", content: parsed.content };
+              }
             } catch {
               // 忽略坏帧
             }
@@ -439,6 +475,15 @@ export async function fetchModels(): Promise<ModelInfo[]> {
   return (await getJson("/api/chat/models")).json();
 }
 
+/** 模型槽位能力标签（迭代 15 I15-5，与后端 ModelSlot 常量对齐）。 */
+export const MODEL_CAPABILITIES = [
+  "chat-fast",
+  "chat-reason",
+  "planner",
+  "judge",
+  "summarizer",
+] as const;
+
 /** 模型槽位（迭代 13 I13-3 掩码契约：apiKey 只用于提交，响应为 null）。 */
 export interface ModelSlot {
   id: string;
@@ -454,6 +499,10 @@ export interface ModelSlot {
   model: string;
   temperature: number;
   enabled: boolean;
+  /** 迭代 15：该槽位可承担的角色（空数组 = 仅作手动选择的对话模型）。 */
+  capabilities: string[];
+  /** 迭代 15 I15-14：prompt 缓存前缀（OpenAI 兼容端点用；空 = 不启用）。 */
+  promptCacheKey: string;
   apiKeySet: boolean;
   apiKeyHint: string | null;
 }
@@ -784,6 +833,26 @@ export async function createTask(
 
 export async function fetchTaskDetail(id: string): Promise<TaskDetail> {
   return (await getJson(`/api/task/${id}`)).json();
+}
+
+/** 任务工具调用 trace（迭代 15 I15-1，后端 TaskController.AgentTraceView）。 */
+export interface AgentTraceView {
+  id: string;
+  stepId: number | null;
+  traceId: string;
+  toolName: string;
+  inputSummary: string;
+  outputSummary: string;
+  outputLength: number;
+  durationMs: number;
+  status: "SUCCESS" | "FAILED";
+  error: string | null;
+  createdAt: string | null;
+}
+
+/** 迭代 15 I15-1：查询任务执行轨迹（脱敏摘要级，后端已按任务归属过滤）。 */
+export async function fetchTaskTraces(taskId: string): Promise<AgentTraceView[]> {
+  return (await getJson(`/api/task/${encodeURIComponent(taskId)}/traces`)).json();
 }
 
 /** 任务动作：approve（审批计划/步骤）/ rework（人工返工）/ cancel（终止）/ resume（继续执行，迭代 13）。 */

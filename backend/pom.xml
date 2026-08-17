@@ -142,6 +142,53 @@
 		</dependency>
 	</dependencies>
 
+	<!-- 迭代 15 I15-16：AgentScope 隔离构建——默认 profile 不加载 AgentScope 依赖；
+	     需要运行 POC/对照实验时显式 -Pagentscope，并把 src/agentscope/java 加入源码根。 -->
+	<profiles>
+		<profile>
+			<id>agentscope</id>
+			<dependencies>
+				<dependency>
+					<groupId>io.agentscope</groupId>
+					<artifactId>agentscope-core</artifactId>
+					<version>2.0.2</version>
+				</dependency>
+				<dependency>
+					<groupId>io.agentscope</groupId>
+					<artifactId>agentscope-extensions-model-openai</artifactId>
+					<version>2.0.2</version>
+				</dependency>
+			</dependencies>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.codehaus.mojo</groupId>
+						<artifactId>build-helper-maven-plugin</artifactId>
+						<version>3.6.1</version>
+						<executions>
+							<execution>
+								<id>add-agentscope-source</id>
+								<phase>generate-sources</phase>
+								<goals><goal>add-source</goal></goals>
+								<configuration>
+									<sources><source>src/agentscope/java</source></sources>
+								</configuration>
+							</execution>
+							<execution>
+								<id>add-agentscope-test-source</id>
+								<phase>generate-test-sources</phase>
+								<goals><goal>add-test-source</goal></goals>
+								<configuration>
+									<sources><source>src/agentscope/test</source></sources>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
+
 	<build>
 		<plugins>
 			<plugin>

@@ -1,5 +1,7 @@
 package com.example.vatica.agent;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -42,7 +44,7 @@ public class JudgeAgent {
     private static final String SYSTEM_PROMPT = """
             你是 Vatica 质量评测 Agent（LLM-as-Judge）。根据任务目标与各步骤执行结果按评分卡打分，
             只输出一个 JSON 对象（不要 markdown 代码块、不要任何解释文字），格式：
-            {"score":0,"completeness":0,"correctness":0,"format":0,"summary":"一句话评语"}
+            {"score":0,"completeness":0,"correctness":0,"format":0,"summary":"一句话评语","failStepIds":[1,2]}
             评分卡维度（三项满分合计 100）：
             1. 完整性（满分 30）：步骤是否全部完成、是否覆盖任务目标的全部要求；
             2. 正确性（满分 50）：数据是否来自工具返回、关键数字/时间/地点是否准确、有无编造幻觉；
@@ -51,10 +53,37 @@ public class JudgeAgent {
             1. score 必须等于三个维度得分之和；
             2. 只依据提供的材料评分，不得脑补材料中没有的信息；
             3. 步骤结果中如实报告"工具未执行/未配置"不算正确性错误（诚实报告是加分项），
-               但若目标因此未完成，完整性/正确性应相应扣分。""";
+               但若目标因此未完成，完整性/正确性应相应扣分；
+            4. failStepIds 填写本次评测认定不合格的步骤编号列表（无不合格步骤时填 []）。""";
 
-    /** 评测结果：score 可为 null（解析降级路径，规则已通过但 LLM 分数不可用）。 */
-    public record Evaluation(Integer score, TaskVerdict verdict, String summary) {
+    /** 评测结果：score 可为 null（解析降级路径，规则已通过但 LLM 分数不可用）；failStepIds 供 Reflexion 反馈注入。 */
+    public record Evaluation(Integer score, TaskVerdict verdict, String summary, List<Integer> failStepIds) {
+        public Evaluation(Integer score, TaskVerdict verdict, String summary) {
+            this(score, verdict, summary, List.of());
+        }
+    }
+
+    /** 迭代 15 I15-6：结构化输出的评分卡（Spring AI entity 转换目标；schema 优先）。 */
+    public static class JudgeScoreCard {
+        private Integer score;
+        private Integer completeness;
+        private Integer correctness;
+        private Integer format;
+        private String summary;
+        private List<Integer> failStepIds;
+
+        public Integer getScore() { return score; }
+        public void setScore(Integer score) { this.score = score; }
+        public Integer getCompleteness() { return completeness; }
+        public void setCompleteness(Integer completeness) { this.completeness = completeness; }
+        public Integer getCorrectness() { return correctness; }
+        public void setCorrectness(Integer correctness) { this.correctness = correctness; }
+        public Integer getFormat() { return format; }
+        public void setFormat(Integer format) { this.format = format; }
+        public String getSummary() { return summary; }
+        public void setSummary(String summary) { this.summary = summary; }
+        public List<Integer> getFailStepIds() { return failStepIds; }
+        public void setFailStepIds(List<Integer> failStepIds) { this.failStepIds = failStepIds; }
     }
 
     private final ChatClient judgeClient;
@@ -80,23 +109,47 @@ public class JudgeAgent {
         if (ruleFail != null) {
             return ruleFail;
         }
+        // 迭代 15 I15-6：结构化输出 schema 优先；供应商不支持时回退正则解析
+        Evaluation structured = evaluateStructured(goal, plan, client);
+        if (structured != null) {
+            return structured;
+        }
         String raw = client.prompt().system(SYSTEM_PROMPT).user(userPrompt(goal, plan)).call().content();
         Evaluation eval = parse(raw);
         if (eval != null) {
             return eval;
         }
         log.warn("评测输出无法解析，降级为规则结果（PASS、无分数）。原始输出片段：{}", snippet(raw));
-        return new Evaluation(null, TaskVerdict.PASS, "评测解析降级：规则校验通过，LLM 评分不可用");
+        return new Evaluation(null, TaskVerdict.PASS, "评测解析降级：规则校验通过，LLM 评分不可用", List.of());
+    }
+
+    private Evaluation evaluateStructured(String goal, TaskPlan plan, ChatClient client) {
+        try {
+            JudgeScoreCard card = client.prompt().system(SYSTEM_PROMPT).user(userPrompt(goal, plan))
+                    .call().entity(JudgeScoreCard.class);
+            if (card == null || card.getScore() == null) {
+                return null;
+            }
+            int score = Math.max(0, Math.min(MAX_SCORE, card.getScore()));
+            String summary = card.getSummary() == null || card.getSummary().isBlank()
+                    ? "（无评语）" : card.getSummary();
+            return new Evaluation(score, score >= passThreshold ? TaskVerdict.PASS : TaskVerdict.FAIL,
+                    summary, card.getFailStepIds() == null ? List.of() : List.copyOf(card.getFailStepIds()));
+        } catch (Exception e) {
+            log.info("评测结构化输出不可用，回退正则解析：{}", e.getMessage());
+            return null;
+        }
     }
 
     /** 规则校验（代码先行）：计划为空 / 步骤无结果 → 硬失败，不调 LLM。 */
     private static Evaluation ruleCheck(TaskPlan plan) {
         if (plan.getSteps().isEmpty()) {
-            return new Evaluation(0, TaskVerdict.FAIL, "计划无步骤，无法评测（规则校验）");
+            return new Evaluation(0, TaskVerdict.FAIL, "计划无步骤，无法评测（规则校验）", List.of());
         }
         for (TaskStep step : plan.getSteps()) {
             if (step.getResult() == null || step.getResult().isBlank()) {
-                return new Evaluation(0, TaskVerdict.FAIL, "步骤 " + step.getId() + " 无执行结果（规则校验）");
+                return new Evaluation(0, TaskVerdict.FAIL,
+                        "步骤 " + step.getId() + " 无执行结果（规则校验）", List.of(step.getId()));
             }
         }
         return null;
@@ -106,9 +159,17 @@ public class JudgeAgent {
         StringBuilder sb = new StringBuilder("任务目标：").append(goal).append("\n\n各步骤执行结果：\n");
         for (TaskStep step : plan.getSteps()) {
             sb.append("【步骤 ").append(step.getId()).append("】").append(step.getDescription())
-                    .append("\n执行结果：").append(step.getResult()).append("\n\n");
+                    .append("\n执行结果：").append(evidence(step.getResult())).append("\n\n");
         }
         return sb.append("请按评分卡对以上执行结果评分。").toString();
+    }
+
+    /** 迭代 15 I15-12：Judge 证据压缩——单步骤结果上限 4000 字符，关键数据优先（保留前部）。 */
+    private static String evidence(String result) {
+        if (result == null || result.length() <= 4_000) {
+            return result;
+        }
+        return result.substring(0, 4_000) + "\n…（步骤结果过长，已截断）";
     }
 
     /** 解析模型输出：剥 markdown 围栏后取 JSON；score 缺失时用三维度之和兜底；越界收敛到 0-100。 */
@@ -135,10 +196,25 @@ public class JudgeAgent {
             }
             score = Math.max(0, Math.min(MAX_SCORE, score));
             String summary = node.hasNonNull("summary") ? node.get("summary").asText() : "（无评语）";
-            return new Evaluation(score, score >= passThreshold ? TaskVerdict.PASS : TaskVerdict.FAIL, summary);
+            List<Integer> failStepIds = parseFailStepIds(node.get("failStepIds"));
+            return new Evaluation(score, score >= passThreshold ? TaskVerdict.PASS : TaskVerdict.FAIL,
+                    summary, failStepIds);
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private static List<Integer> parseFailStepIds(JsonNode node) {
+        if (node == null || !node.isArray()) {
+            return List.of();
+        }
+        List<Integer> ids = new ArrayList<>();
+        for (JsonNode child : node) {
+            if (child.canConvertToInt()) {
+                ids.add(child.intValue());
+            }
+        }
+        return List.copyOf(ids);
     }
 
     private static Integer intOrNull(JsonNode node) {

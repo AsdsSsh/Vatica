@@ -34,8 +34,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.http.MediaType;
@@ -111,9 +114,16 @@ class ChatControllerTest {
                 new ChatProperties.Memory(20, 64, 16000));
     }
 
+    private static ChatResponse chatResponse(String text) {
+        return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
+    }
+
     private ChatController newController(ChatProperties props, SessionMemory memory) {
         // 迭代 8.5：控制器注入动态模型注册表（客户端按请求解析）；迭代 11 注入权限组件
-        return new ChatController(registry, props, memory, toolProvider, permissionEvents, permissionRequests);
+        // 迭代 15：trace 包装需要 ObjectMapper（脱敏摘要序列化）+ ContextBudget 组装三层记忆
+        return new ChatController(registry, props, memory, toolProvider, permissionEvents, permissionRequests,
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                new com.example.vatica.context.ContextBudget(0, 0, 0, 0, 0));
     }
 
     private MockMvc mockMvcFor(ChatController controller) {
@@ -129,7 +139,7 @@ class ChatControllerTest {
     @Test
     void streamDeliversChunksAndCleansUp() throws Exception {
         when(spec.stream()).thenReturn(streamSpec);
-        when(streamSpec.content()).thenReturn(Flux.just("你", "好", "！"));
+        when(streamSpec.chatResponse()).thenReturn(Flux.just(chatResponse("你"), chatResponse("好"), chatResponse("！")));
         SessionMemory memory = new InMemorySessionMemory(20, 64, 16000);
         ChatController controller = newController(defaultProps(), memory);
         MockMvc mockMvc = mockMvcFor(controller);
@@ -157,12 +167,42 @@ class ChatControllerTest {
         assertThat(history.get(1).getText()).isEqualTo("你好！");
     }
 
+    /** 迭代 15 I15-7：reasoning_content 走独立 reasoning 事件，与文本事件分离。 */
+    @Test
+    void streamEmitsReasoningEventSeparately() throws Exception {
+        AssistantMessage thinking = new AssistantMessage("最终回复") {
+            @Override
+            public java.util.Map<String, Object> getMetadata() {
+                return java.util.Map.of("reasoningContent", "我需要先查看文件再回答");
+            }
+        };
+        when(spec.stream()).thenReturn(streamSpec);
+        when(streamSpec.chatResponse()).thenReturn(Flux.just(new ChatResponse(List.of(new Generation(thinking)))));
+        ChatController controller = newController(defaultProps(), new InMemorySessionMemory(20, 64, 16000));
+        MockMvc mockMvc = mockMvcFor(controller);
+
+        MvcResult result = mockMvc.perform(post("/api/chat/stream")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"message\":\"看看文件\"}"))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        mockMvc.perform(asyncDispatch(result))
+                .andExpect(status().isOk())
+                .andExpect(mvcResult -> {
+                    String body = mvcResult.getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+                    assertThat(body).contains("event:reasoning")
+                            .contains("我需要先查看文件再回答")
+                            .contains("最终回复");
+                });
+    }
+
     /** 上游异常：2 秒内完成收尾（不挂起），客户端拿到异常，注册表清空。 */
     @Test
     void upstreamErrorCompletesWithoutHanging() throws Exception {
         when(spec.stream()).thenReturn(streamSpec);
-        when(streamSpec.content()).thenReturn(
-                Flux.<String>error(new RuntimeException("上游 API 超时"))
+        when(streamSpec.chatResponse()).thenReturn(
+                Flux.<ChatResponse>error(new RuntimeException("上游 API 超时"))
                         .delaySubscription(Duration.ofMillis(100)));
         ChatController controller = newController(defaultProps(), new InMemorySessionMemory(20, 64, 16000));
         MockMvc mockMvc = mockMvcFor(controller);
@@ -185,7 +225,7 @@ class ChatControllerTest {
     @Test
     void sseTimeoutIsConfigured() {
         when(spec.stream()).thenReturn(streamSpec);
-        when(streamSpec.content()).thenReturn(Flux.never());
+        when(streamSpec.chatResponse()).thenReturn(Flux.never());
         ChatProperties props = new ChatProperties(
                 new ChatProperties.Sse(Duration.ofSeconds(30)),
                 new ChatProperties.Memory(20, 64, 16000));
