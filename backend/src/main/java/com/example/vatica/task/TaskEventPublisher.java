@@ -78,6 +78,10 @@ public class TaskEventPublisher {
         snap.put("reworkCount", r.getReworkCount());
         snap.put("error", r.getError());
         snap.put("recoverable", r.isRecoverable());
+        snap.put("executionAttempt", r.getExecutionAttempt());
+        snap.put("executionRuntime", r.getExecutionRuntime());
+        snap.put("lastHeartbeatAt", r.getLastHeartbeatAt() == null ? null : r.getLastHeartbeatAt().toString());
+        snap.put("recoveryApprovalRequired", r.isRecoveryApprovalRequired());
         try {
             snap.put("plan", mapper.readValue(r.getPlanJson(), Object.class));
         } catch (Exception e) {

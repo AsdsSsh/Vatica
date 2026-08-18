@@ -10,6 +10,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import jakarta.persistence.Index;
 
 /**
@@ -20,7 +21,8 @@ import jakarta.persistence.Index;
  */
 @Entity
 @Table(name = "vatica_task", indexes = {
-        @Index(name = "idx_task_owner_created", columnList = "userId,createdAt") })
+        @Index(name = "idx_task_owner_created", columnList = "userId,createdAt"),
+        @Index(name = "uk_task_owner_idempotency", columnList = "userId,idempotencyKey", unique = true) })
 public class TaskRecord {
 
     @Id
@@ -33,6 +35,10 @@ public class TaskRecord {
 
     @Column(updatable = false)
     private Long orgId;
+
+    /** 迭代 18：同一用户的创建请求幂等键；空值表示调用方未启用幂等语义。 */
+    @Column(length = 128)
+    private String idempotencyKey;
 
     /** 用户原始目标（一句话）。 */
     @Column(nullable = false, length = 4000)
@@ -94,6 +100,33 @@ public class TaskRecord {
     @Column(nullable = false)
     private int planRevisionCount = 0;
 
+    /** 迭代 18：乐观锁版本，阻止审批/取消/恢复并发回写旧任务状态。 */
+    @Version
+    private long version;
+
+    /** 迭代 18：本次执行的稳定标识，重启恢复会生成新的 run。 */
+    @Column(length = 36)
+    private String executionRunId;
+
+    /** 迭代 18：执行尝试次数（首次执行为 1，恢复/人工返工递增）。 */
+    @Column(nullable = false)
+    private int executionAttempt;
+
+    /** 迭代 18：实际运行时名称，用于 Legacy/AgentScope 质量对照。 */
+    @Column(length = 16)
+    private String executionRuntime;
+
+    /** 迭代 18：最近一次执行开始/心跳/结束时间，只记元数据不记业务内容。 */
+    private Instant executionStartedAt;
+
+    private Instant lastHeartbeatAt;
+
+    private Instant executionFinishedAt;
+
+    /** 迭代 18：重启恢复后的中断步骤需人工确认，避免静默重放副作用。 */
+    @Column(nullable = false)
+    private boolean recoveryApprovalRequired;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -142,6 +175,14 @@ public class TaskRecord {
 
     public Long getOrgId() {
         return orgId;
+    }
+
+    public String getIdempotencyKey() {
+        return idempotencyKey;
+    }
+
+    public void setIdempotencyKey(String idempotencyKey) {
+        this.idempotencyKey = idempotencyKey;
     }
 
     public String getGoal() {
@@ -254,6 +295,66 @@ public class TaskRecord {
 
     public void setPlanRevisionCount(int planRevisionCount) {
         this.planRevisionCount = planRevisionCount;
+    }
+
+    public long getVersion() {
+        return version;
+    }
+
+    public String getExecutionRunId() {
+        return executionRunId;
+    }
+
+    public void setExecutionRunId(String executionRunId) {
+        this.executionRunId = executionRunId;
+    }
+
+    public int getExecutionAttempt() {
+        return executionAttempt;
+    }
+
+    public void setExecutionAttempt(int executionAttempt) {
+        this.executionAttempt = executionAttempt;
+    }
+
+    public String getExecutionRuntime() {
+        return executionRuntime;
+    }
+
+    public void setExecutionRuntime(String executionRuntime) {
+        this.executionRuntime = executionRuntime;
+    }
+
+    public Instant getExecutionStartedAt() {
+        return executionStartedAt;
+    }
+
+    public void setExecutionStartedAt(Instant executionStartedAt) {
+        this.executionStartedAt = executionStartedAt;
+    }
+
+    public Instant getLastHeartbeatAt() {
+        return lastHeartbeatAt;
+    }
+
+    public void setLastHeartbeatAt(Instant lastHeartbeatAt) {
+        this.lastHeartbeatAt = lastHeartbeatAt;
+    }
+
+    public Instant getExecutionFinishedAt() {
+        return executionFinishedAt;
+    }
+
+    public void setExecutionFinishedAt(Instant executionFinishedAt) {
+        this.executionFinishedAt = executionFinishedAt;
+    }
+
+    public boolean isRecoveryApprovalRequired() {
+        return recoveryApprovalRequired;
+    }
+
+    public void setRecoveryApprovalRequired(boolean recoveryApprovalRequired) {
+        this.recoveryApprovalRequired = recoveryApprovalRequired;
     }
 
     public Instant getCreatedAt() {

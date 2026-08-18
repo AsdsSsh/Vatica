@@ -20,6 +20,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.time.Duration;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterEach;
@@ -38,6 +39,7 @@ import com.example.vatica.agent.JudgeAgent;
 import com.example.vatica.agent.PlannerAgent;
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
+import com.example.vatica.config.TaskReliabilityProperties;
 import com.example.vatica.task.TaskPlan.TaskStep;
 
 /**
@@ -109,6 +111,10 @@ class TaskServiceTest {
         assertThat(finalPlan.getSteps().get(1).getResult()).isEqualTo("完成该步骤");
         assertThat(done.getScore()).isEqualTo(85);
         assertThat(done.getVerdict()).isEqualTo(TaskVerdict.PASS);
+        assertThat(done.getExecutionAttempt()).isEqualTo(1);
+        assertThat(done.getExecutionRuntime()).isEqualTo("legacy");
+        assertThat(done.getLastHeartbeatAt()).isNotNull();
+        assertThat(done.getExecutionFinishedAt()).isNotNull();
 
         // 持久化验证：从库里重读状态/评测一致
         TaskRecord reloaded = repository.findById(created.getId()).orElseThrow();
@@ -632,6 +638,78 @@ class TaskServiceTest {
                 .contains(BlackboardEntry.PLANNER_RESOLVED, BlackboardEntry.BUDGET_EXHAUSTED);
         verify(plannerAgent, times(1)).resolveCollaboration(
                 anyString(), any(), anyList(), anyInt(), any(ChatClient.class));
+    }
+
+    /** 18：同一用户重复提交相同幂等键只规划一次，并返回同一任务。 */
+    @Test
+    void duplicateIdempotencyKeyReturnsOriginalTaskWithoutReplanning() {
+        TaskRecord first = taskService.create("目标", null, null, null, "create-001");
+        TaskRecord repeated = taskService.create("目标", null, null, null, "create-001");
+
+        assertThat(repeated.getId()).isEqualTo(first.getId());
+        assertThat(repository.count()).isOne();
+        verify(plannerAgent, times(1)).plan("目标");
+    }
+
+    /** 18：幂等键不能被偷偷复用于不同请求体，避免客户端拿到不相干的旧任务。 */
+    @Test
+    void reusedIdempotencyKeyWithDifferentGoalIsRejected() {
+        taskService.create("目标", null, null, null, "create-002");
+
+        assertThatThrownBy(() -> taskService.create("另一个目标", null, null, null, "create-002"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("幂等键已用于其他任务目标");
+    }
+
+    /** 18：重启恢复保留完成步骤，并在中断步骤前强制人工确认，确认后只执行剩余步骤。 */
+    @Test
+    void resumeKeepsCheckpointAndRequiresApprovalBeforeInterruptedStep() throws Exception {
+        TaskPlan plan = twoStepPlan();
+        plan.getSteps().getFirst().setResult("已完成且不应重跑");
+        TaskRecord interrupted = new TaskRecord("recover-1", 1L, 1L, "目标", TaskStatus.FAILED,
+                new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(plan), 1, null);
+        interrupted.setRecoverable(true);
+        repository.save(interrupted);
+
+        TaskRecord pending = taskService.resume(interrupted.getId());
+
+        assertThat(pending.getStatus()).isEqualTo(TaskStatus.PENDING_APPROVAL);
+        assertThat(pending.getPendingStepId()).isEqualTo(2);
+        assertThat(pending.isRecoveryApprovalRequired()).isTrue();
+        assertThat(parsePlan(pending).getSteps().getFirst().getResult()).isEqualTo("已完成且不应重跑");
+        assertThat(pending.getExecutionAttempt()).isEqualTo(1);
+
+        TaskRecord done = taskService.approve(interrupted.getId());
+        assertThat(done.getStatus()).isEqualTo(TaskStatus.DONE);
+        assertThat(parsePlan(done).getSteps().getFirst().getResult()).isEqualTo("已完成且不应重跑");
+        verify(executorAgent, times(1)).executeStep(eq("目标"), any(), anyList(),
+                any(ToolCallback[].class), any(ChatClient.class), any());
+    }
+
+    /** 18：步骤超过可靠性边界后进入 FAILED，不能把超时当成空结果继续评测。 */
+    @Test
+    void stepTimeoutMarksTaskFailed() throws Exception {
+        TaskService target = AopTestUtils.getUltimateTargetObject(taskService);
+        ReflectionTestUtils.setField(target, "reliability",
+                new TaskReliabilityProperties(Duration.ofMillis(30)));
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        when(executorAgent.executeStep(eq("目标"), any(), anyList(), any(ToolCallback[].class), any(ChatClient.class), any()))
+                .thenAnswer(inv -> {
+                    entered.countDown();
+                    release.await(2, TimeUnit.SECONDS);
+                    return "迟到的结果不应写入任务";
+                });
+
+        try {
+            TaskRecord failed = taskService.approve(taskService.create("目标").getId());
+            assertThat(entered.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(failed.getStatus()).isEqualTo(TaskStatus.FAILED);
+            assertThat(failed.getError()).contains("超时");
+            assertThat(parsePlan(failed).getSteps().getFirst().getResult()).isNull();
+        } finally {
+            release.countDown();
+        }
     }
 
     private static TaskPlan twoStepPlan() {

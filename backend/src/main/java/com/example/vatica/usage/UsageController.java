@@ -29,4 +29,10 @@ public class UsageController {
     public List<UsageService.RequestCallView> requestCalls(@PathVariable String requestId) {
         return service.requestCalls(RequestIdentityContext.require(), requestId);
     }
+
+    /** 迭代 18：Legacy / AgentScope 任务质量与耗时基线。 */
+    @GetMapping("/reliability")
+    public UsageService.ReliabilityView reliability() {
+        return service.reliability(RequestIdentityContext.require());
+    }
 }

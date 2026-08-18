@@ -962,6 +962,28 @@ export async function fetchUsageToday(): Promise<UsageToday> {
   return (await getJson("/api/usage/today")).json();
 }
 
+/** 迭代 18：Legacy / AgentScope 任务质量与耗时基线。 */
+export interface RuntimeReliabilityTotals {
+  runtime: string;
+  taskCount: number;
+  completedTasks: number;
+  passedTasks: number;
+  failedTasks: number;
+  cancelledTasks: number;
+  multiAttemptTasks: number;
+  passRate: number | null;
+  averageScore: number | null;
+  averageDurationMs: number | null;
+}
+
+export interface ReliabilityView {
+  runtimes: RuntimeReliabilityTotals[];
+}
+
+export async function fetchReliabilityBaseline(): Promise<ReliabilityView> {
+  return (await getJson("/api/usage/reliability")).json();
+}
+
 export interface BlackboardEntry {
   id: string;
   type: "result" | "note" | "need-help" | "conflict";
@@ -1006,6 +1028,14 @@ export interface TaskDetail {
   plan?: TaskPlanView | string;
   /** 迭代 13：服务重启中断后是否可"继续执行"。 */
   recoverable: boolean;
+  /** 迭代 18：执行尝试次数。 */
+  executionAttempt: number;
+  /** 迭代 18：本次执行使用的运行时。 */
+  executionRuntime: string | null;
+  /** 迭代 18：最近一次执行心跳。 */
+  lastHeartbeatAt: string | null;
+  /** 迭代 18：恢复是否需要人工确认中断步骤。 */
+  recoveryApprovalRequired: boolean;
 }
 
 /** SSE 进度事件负载 = 完整任务快照 + 事件类型。 */
@@ -1027,13 +1057,20 @@ export async function createTask(
   goal: string,
   permission?: FilePermissionPolicy,
   credential?: EphemeralCredential,
+  idempotencyKey = crypto.randomUUID(),
 ): Promise<TaskDetail> {
-  return (await post("/api/task", {
-    goal,
-    permission,
-    credential,
-    mailCredential: getEphemeralMailCredential(),
-  })).json();
+  const res = await fetch(`${getApiBase()}/api/task`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey, ...authHeaders() },
+    body: JSON.stringify({
+      goal,
+      permission,
+      credential,
+      mailCredential: getEphemeralMailCredential(),
+    }),
+  });
+  if (!res.ok) throw await toRequestError(res, `请求失败（HTTP ${res.status}）`);
+  return res.json();
 }
 
 export async function fetchTaskDetail(id: string): Promise<TaskDetail> {

@@ -53,9 +53,10 @@ public class TaskController {
 
     /** 一句话创建任务：Planner 拆解 → 返回计划（PENDING 待审批）；迭代 11 起携带权限快照，迭代 13 支持临时凭据。 */
     @PostMapping
-    public TaskDetailDto create(@RequestBody TaskCreateRequest body) {
+    public TaskDetailDto create(@RequestBody TaskCreateRequest body,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         TaskRecord record = taskService.create(body.goal(), body.permission(), body.credential(),
-                body.mailCredential());
+                body.mailCredential(), idempotencyKey);
         return detail(record);
     }
 
@@ -139,6 +140,8 @@ public class TaskController {
         return new TaskDetailDto(r.getId(), r.getGoal(), r.getStatus().name(),
                 r.getCreatedAt().toString(), r.getCurrentStep(), r.getPendingStepId(),
                 r.getScore(), r.getVerdict() == null ? null : r.getVerdict().name(),
-                r.getReworkCount(), r.getError(), plan, r.isRecoverable());
+                r.getReworkCount(), r.getError(), plan, r.isRecoverable(), r.getExecutionAttempt(),
+                r.getExecutionRuntime(), r.getLastHeartbeatAt() == null ? null : r.getLastHeartbeatAt().toString(),
+                r.isRecoveryApprovalRequired());
     }
 }

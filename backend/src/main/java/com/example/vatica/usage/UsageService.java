@@ -52,6 +52,15 @@ public class UsageService {
             String createdAt) {
     }
 
+    /** 迭代 18：按运行时汇总任务质量/耗时，供 Legacy 与 AgentScope 对照。 */
+    public record RuntimeTotals(String runtime, int taskCount, int completedTasks, int passedTasks,
+            int failedTasks, int cancelledTasks, int multiAttemptTasks, Double passRate,
+            Double averageScore, Double averageDurationMs) {
+    }
+
+    public record ReliabilityView(List<RuntimeTotals> runtimes) {
+    }
+
     public TodayView today(RequestIdentity identity) {
         List<UsageRecord> rows = repository.findByUserIdAndCreatedAtAfterOrderByCreatedAtAsc(
                 identity.userId(), todayStart());
@@ -95,6 +104,41 @@ public class UsageService {
                         row.getReasoningTokens(), row.getContextFillRatio(),
                         row.getDurationMs(), row.getCreatedAt() == null ? null : row.getCreatedAt().toString()))
                 .toList();
+    }
+
+    public ReliabilityView reliability(RequestIdentity identity) {
+        Map<String, RuntimeAccumulator> totals = new LinkedHashMap<>();
+        for (TaskRecord task : taskRepository.findByUserId(identity.userId())) {
+            String runtime = task.getExecutionRuntime();
+            if (runtime == null || runtime.isBlank()) {
+                continue;
+            }
+            RuntimeAccumulator acc = totals.computeIfAbsent(runtime, RuntimeAccumulator::new);
+            acc.tasks++;
+            if (task.getStatus() == com.example.vatica.task.TaskStatus.DONE) {
+                acc.completed++;
+                if (task.getVerdict() == com.example.vatica.task.TaskVerdict.PASS) {
+                    acc.passed++;
+                }
+            } else if (task.getStatus() == com.example.vatica.task.TaskStatus.FAILED) {
+                acc.failed++;
+            } else if (task.getStatus() == com.example.vatica.task.TaskStatus.CANCELLED) {
+                acc.cancelled++;
+            }
+            if (task.getExecutionAttempt() > 1) {
+                acc.multiAttempt++;
+            }
+            if (task.getScore() != null) {
+                acc.scoreTotal += task.getScore();
+                acc.scored++;
+            }
+            if (task.getExecutionStartedAt() != null && task.getExecutionFinishedAt() != null) {
+                acc.durationTotal += java.time.Duration.between(task.getExecutionStartedAt(),
+                        task.getExecutionFinishedAt()).toMillis();
+                acc.timed++;
+            }
+        }
+        return new ReliabilityView(totals.values().stream().map(RuntimeAccumulator::view).toList());
     }
 
     private void enrichQuality(Long userId, Map<String, RoleAccumulator> byRole) {
@@ -147,6 +191,31 @@ public class UsageService {
         private RoleTotals view() {
             return new RoleTotals(agentId, role, input, output, total, requests, durationMs, cost, taskCount,
                     passedTasks, taskCount == 0 ? null : ((double) passedTasks / taskCount));
+        }
+    }
+
+    private static final class RuntimeAccumulator {
+        private final String runtime;
+        private int tasks;
+        private int completed;
+        private int passed;
+        private int failed;
+        private int cancelled;
+        private int multiAttempt;
+        private int scored;
+        private int scoreTotal;
+        private int timed;
+        private long durationTotal;
+
+        private RuntimeAccumulator(String runtime) {
+            this.runtime = runtime;
+        }
+
+        private RuntimeTotals view() {
+            return new RuntimeTotals(runtime, tasks, completed, passed, failed, cancelled, multiAttempt,
+                    completed == 0 ? null : (double) passed / completed,
+                    scored == 0 ? null : (double) scoreTotal / scored,
+                    timed == 0 ? null : (double) durationTotal / timed);
         }
     }
 

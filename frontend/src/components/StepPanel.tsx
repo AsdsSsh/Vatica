@@ -463,6 +463,8 @@ export default function StepPanel() {
                 />
               )}
               {detail.reworkCount > 0 && <Tag>返工 {detail.reworkCount} 次</Tag>}
+              {detail.executionRuntime && <Tag>{detail.executionRuntime}</Tag>}
+              {detail.executionAttempt > 1 && <Tag>执行尝试 {detail.executionAttempt}</Tag>}
             </Flex>
             {detail.error && (
               <Typography.Text type="danger" style={{ fontSize: 12 }}>
@@ -656,6 +658,7 @@ export default function StepPanel() {
         open={approvalOpen}
         title={
           arbitrationPending ? "协作冲突仲裁"
+            : detail?.recoveryApprovalRequired ? "恢复执行确认"
             : detail?.status === "PENDING_APPROVAL" ? "敏感步骤审批" : "任务计划审批"
         }
         onCancel={() => setApprovalOpen(false)}
@@ -701,6 +704,15 @@ export default function StepPanel() {
               placeholder="写下判断依据，系统会将冲突步骤串行化后继续"
               onChange={(event) => setArbitrationNote(event.target.value)}
             />
+          </div>
+        ) : detail?.recoveryApprovalRequired ? (
+          <div>
+            <Typography.Paragraph>
+              服务重启时步骤 <b>{approvalStep?.id}</b> 的执行结果无法确认。
+            </Typography.Paragraph>
+            <Typography.Paragraph type="warning" style={{ background: "var(--vatica-warning-bg)", padding: 8, borderRadius: 8 }}>
+              已完成步骤不会重跑。确认后只会从当前中断步骤继续，请先检查外部系统中是否已经产生副作用。
+            </Typography.Paragraph>
           </div>
         ) : detail?.status === "PENDING_APPROVAL" ? (
           <div>

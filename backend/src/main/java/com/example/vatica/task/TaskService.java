@@ -4,10 +4,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.slf4j.Logger;
@@ -21,6 +26,8 @@ import org.springframework.context.event.EventListener;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -36,6 +43,7 @@ import com.example.vatica.config.AgentModelBindingService;
 import com.example.vatica.config.JudgeProperties;
 import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.config.ModelSlot;
+import com.example.vatica.config.TaskReliabilityProperties;
 import com.example.vatica.context.ContextBudget;
 import com.example.vatica.mail.MailConnectionSettings;
 import com.example.vatica.permission.FilePermissionPolicy;
@@ -94,9 +102,16 @@ public class TaskService {
     private final AgentModelBindingService agentModelBindings;
     private final DirectModelUsageRecorder directUsage;
     private final HumanAgent humanAgent;
+    private final TaskReliabilityProperties reliability;
 
     /** 终止标志（迭代 7 I7-4）：取消接口与执行线程的协作式协调点（波次粒度生效）。 */
     private final Map<String, AtomicBoolean> cancelFlags = new ConcurrentHashMap<>();
+
+    /** 迭代 18：同一任务的审批/恢复/返工动作单飞；取消不持有该锁，保证运行中仍可及时终止。 */
+    private final Map<String, Object> mutationLocks = new ConcurrentHashMap<>();
+
+    /** 迭代 18：同一用户的创建幂等键在单实例内先串行，数据库唯一索引负责跨实例兜底。 */
+    private final Map<Long, Semaphore> idempotencyLocks = new ConcurrentHashMap<>();
 
     /** 迭代 13 I13-5：EPHEMERAL 任务在运行期的临时凭据（不落库，服务重启即失效）。 */
     private final Map<String, EphemeralCredential> ephemeralCredentials = new ConcurrentHashMap<>();
@@ -114,7 +129,8 @@ public class TaskService {
             AgentToolCatalog agentTools, FilePermissionRequestService permissionRequests,
             ModelRegistry registry, AgentTraceRecordRepository traceRepository, TaskBlackboard blackboard,
             ContextBudget contextBudget, AgentRuntimeFactory runtimeFactory, AgentRegistry agentRegistry,
-            DirectModelUsageRecorder directUsage, HumanAgent humanAgent, AgentModelBindingService agentModelBindings) {
+            DirectModelUsageRecorder directUsage, HumanAgent humanAgent, AgentModelBindingService agentModelBindings,
+            TaskReliabilityProperties reliability) {
         this.plannerAgent = plannerAgent;
         this.judgeAgent = judgeAgent;
         this.judgeProps = judgeProps;
@@ -133,6 +149,7 @@ public class TaskService {
         this.directUsage = directUsage;
         this.humanAgent = humanAgent;
         this.agentModelBindings = agentModelBindings;
+        this.reliability = reliability;
     }
 
     /** 创建任务：Planner 拆解 → PENDING 待审批计划。 */
@@ -156,13 +173,61 @@ public class TaskService {
     @Transactional
     public TaskRecord create(String goal, FilePermissionPolicy permission, EphemeralCredential credential,
             MailConnectionSettings mailCredential) {
+        return create(goal, permission, credential, mailCredential, null);
+    }
+
+    /**
+     * 迭代 18：带幂等键创建任务。
+     *
+     * <p>同一用户重复提交同一个键直接返回原任务，不重新调用 Planner；键与用户组成数据库唯一约束，
+     * 单实例锁用于避免并发请求在 Planner 阶段重复产生副作用。</p>
+     */
+    @Transactional
+    public TaskRecord create(String goal, FilePermissionPolicy permission, EphemeralCredential credential,
+            MailConnectionSettings mailCredential, String rawIdempotencyKey) {
         if (goal == null || goal.isBlank()) {
             throw new IllegalArgumentException("操作失败：任务目标不能为空。");
         }
         RequestIdentity identity = RequestIdentityContext.require();
+        String idempotencyKey = normalizeIdempotencyKey(rawIdempotencyKey);
+        if (idempotencyKey != null) {
+            Semaphore lock = idempotencyLocks.computeIfAbsent(identity.userId(), ignored -> new Semaphore(1));
+            lock.acquireUninterruptibly();
+            boolean releaseHere = true;
+            try {
+                if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                        @Override
+                        public void afterCompletion(int status) {
+                            lock.release();
+                        }
+                    });
+                    releaseHere = false;
+                }
+                TaskRecord existing = repository.findByUserIdAndIdempotencyKey(identity.userId(), idempotencyKey)
+                        .orElse(null);
+                if (existing != null) {
+                    if (!existing.getGoal().equals(goal.trim())) {
+                        throw new IllegalArgumentException("操作失败：幂等键已用于其他任务目标，请更换 Idempotency-Key。");
+                    }
+                    return existing;
+                }
+                return createNewTask(goal, permission, credential, mailCredential, idempotencyKey, identity);
+            } finally {
+                if (releaseHere) {
+                    lock.release();
+                }
+            }
+        }
+        return createNewTask(goal, permission, credential, mailCredential, null, identity);
+    }
+
+    private TaskRecord createNewTask(String goal, FilePermissionPolicy permission, EphemeralCredential credential,
+            MailConnectionSettings mailCredential, String idempotencyKey, RequestIdentity identity) {
         TaskRecord record = new TaskRecord(UUID.randomUUID().toString(), identity.userId(), identity.orgId(),
                 goal.trim(), TaskStatus.PENDING, null, 0,
                 permission == null ? null : toPermissionJson(permission));
+        record.setIdempotencyKey(idempotencyKey);
         if (credential != null) {
             record.setModelSource("EPHEMERAL");
             ephemeralCredentials.put(record.getId(), credential);
@@ -191,6 +256,17 @@ public class TaskService {
             ephemeralMailCredentials.put(record.getId(), mailCredential);
         }
         return repository.save(record);
+    }
+
+    private static String normalizeIdempotencyKey(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String key = raw.trim();
+        if (key.length() > 128) {
+            throw new IllegalArgumentException("操作失败：Idempotency-Key 不能超过 128 个字符。");
+        }
+        return key;
     }
 
     /** 查询单任务。 */
@@ -249,30 +325,49 @@ public class TaskService {
                     || record.getStatus() == TaskStatus.REVIEW || record.getStatus() == TaskStatus.RETRY) {
                 record.setStatus(TaskStatus.FAILED);
                 record.setRecoverable(true);
-                record.setError("服务重启导致任务中断，凭据可用，可点击继续执行。");
+                record.setRecoveryApprovalRequired(false);
+                record.setError("服务重启导致任务中断，已完成步骤会保留；点击继续执行后需确认中断步骤。");
+                record.setLastHeartbeatAt(Instant.now());
                 repository.save(record);
             }
         }
     }
 
-    /** 迭代 13 I13-6：重启中断任务的手动恢复（保守策略：清结果整体重跑，副作用步骤重新审批）。 */
+    /** 迭代 18：重启中断任务的手动恢复，保留已完成步骤并把未知副作用边界交给人工确认。 */
     @Transactional
     public TaskRecord resume(String id) {
-        TaskRecord record = get(id);
-        if (record.getStatus() != TaskStatus.FAILED || !record.isRecoverable()) {
-            throw new IllegalArgumentException("操作失败：该任务不可继续执行，请重新提交。");
+        synchronized (mutationLock(id)) {
+            TaskRecord record = get(id);
+            if (record.getStatus() != TaskStatus.FAILED || !record.isRecoverable()) {
+                throw new IllegalArgumentException("操作失败：该任务不可继续执行，请重新提交。");
+            }
+            TaskPlan plan = parse(record.getPlanJson());
+            int next = nextIncompleteIndex(plan);
+            beginExecution(record);
+            record.setRecoverable(false);
+            record.setError(null);
+            record.setLastFeedbackJson(null);
+            record.setPlanRevisionCount(0);
+            if (next < plan.getSteps().size()) {
+                // 未知步骤可能已经完成了不可逆副作用，恢复不得静默重放。
+                TaskStep interrupted = plan.getSteps().get(next);
+                record.setStatus(TaskStatus.PENDING_APPROVAL);
+                record.setPendingStepId(interrupted.getId());
+                record.setCurrentStep(next);
+                record.setRecoveryApprovalRequired(true);
+                record.setError("服务重启后请确认从步骤 " + interrupted.getId() + " 继续；已完成步骤不会重跑。" );
+                record.setPlanJson(toJson(plan));
+                repository.save(record);
+                eventPublisher.publish(record, "recovery_approval_required");
+                return record;
+            }
+            record.setStatus(TaskStatus.RUNNING);
+            record.setPendingStepId(-1);
+            repository.save(record);
+            eventPublisher.publish(record, "resumed");
+            executeUntilBlocked(record);
+            return repository.save(record);
         }
-        TaskPlan plan = parse(record.getPlanJson());
-        resetPlanForRerun(record, plan);
-        record.setStatus(TaskStatus.RUNNING);
-        record.setRecoverable(false);
-        record.setError(null);
-        record.setLastFeedbackJson(null);
-        record.setPlanRevisionCount(0);
-        repository.save(record);
-        eventPublisher.publish(record, "resumed");
-        executeUntilBlocked(record);
-        return repository.save(record);
     }
 
     /**
@@ -281,11 +376,18 @@ public class TaskService {
      */
     @Transactional
     public TaskRecord approve(String id) {
+        synchronized (mutationLock(id)) {
+            return approveLocked(id);
+        }
+    }
+
+    private TaskRecord approveLocked(String id) {
         TaskRecord record = get(id);
         TaskStatus from = record.getStatus();
         switch (from) {
             case PENDING -> {
                 TaskStateMachine.requireTransition(from, TaskStatus.RUNNING);
+                beginExecution(record);
                 record.setStatus(TaskStatus.RUNNING);
                 repository.save(record);
             }
@@ -307,6 +409,7 @@ public class TaskService {
                     record.setError(null);
                 }
                 record.setPendingStepId(-1);
+                record.setRecoveryApprovalRequired(false);
                 record.setPlanJson(toJson(plan));
                 record.setStatus(TaskStatus.RUNNING);
                 repository.save(record);
@@ -341,6 +444,8 @@ public class TaskService {
                 permissionRequests.cancelChannel(TenantChannels.task(identityOf(record), id));
                 ephemeralCredentials.remove(id);
                 ephemeralMailCredentials.remove(id);
+                record.setLastHeartbeatAt(Instant.now());
+                record.setExecutionFinishedAt(Instant.now());
                 repository.save(record);
                 eventPublisher.publish(record, "cancelled");
                 log.info("任务 {} 被用户终止", id);
@@ -358,6 +463,12 @@ public class TaskService {
      */
     @Transactional
     public TaskRecord rework(String id) {
+        synchronized (mutationLock(id)) {
+            return reworkLocked(id);
+        }
+    }
+
+    private TaskRecord reworkLocked(String id) {
         TaskRecord record = get(id);
         switch (record.getStatus()) {
             case NEEDS_REVISION -> {
@@ -381,6 +492,8 @@ public class TaskService {
         record.setScore(null);
         record.setVerdict(null);
         record.setError(null);
+        record.setRecoveryApprovalRequired(false);
+        beginExecution(record);
         repository.save(record);
         executeUntilBlocked(record);
         // 迭代 10 I10-6：与 approve 同款的取消兜底——执行期间若取消标志已置位，
@@ -410,6 +523,7 @@ public class TaskService {
                     return;
                 }
                 record.setCurrentStep(todo.stream().min(Integer::compareTo).orElse(0));
+                heartbeat(record);
 
                 // 显式共享写资源冲突在任何工具调用之前机械阻断。
                 List<BlackboardEntry> conflicts = blackboard.detectWriteConflicts(plan, todo);
@@ -437,6 +551,7 @@ public class TaskService {
                         record.setStatus(TaskStatus.PENDING_APPROVAL);
                         record.setPendingStepId(step.getId());
                         record.setCurrentStep(idx);
+                        heartbeat(record);
                         record.setPlanJson(toJson(plan));
                         repository.save(record);
                         eventPublisher.publish(record, "approval_required");
@@ -453,7 +568,8 @@ public class TaskService {
                         TaskStep step = plan.getSteps().get(idx);
                         List<String> context = blackboard.contextFor(record.getGoal(), plan, step);
                         futures.add(CompletableFuture
-                                .supplyAsync(() -> execute(record, step, context, reflection), parallelExecutor));
+                                .supplyAsync(() -> execute(record, step, context, reflection), parallelExecutor)
+                                .orTimeout(reliability.stepTimeout().toMillis(), TimeUnit.MILLISECONDS));
                     }
                     CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
                     if (isCancelled(record.getId())) {
@@ -486,6 +602,7 @@ public class TaskService {
                     }
                     record.setPlanJson(toJson(plan));
                     record.setCurrentStep(nextIncompleteIndex(plan));
+                    heartbeat(record);
                     repository.save(record);
                     waveEntries.forEach(entry -> eventPublisher.publishBlackboard(record, entry));
                     eventPublisher.publish(record, helpSignals.isEmpty() ? "step_done" : "need_help");
@@ -510,11 +627,16 @@ public class TaskService {
                     if (isCancelled(record.getId())) {
                         return;
                     }
-                    Throwable cause = e instanceof CompletionException ? e.getCause() : e;
+                    Throwable cause = unwrapCompletionException(e);
+                    if (cause instanceof TimeoutException) {
+                        cause = new IllegalStateException("步骤执行超时（超过 "
+                                + formatDuration(reliability.stepTimeout()) + "）。", cause);
+                    }
                     log.error("任务 {} 波次执行失败（步骤 {}）", record.getId(), todo, cause);
                     TaskStateMachine.requireTransition(record.getStatus(), TaskStatus.FAILED);
                     record.setStatus(TaskStatus.FAILED);
                     record.setError(cause.getMessage());
+                    markExecutionFinished(record);
                     cancelFlags.remove(record.getId());
                     ephemeralCredentials.remove(record.getId());
                     ephemeralMailCredentials.remove(record.getId());
@@ -533,6 +655,7 @@ public class TaskService {
         record.setStatus(TaskStatus.REVIEW);
         record.setCurrentStep(-1);
         record.setPendingStepId(-1);
+        heartbeat(record);
         repository.save(record);
         eventPublisher.publish(record, "review");
         evaluateAndRoute(record, plan);
@@ -757,6 +880,7 @@ public class TaskService {
             TaskStateMachine.requireTransition(TaskStatus.REVIEW, TaskStatus.FAILED);
             record.setStatus(TaskStatus.FAILED);
             record.setError("评测异常：" + e.getMessage());
+            markExecutionFinished(record);
             cancelFlags.remove(record.getId());
             ephemeralCredentials.remove(record.getId());
             ephemeralMailCredentials.remove(record.getId());
@@ -772,6 +896,7 @@ public class TaskService {
         if (eval.verdict() == TaskVerdict.PASS) {
             TaskStateMachine.requireTransition(TaskStatus.REVIEW, TaskStatus.DONE);
             record.setStatus(TaskStatus.DONE);
+            markExecutionFinished(record);
             cancelFlags.remove(record.getId());
             ephemeralCredentials.remove(record.getId());
             ephemeralMailCredentials.remove(record.getId());
@@ -783,6 +908,7 @@ public class TaskService {
             record.setStatus(TaskStatus.NEEDS_REVISION);
             record.setError("评测不合格（" + eval.score() + " 分）：" + eval.summary()
                     + "。自动返工已达上限 " + judgeProps.maxAutoRework() + " 次，请人工返工。");
+            markExecutionFinished(record);
             cancelFlags.remove(record.getId());
             log.info("任务 {} 评测不合格且自动返工超限，转人工", record.getId());
             repository.save(record);
@@ -899,6 +1025,50 @@ public class TaskService {
         } catch (Exception e) {
             return "上一轮质量评测反馈：" + record.getLastFeedbackJson();
         }
+    }
+
+    /** 迭代 18：开始一次新的执行 run；运行时名称随任务落库，供 Legacy/AgentScope 对照。 */
+    private void beginExecution(TaskRecord record) {
+        record.setExecutionRunId(UUID.randomUUID().toString());
+        record.setExecutionAttempt(record.getExecutionAttempt() + 1);
+        record.setExecutionRuntime(runtimeFactory.runtime().name());
+        Instant now = Instant.now();
+        record.setExecutionStartedAt(now);
+        record.setLastHeartbeatAt(now);
+        record.setExecutionFinishedAt(null);
+        record.setRecoverable(false);
+    }
+
+    /** 迭代 18：每个波次边界写入心跳，恢复时可区分正常等待审批与进程中断。 */
+    private void heartbeat(TaskRecord record) {
+        record.setLastHeartbeatAt(Instant.now());
+    }
+
+    private void markExecutionFinished(TaskRecord record) {
+        Instant now = Instant.now();
+        record.setLastHeartbeatAt(now);
+        record.setExecutionFinishedAt(now);
+    }
+
+    private Object mutationLock(String taskId) {
+        return mutationLocks.computeIfAbsent(taskId, ignored -> new Object());
+    }
+
+    private static Throwable unwrapCompletionException(Throwable error) {
+        Throwable current = error;
+        while ((current instanceof CompletionException || current instanceof java.util.concurrent.ExecutionException)
+                && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current;
+    }
+
+    private static String formatDuration(Duration duration) {
+        long seconds = duration.getSeconds();
+        if (seconds % 60 == 0) {
+            return (seconds / 60) + " 分钟";
+        }
+        return seconds + " 秒";
     }
 
     /** 是否已被用户终止（取消接口与执行线程的协作式协调点）。 */

@@ -30,6 +30,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 @Configuration
 @EnableConfigurationProperties({
         ChatProperties.class, JudgeProperties.class, ModelProperties.class, OpenAiDefaultsProperties.class,
+        TaskReliabilityProperties.class,
         com.example.vatica.usage.UsageProperties.class,
         com.example.vatica.runtime.AgentRuntimeProperties.class })
 public class ChatConfig {

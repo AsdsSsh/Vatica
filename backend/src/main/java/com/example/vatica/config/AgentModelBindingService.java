@@ -115,6 +115,9 @@ public class AgentModelBindingService {
                 ModelSlot slot = platformSlot(binding.getSlotId());
                 if (!slot.enabled()) {
                     reasons.add(scope.scope() + "绑定槽位已禁用");
+                    if (!agentSlotAvailable(slot)) {
+                        reasons.add(scope.scope() + "绑定槽位缺少凭据");
+                    }
                     continue;
                 }
                 if (!agentSlotAvailable(slot)) {

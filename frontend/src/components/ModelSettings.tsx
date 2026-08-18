@@ -22,6 +22,7 @@ import { DeleteOutlined, EditOutlined, PlusOutlined, ThunderboltOutlined } from 
 import {
   fetchModelSlots,
   fetchAgentBindings,
+  fetchReliabilityBaseline,
   fetchUsageToday,
   isAuthExpiredError,
   MODEL_CAPABILITIES,
@@ -30,6 +31,7 @@ import {
   testModelConnection,
   type ModelSlot,
   type AgentBindingSettings,
+  type ReliabilityView,
   type UsageToday,
 } from "../api";
 
@@ -75,6 +77,7 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
   const [bindingScope, setBindingScope] = useState<"USER" | "ORG" | "PLATFORM">("PLATFORM");
   const [bindingSaving, setBindingSaving] = useState<string | null>(null);
   const [usageToday, setUsageToday] = useState<UsageToday | null>(null);
+  const [reliability, setReliability] = useState<ReliabilityView | null>(null);
   const [form] = Form.useForm<ModelSlot>();
   // 迭代 12 I12-9：dirty 跟踪——打开时快照，任何槽位变更后取消需确认
   const [baseline, setBaseline] = useState("");
@@ -98,6 +101,7 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
         if (!isAuthExpiredError(e)) message.warning(`读取 Agent 模型绑定失败：${e.message}`);
       });
     fetchUsageToday().then(setUsageToday).catch(() => setUsageToday(null));
+    fetchReliabilityBaseline().then(setReliability).catch(() => setReliability(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -232,6 +236,37 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
               title: "通过率", dataIndex: "passRate", width: 90,
               render: (v: number | null) => v == null ? "-" : `${Math.round(v * 100)}%`,
             },
+          ]}
+        />
+        <Divider style={{ margin: "4px 0" }} />
+        <Flex justify="space-between" align="center">
+          <Typography.Text strong>运行时稳定性基线</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+            全部任务 · 质量 / 耗时 / 多次执行
+          </Typography.Text>
+        </Flex>
+        <Table
+          size="small"
+          rowKey="runtime"
+          pagination={false}
+          locale={{ emptyText: "还没有可对照的执行任务" }}
+          dataSource={reliability?.runtimes ?? []}
+          columns={[
+            { title: "运行时", dataIndex: "runtime", width: 110 },
+            { title: "任务", dataIndex: "taskCount", width: 70 },
+            {
+              title: "通过率", dataIndex: "passRate", width: 90,
+              render: (v: number | null) => v == null ? "-" : `${Math.round(v * 100)}%`,
+            },
+            {
+              title: "平均评分", dataIndex: "averageScore", width: 90,
+              render: (v: number | null) => v == null ? "-" : v.toFixed(1),
+            },
+            {
+              title: "平均耗时", dataIndex: "averageDurationMs", width: 110,
+              render: (v: number | null) => v == null ? "-" : `${Math.round(v)} ms`,
+            },
+            { title: "多次执行", dataIndex: "multiAttemptTasks", width: 90 },
           ]}
         />
       </Space>

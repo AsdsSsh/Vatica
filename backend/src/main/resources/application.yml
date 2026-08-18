@@ -112,6 +112,10 @@ vatica:
   judge:
     pass-threshold: 70      # Judge 评分 >= 阈值判 PASS 交付；低分自动返工
     max-auto-rework: 2      # 低分自动返工上限（防死循环）；超限 NEEDS_REVISION 交人工
+  # ===== 任务可靠性（迭代 18）=====
+  task:
+    # 单波次步骤的最长等待时间；超时后任务 FAILED，已完成步骤不会回滚
+    step-timeout: 5m
   # ===== 模型选择器（迭代 7 I7-5）=====
   # 主模型 DeepSeek 走 spring.ai.openai.*；备用模型通义千问（OpenAI 兼容）：
   #   setx QWEN_API_KEY <你的通义Key> 后重启，前端模型选择器即可切换

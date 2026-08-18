@@ -11,8 +11,13 @@ package com.example.vatica.task;
  * @param verdict     PASS / FAIL（未评测为 null）
  * @param error       失败/终止/评测不合格原因（正常为 null）
  * @param recoverable 迭代 13：服务重启中断后是否可"继续执行"
+ * @param executionAttempt 迭代 18：执行尝试次数
+ * @param executionRuntime 迭代 18：本次执行使用的运行时（legacy / agentscope）
+ * @param lastHeartbeatAt 迭代 18：最近一次执行心跳
+ * @param recoveryApprovalRequired 迭代 18：恢复是否需要人工确认中断步骤
  */
 public record TaskDetailDto(String id, String goal, String status, String createdAt,
         int currentStep, int pendingStepId, Integer score, String verdict, int reworkCount,
-        String error, Object plan, boolean recoverable) {
+        String error, Object plan, boolean recoverable, int executionAttempt, String executionRuntime,
+        String lastHeartbeatAt, boolean recoveryApprovalRequired) {
 }
