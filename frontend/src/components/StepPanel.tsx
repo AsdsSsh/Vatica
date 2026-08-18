@@ -749,6 +749,17 @@ export default function StepPanel() {
           locale={{ emptyText: "该步骤还没有工具调用记录" }}
           columns={[
             {
+              title: "Agent",
+              dataIndex: "agentId",
+              width: 130,
+              render: (v: string | null, r: AgentTraceView) => (
+                <Space direction="vertical" size={0}>
+                  <Typography.Text className="vatica-mono" style={{ fontSize: 11 }}>{v ?? "-"}</Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 10 }}>{r.role ?? ""}</Typography.Text>
+                </Space>
+              ),
+            },
+            {
               title: "工具", dataIndex: "toolName", width: 130,
               render: (v: string) => <Typography.Text className="vatica-mono" style={{ fontSize: 12 }}>{v}</Typography.Text>,
             },

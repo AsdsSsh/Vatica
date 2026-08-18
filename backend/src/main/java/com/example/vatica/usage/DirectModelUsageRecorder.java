@@ -46,8 +46,21 @@ public class DirectModelUsageRecorder {
         }
         recorder.enqueue(new UsageRecord(UUID.randomUUID().toString(), context.requestId(), context.userId(),
                 context.orgId(), context.requestType(), context.slotId(), context.taskId(), context.stepId(),
-                context.reasoningMode(), usage.inputTokens(), usage.outputTokens(), usage.totalTokens(), 0,
+                context.reasoningMode(), context.agentId(), context.role(), null,
+                usage.inputTokens(), usage.outputTokens(), usage.totalTokens(), 0,
                 usage.cacheReadTokens(), 0, context.contextFillRatio(), durationMs, 0));
+    }
+
+    /** 迭代 17C：明确绑定失效时记录零 token 的降级观测，不伪装成模型调用。 */
+    public void recordFallback(String reason, String slotId) {
+        UsageContext.Snapshot context = UsageContext.current();
+        if (context == null || context.userId() == null) {
+            return;
+        }
+        recorder.enqueue(new UsageRecord(UUID.randomUUID().toString(), context.requestId(), context.userId(),
+                context.orgId(), "MODEL_FALLBACK", slotId, context.taskId(), context.stepId(),
+                context.reasoningMode(), context.agentId(), context.role(), reason,
+                0, 0, 0, 0, 0, 0, context.contextFillRatio(), 0, 0));
     }
 
     /** 模型调用失败时释放预留，不让失败请求永久占用进程内额度。 */

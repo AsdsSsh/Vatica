@@ -43,6 +43,13 @@ public class AgentTraceRecord {
     @Column(nullable = false, length = 36)
     private String traceId;
 
+    /** 迭代 17C：稳定 Agent id 与人类可读角色名。 */
+    @Column(length = 32)
+    private String agentId;
+
+    @Column(length = 64)
+    private String role;
+
     @Column(nullable = false, length = 128)
     private String toolName;
 
@@ -75,12 +82,21 @@ public class AgentTraceRecord {
     public AgentTraceRecord(String id, Long userId, Long orgId, String taskId, Integer stepId,
             String traceId, String toolName, String inputSummary, String outputSummary,
             int outputLength, long durationMs, String status, String error) {
+        this(id, userId, orgId, taskId, stepId, traceId, null, null, toolName, inputSummary, outputSummary,
+                outputLength, durationMs, status, error);
+    }
+
+    public AgentTraceRecord(String id, Long userId, Long orgId, String taskId, Integer stepId,
+            String traceId, String agentId, String role, String toolName, String inputSummary,
+            String outputSummary, int outputLength, long durationMs, String status, String error) {
         this.id = id;
         this.userId = userId;
         this.orgId = orgId;
         this.taskId = taskId;
         this.stepId = stepId;
         this.traceId = traceId;
+        this.agentId = agentId;
+        this.role = role;
         this.toolName = toolName;
         this.inputSummary = inputSummary;
         this.outputSummary = outputSummary;
@@ -119,6 +135,14 @@ public class AgentTraceRecord {
 
     public String getTraceId() {
         return traceId;
+    }
+
+    public String getAgentId() {
+        return agentId;
+    }
+
+    public String getRole() {
+        return role;
     }
 
     public String getToolName() {

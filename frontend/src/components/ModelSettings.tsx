@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   App,
   Button,
+  Divider,
   Empty,
   Flex,
   Form,
@@ -12,6 +13,7 @@ import {
   Space,
   Switch,
   Table,
+  Tabs,
   Tag,
   Tooltip,
   Typography,
@@ -19,11 +21,16 @@ import {
 import { DeleteOutlined, EditOutlined, PlusOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import {
   fetchModelSlots,
+  fetchAgentBindings,
+  fetchUsageToday,
   isAuthExpiredError,
   MODEL_CAPABILITIES,
   saveModelSlots,
+  saveAgentBinding,
   testModelConnection,
   type ModelSlot,
+  type AgentBindingSettings,
+  type UsageToday,
 } from "../api";
 
 /**
@@ -64,6 +71,10 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [bindingSettings, setBindingSettings] = useState<AgentBindingSettings | null>(null);
+  const [bindingScope, setBindingScope] = useState<"USER" | "ORG" | "PLATFORM">("PLATFORM");
+  const [bindingSaving, setBindingSaving] = useState<string | null>(null);
+  const [usageToday, setUsageToday] = useState<UsageToday | null>(null);
   const [form] = Form.useForm<ModelSlot>();
   // 迭代 12 I12-9：dirty 跟踪——打开时快照，任何槽位变更后取消需确认
   const [baseline, setBaseline] = useState("");
@@ -80,8 +91,152 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
       .catch((e: Error) => {
         if (!isAuthExpiredError(e)) message.error(`读取模型配置失败：${e.message}`);
       });
+    fetchAgentBindings()
+      .then(setBindingSettings)
+      .catch((e: Error) => {
+        // 非管理员仍可使用槽位编辑器；Agent 绑定设置按后端权限自然隐藏错误。
+        if (!isAuthExpiredError(e)) message.warning(`读取 Agent 模型绑定失败：${e.message}`);
+      });
+    fetchUsageToday().then(setUsageToday).catch(() => setUsageToday(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  async function changeAgentBinding(agentId: string, slotId: string | null) {
+    const key = `${bindingScope}:${agentId}`;
+    setBindingSaving(key);
+    try {
+      const saved = await saveAgentBinding({ scope: bindingScope, agentId, slotId });
+      setBindingSettings((current) => {
+        if (!current) return current;
+        const next = current.bindings.filter(
+          (binding) => !(binding.scope === saved.scope && binding.agentId === saved.agentId),
+        );
+        if (saved.slotId) next.push(saved);
+        return { ...current, bindings: next };
+      });
+      message.success(slotId ? "Agent 模型绑定已生效" : "已恢复跟随默认模型");
+    } catch (e) {
+      if (!isAuthExpiredError(e)) message.error(`保存 Agent 绑定失败：${(e as Error).message}`);
+    } finally {
+      setBindingSaving(null);
+    }
+  }
+
+  function renderAgentBindings() {
+    if (!bindingSettings) {
+      return <Empty description="暂无 Agent 模型绑定数据" />;
+    }
+    const byAgent = new Map(
+      bindingSettings.bindings
+        .filter((binding) => binding.scope === bindingScope)
+        .map((binding) => [binding.agentId, binding]),
+    );
+    return (
+      <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Flex justify="space-between" align="center">
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            绑定按用户 → 组织 → 平台逐级解析；清空即跟随能力标签和全局默认。
+          </Typography.Text>
+          <Select
+            size="small"
+            value={bindingScope}
+            style={{ width: 150 }}
+            options={[
+              { value: "PLATFORM", label: "平台级" },
+              { value: "ORG", label: "组织级" },
+              { value: "USER", label: "用户级" },
+            ]}
+            onChange={setBindingScope}
+          />
+        </Flex>
+        <Table
+          size="small"
+          rowKey="id"
+          pagination={false}
+          dataSource={bindingSettings.agents}
+          columns={[
+            {
+              title: "Agent",
+              dataIndex: "id",
+              width: 180,
+              render: (id: string, agent: AgentBindingSettings["agents"][number]) => (
+                <Space direction="vertical" size={0}>
+                  <Typography.Text strong>{agent.role}</Typography.Text>
+                  <Typography.Text type="secondary" className="vatica-mono" style={{ fontSize: 11 }}>
+                    {id}
+                  </Typography.Text>
+                </Space>
+              ),
+            },
+            { title: "能力标签", dataIndex: "modelCapability", width: 130 },
+            {
+              title: "模型槽位",
+              render: (_: unknown, agent: AgentBindingSettings["agents"][number]) => {
+                const binding = byAgent.get(agent.id);
+                const key = `${bindingScope}:${agent.id}`;
+                return (
+                  <Select
+                    allowClear
+                    placeholder="跟随默认"
+                    style={{ width: 270 }}
+                    value={binding?.slotId ?? undefined}
+                    loading={bindingSaving === key}
+                    options={bindingSettings.slots.map((slot) => ({
+                      value: slot.id,
+                      disabled: !slot.enabled || !slot.credentialAvailable,
+                      label: (
+                        <Flex justify="space-between" gap={12}>
+                          <span>{slot.name || slot.id}</span>
+                          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                            {slot.credentialAvailable ? slot.model : "凭据不可用"}
+                          </Typography.Text>
+                        </Flex>
+                      ),
+                    }))}
+                    onChange={(value: string | undefined) => void changeAgentBinding(agent.id, value ?? null)}
+                  />
+                );
+              },
+            },
+            {
+              title: "状态",
+              width: 130,
+              render: (_: unknown, agent: AgentBindingSettings["agents"][number]) => {
+                const status = byAgent.get(agent.id)?.status ?? "FOLLOW_DEFAULT";
+                return <Tag color={status === "READY" ? "success" : status === "FOLLOW_DEFAULT" ? "default" : "warning"}>
+                  {status === "READY" ? "已绑定" : status === "FOLLOW_DEFAULT" ? "跟随默认" : status}
+                </Tag>;
+              },
+            },
+          ]}
+        />
+        <Divider style={{ margin: "4px 0" }} />
+        <Flex justify="space-between" align="center">
+          <Typography.Text strong>角色运行基准</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+            今日 · token / 耗时 / Judge 通过率
+          </Typography.Text>
+        </Flex>
+        <Table
+          size="small"
+          rowKey="agentId"
+          pagination={false}
+          locale={{ emptyText: "今日还没有角色用量" }}
+          dataSource={usageToday ? Object.values(usageToday.byRole) : []}
+          columns={[
+            { title: "角色", dataIndex: "role", render: (v: string, r: UsageToday["byRole"][string]) => `${v}（${r.agentId}）` },
+            { title: "请求", dataIndex: "requests", width: 70 },
+            { title: "Tokens", dataIndex: "totalTokens", width: 100, render: (v: number) => v.toLocaleString() },
+            { title: "耗时", dataIndex: "durationMs", width: 90, render: (v: number) => `${v} ms` },
+            {
+              title: "通过率", dataIndex: "passRate", width: 90,
+              render: (v: number | null) => v == null ? "-" : `${Math.round(v * 100)}%`,
+            },
+          ]}
+        />
+      </Space>
+    );
+  }
 
   // 编辑弹窗打开且 Form 挂载后再回填，避免 useForm 尚未连接 Form 的告警/丢值（迭代 10 I10-1）
   useEffect(() => {
@@ -200,13 +355,18 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
           </Flex>
         }
       >
-        {slots.length === 0 ? (
-          <Empty description="还没有模型，先添加一个">
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => openEditor(null, null)}>
-              添加模型
-            </Button>
-          </Empty>
-        ) : (
+        <Tabs items={[{
+          key: "slots",
+          label: "模型槽位",
+          children: (
+            <>
+              {slots.length === 0 ? (
+                <Empty description="还没有模型，先添加一个">
+                  <Button type="primary" icon={<PlusOutlined />} onClick={() => openEditor(null, null)}>
+                    添加模型
+                  </Button>
+                </Empty>
+              ) : (
           <Table<ModelSlot>
             size="small"
             rowKey={(s) => s.id || s.model || JSON.stringify(s)}
@@ -302,16 +462,23 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
               },
             ]}
           />
-        )}
-        <Button
-          type="dashed"
-          icon={<PlusOutlined />}
-          block
-          style={{ marginTop: 12 }}
-          onClick={() => openEditor(null, null)}
-        >
-          添加模型
-        </Button>
+              )}
+              <Button
+                type="dashed"
+                icon={<PlusOutlined />}
+                block
+                style={{ marginTop: 12 }}
+                onClick={() => openEditor(null, null)}
+              >
+                添加模型
+              </Button>
+            </>
+          ),
+        }, {
+          key: "agents",
+          label: "Agent 模型",
+          children: renderAgentBindings(),
+        }]} />
       </Modal>
 
       {/* 槽位编辑弹窗 */}

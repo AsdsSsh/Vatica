@@ -114,6 +114,14 @@ public class ModelRegistry {
         return roleFailoverClient(ModelSlot.CAP_CHAT_REASON, false, ReasoningMode.LOW);
     }
 
+    /** 迭代 17C：按 Agent 模型绑定解析出的槽位构建无默认工具客户端。 */
+    public ChatClient taskClientFor(ModelSlot slot) {
+        if (slot == null || !slot.enabled()) {
+            throw new IllegalArgumentException("操作失败：Agent 绑定的模型槽位不可用。");
+        }
+        return cached(slot, false, ReasoningMode.LOW);
+    }
+
     /** 规划专用客户端：无工具 + HIGH 深思（规划只分解不执行）。 */
     public ChatClient plannerClient() {
         return roleFailoverClient(ModelSlot.CAP_PLANNER, false, ReasoningMode.HIGH);

@@ -117,7 +117,8 @@ public final class TracedToolCallbacks {
         try {
             traceRepository.save(new AgentTraceRecord(UUID.randomUUID().toString(),
                     trace.userId(), trace.orgId(), trace.taskId(), trace.stepId(), trace.traceId(),
-                    tool, inputSummary, outputSummary, outputLength, durationMs, status, error));
+                    trace.agentId(), trace.role(), tool, inputSummary, outputSummary, outputLength, durationMs, status,
+                    error));
         } catch (Exception e) {
             // 观测数据可丢，业务不因 trace 写失败而失败（迭代 15 既定：观测不阻塞业务）
             log.warn("agent_trace 写入失败：task={} tool={}", trace.taskId(), tool, e);
@@ -168,6 +169,12 @@ public final class TracedToolCallbacks {
         payload.put("tool", tool);
         payload.put("phase", phase);
         payload.put("traceId", trace.traceId());
+        if (trace.agentId() != null) {
+            payload.put("agentId", trace.agentId());
+        }
+        if (trace.role() != null) {
+            payload.put("role", trace.role());
+        }
         return payload;
     }
 }

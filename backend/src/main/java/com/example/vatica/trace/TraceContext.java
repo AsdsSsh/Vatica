@@ -24,7 +24,12 @@ public final class TraceContext {
      * @param persist  true=落 agent_trace 表（任务）；false=仅 SSE 可见（聊天）
      */
     public record Snapshot(String traceId, String channel, String taskId, Integer stepId,
-            Long userId, Long orgId, boolean persist) {
+            Long userId, Long orgId, boolean persist, String agentId, String role) {
+        /** 旧聊天/测试构造器兼容：无任务角色时保持 null。 */
+        public Snapshot(String traceId, String channel, String taskId, Integer stepId,
+                Long userId, Long orgId, boolean persist) {
+            this(traceId, channel, taskId, stepId, userId, orgId, persist, null, null);
+        }
     }
 
     public static void set(Snapshot snapshot) {

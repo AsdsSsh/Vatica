@@ -78,7 +78,7 @@ public class UsageAdvisor implements BaseAdvisor {
         }
         recorder.enqueue(new UsageRecord(UUID.randomUUID().toString(), ctx.requestId(), ctx.userId(),
                 ctx.orgId(), ctx.requestType(), ctx.slotId(), ctx.taskId(), ctx.stepId(),
-                ctx.reasoningMode(), input, output, total, reasoning,
+                ctx.reasoningMode(), ctx.agentId(), ctx.role(), null, input, output, total, reasoning,
                 usage.getCacheReadInputTokens() == null ? 0 : usage.getCacheReadInputTokens(),
                 usage.getCacheWriteInputTokens() == null ? 0 : usage.getCacheWriteInputTokens(),
                 ctx.contextFillRatio(), durationMs, 0));

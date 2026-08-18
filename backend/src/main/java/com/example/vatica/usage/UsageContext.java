@@ -13,7 +13,14 @@ public final class UsageContext {
 
     public record Snapshot(String requestId, String requestType, Long userId, Long orgId,
             String slotId, String taskId, Integer stepId, String reasoningMode, Integer budgetTokens,
-            Integer contextFillRatio, boolean platformQuota) {
+            Integer contextFillRatio, boolean platformQuota, String agentId, String role) {
+        /** 旧调用方兼容：聊天、摘要等非角色链路暂不填 agentId/role。 */
+        public Snapshot(String requestId, String requestType, Long userId, Long orgId,
+                String slotId, String taskId, Integer stepId, String reasoningMode, Integer budgetTokens,
+                Integer contextFillRatio, boolean platformQuota) {
+            this(requestId, requestType, userId, orgId, slotId, taskId, stepId, reasoningMode, budgetTokens,
+                    contextFillRatio, platformQuota, null, null);
+        }
     }
 
     public static void set(Snapshot snapshot) {

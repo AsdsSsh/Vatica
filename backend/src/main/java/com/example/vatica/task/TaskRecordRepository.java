@@ -11,5 +11,7 @@ public interface TaskRecordRepository extends JpaRepository<TaskRecord, String> 
 
     Optional<TaskRecord> findByIdAndUserId(String id, Long userId);
 
+    List<TaskRecord> findByUserId(Long userId);
+
     List<TaskRecord> findByUserIdOrderByCreatedAtDesc(Long userId, Pageable pageable);
 }

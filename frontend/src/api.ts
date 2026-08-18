@@ -885,6 +885,83 @@ export interface TaskStep {
   writeResources?: string[];
 }
 
+/** 迭代 17C：Agent 模型绑定设置与解析状态（后端 AgentModelBindingService.SettingsView）。 */
+export interface AgentBindingView {
+  scope: "USER" | "ORG" | "PLATFORM";
+  scopeRef: number;
+  agentId: string;
+  role: string;
+  slotId: string | null;
+  slotName: string | null;
+  enabled: boolean;
+  credentialAvailable: boolean;
+  status: "READY" | "DISABLED" | "SLOT_MISSING" | "SLOT_DISABLED" | "CREDENTIAL_MISSING" | "FOLLOW_DEFAULT" | string;
+}
+
+export interface AgentBindingSlotOption {
+  id: string;
+  name: string;
+  model: string;
+  enabled: boolean;
+  credentialAvailable: boolean;
+  capabilities: string[];
+}
+
+export interface AgentBindingAgentOption {
+  id: string;
+  role: string;
+  modelCapability: string;
+}
+
+export interface AgentBindingSettings {
+  bindings: AgentBindingView[];
+  slots: AgentBindingSlotOption[];
+  agents: AgentBindingAgentOption[];
+}
+
+export async function fetchAgentBindings(): Promise<AgentBindingSettings> {
+  return (await getJson("/api/models/agent-bindings")).json();
+}
+
+export async function saveAgentBinding(request: {
+  scope: "USER" | "ORG" | "PLATFORM";
+  agentId: string;
+  slotId: string | null;
+}): Promise<AgentBindingView> {
+  return (await putJson("/api/models/agent-bindings", request)).json();
+}
+
+export interface RoleUsageTotal {
+  agentId: string;
+  role: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  requests: number;
+  durationMs: number;
+  costEstimate: number;
+  taskCount: number;
+  passedTasks: number;
+  passRate: number | null;
+}
+
+export interface UsageToday {
+  date: string;
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  reasoningTokens: number;
+  quota: number;
+  persistedTokens: number;
+  reservedTokens: number;
+  byRole: Record<string, RoleUsageTotal>;
+}
+
+export async function fetchUsageToday(): Promise<UsageToday> {
+  return (await getJson("/api/usage/today")).json();
+}
+
 export interface BlackboardEntry {
   id: string;
   type: "result" | "note" | "need-help" | "conflict";
@@ -968,6 +1045,8 @@ export interface AgentTraceView {
   id: string;
   stepId: number | null;
   traceId: string;
+  agentId: string | null;
+  role: string | null;
   toolName: string;
   inputSummary: string;
   outputSummary: string;

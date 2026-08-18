@@ -32,6 +32,7 @@ import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
 import com.example.vatica.auth.TenantChannels;
 import com.example.vatica.config.EphemeralCredential;
+import com.example.vatica.config.AgentModelBindingService;
 import com.example.vatica.config.JudgeProperties;
 import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.config.ModelSlot;
@@ -90,6 +91,7 @@ public class TaskService {
     private final ContextBudget contextBudget;
     private final AgentRuntimeFactory runtimeFactory;
     private final AgentRegistry agentRegistry;
+    private final AgentModelBindingService agentModelBindings;
     private final DirectModelUsageRecorder directUsage;
     private final HumanAgent humanAgent;
 
@@ -112,7 +114,7 @@ public class TaskService {
             AgentToolCatalog agentTools, FilePermissionRequestService permissionRequests,
             ModelRegistry registry, AgentTraceRecordRepository traceRepository, TaskBlackboard blackboard,
             ContextBudget contextBudget, AgentRuntimeFactory runtimeFactory, AgentRegistry agentRegistry,
-            DirectModelUsageRecorder directUsage, HumanAgent humanAgent) {
+            DirectModelUsageRecorder directUsage, HumanAgent humanAgent, AgentModelBindingService agentModelBindings) {
         this.plannerAgent = plannerAgent;
         this.judgeAgent = judgeAgent;
         this.judgeProps = judgeProps;
@@ -130,6 +132,7 @@ public class TaskService {
         this.agentRegistry = agentRegistry;
         this.directUsage = directUsage;
         this.humanAgent = humanAgent;
+        this.agentModelBindings = agentModelBindings;
     }
 
     /** 创建任务：Planner 拆解 → PENDING 待审批计划。 */
@@ -163,7 +166,8 @@ public class TaskService {
         if (credential != null) {
             record.setModelSource("EPHEMERAL");
             ephemeralCredentials.put(record.getId(), credential);
-            UsageContext.set(usageSnapshot(record, "PLANNER", null, "HIGH", contextBudget.plannerTokens(), false));
+            UsageContext.set(usageSnapshot(record, "PLANNER", null, "HIGH", contextBudget.plannerTokens(), false,
+                    "planner", "Planner"));
             try {
                 TaskPlan plan = plannerAgent.plan(goal.trim(),
                         registry.ephemeralClient(credential, false, com.example.vatica.config.ReasoningMode.HIGH));
@@ -174,7 +178,8 @@ public class TaskService {
         } else {
             record.setModelSource("PLATFORM");
             record.setModelSlotId(null);
-            UsageContext.set(usageSnapshot(record, "PLANNER", null, "HIGH", contextBudget.plannerTokens(), true));
+            UsageContext.set(usageSnapshot(record, "PLANNER", null, "HIGH", contextBudget.plannerTokens(), true,
+                    "planner", "Planner"));
             try {
                 TaskPlan plan = plannerAgent.plan(goal.trim());
                 record.setPlanJson(toJson(plan));
@@ -460,7 +465,7 @@ public class TaskService {
                     List<BlackboardEntry> helpSignals = new ArrayList<>();
                     boolean discoveryAdded = false;
                     UsageContext.set(usageSnapshot(record, "SUMMARIZER", null, "DISABLED",
-                            contextBudget.summarizerTokens(), true));
+                            contextBudget.summarizerTokens(), true, "summarizer", "Summarizer"));
                     try {
                         for (int k = 0; k < todo.size(); k++) {
                             TaskStep step = plan.getSteps().get(todo.get(k));
@@ -555,7 +560,7 @@ public class TaskService {
         CollaborationDecision decision;
         boolean platformQuota = !"EPHEMERAL".equals(record.getModelSource());
         UsageContext.set(usageSnapshot(record, "PLANNER_COLLABORATION", null, "HIGH",
-                contextBudget.plannerTokens(), platformQuota));
+                contextBudget.plannerTokens(), platformQuota, "planner", "Planner"));
         try {
             int remainingDiscoveries = Math.max(0,
                     TaskBlackboard.MAX_DISCOVERY_STEPS - plan.getDiscoveryStepCount());
@@ -620,24 +625,30 @@ public class TaskService {
                     ephemeralMailCredentials.get(record.getId()));
             // 迭代 15 I15-3：retryable 工具错误重试 1 次（权限最内层，重试也重新校验身份/权限）
             callbacks = new RetryableToolCallbacks().wrap(callbacks);
-            // 迭代 15 I15-1：权限包装在内层，trace 在最外层看到真实耗时与最终结果
-            TraceContext.Snapshot trace = new TraceContext.Snapshot(UUID.randomUUID().toString(),
-                    TenantChannels.task(identity, record.getId()), record.getId(), step.getId(),
-                    identity.userId(), identity.orgId(), true);
-            callbacks = new TracedToolCallbacks(mapper, traceRepository).wrap(callbacks, trace);
             // 迭代 17A：角色工具白名单是机械门禁，位于 prompt 之外，模型无法请求未注册工具。
             var agent = agentRegistry.resolve(step.getAgent());
             step.setAgent(agent.id());
             callbacks = agentRegistry.allowedCallbacks(agent.id(), callbacks);
+            // 迭代 17C：绑定链同时决定执行模型和观测维度；临时凭据只在本任务内优先。
+            AgentModelBindingService.Resolution model = agentModelBindings.resolve(identity, agent.id(),
+                    agent.modelCapability(), ephemeralCredentials.get(record.getId()));
+            // 迭代 15 I15-1：权限包装在内层，trace 在最外层看到真实耗时与最终结果
+            TraceContext.Snapshot trace = new TraceContext.Snapshot(UUID.randomUUID().toString(),
+                    TenantChannels.task(identity, record.getId()), record.getId(), step.getId(),
+                    identity.userId(), identity.orgId(), true, agent.id(), agent.displayName());
+            callbacks = new TracedToolCallbacks(mapper, traceRepository).wrap(callbacks, trace);
             boolean platformQuota = !"EPHEMERAL".equals(record.getModelSource());
             UsageContext.set(usageSnapshot(record, "EXECUTOR", step.getId(), "LOW",
-                    contextBudget.executorTokens(), platformQuota));
+                    contextBudget.executorTokens(), platformQuota, agent.id(), agent.displayName(), model.slot().id()));
+            if (model.fallback()) {
+                directUsage.recordFallback(model.fallbackReason(), model.slot().id());
+            }
             String result;
             try {
                 AgentRuntime runtime = runtimeFactory.runtime();
                 AgentRuntime.StepRequest request = new AgentRuntime.StepRequest(
                         record.getGoal(), step, context, reflection, identity, callbacks,
-                        clientFor(record, true), modelSlotFor(record, agent.modelCapability()), agent,
+                        clientFor(record, true, model.slot()), model.slot(), agent,
                         record.getId() + ":step:" + step.getId());
                 if (AgentRuntimeProperties.AGENTSCOPE.equals(runtime.name())) {
                     DirectModelUsageRecorder.Reservation reservation = directUsage.begin();
@@ -647,7 +658,31 @@ public class TaskService {
                         result = stepResult.answer();
                     } catch (RuntimeException | Error e) {
                         directUsage.abort(reservation);
-                        throw e;
+                        // 迭代 17C：仅对明确的认证/超时类模型故障做一次角色级槽位恢复，避免副作用工具重复执行。
+                        if (!(e instanceof Error) && !"EPHEMERAL".equals(record.getModelSource())
+                                && isRecoverableModelError(e)) {
+                            AgentModelBindingService.Resolution recovery = agentModelBindings.recover(identity,
+                                    agent.id(), agent.modelCapability(), model.slot().id());
+                            directUsage.recordFallback(recovery.fallbackReason(), recovery.slot().id());
+                            UsageContext.set(usageSnapshot(record, "EXECUTOR", step.getId(), "LOW",
+                                    contextBudget.executorTokens(), platformQuota, agent.id(), agent.displayName(),
+                                    recovery.slot().id()));
+                            AgentRuntime.StepRequest retry = new AgentRuntime.StepRequest(
+                                    record.getGoal(), step, context, reflection, identity, callbacks,
+                                    clientFor(record, true, recovery.slot()), recovery.slot(), agent,
+                                    record.getId() + ":step:" + step.getId() + ":recovery");
+                            DirectModelUsageRecorder.Reservation retryReservation = directUsage.begin();
+                            try {
+                                AgentRuntime.StepResult stepResult = runtime.executeStep(retry);
+                                directUsage.complete(retryReservation, stepResult.usage(), stepResult.durationMs());
+                                result = stepResult.answer();
+                            } catch (RuntimeException | Error retryError) {
+                                directUsage.abort(retryReservation);
+                                throw retryError;
+                            }
+                        } else {
+                            throw e;
+                        }
                     }
                 } else {
                     result = runtime.executeStep(request).answer();
@@ -666,6 +701,16 @@ public class TaskService {
     /** 迭代 13 I13-5：按任务模型来源解析客户端；临时凭据仅内存，缺失即失败。
      *  迭代 15 I15-4：平台槽位走 executorClient（LOW）/judgeClient（HIGH）。 */
     private ChatClient clientFor(TaskRecord record, boolean withTools) {
+        return clientFor(record, withTools, null);
+    }
+
+    private static boolean isRecoverableModelError(Throwable error) {
+        String message = error.getMessage() == null ? "" : error.getMessage().toLowerCase(java.util.Locale.ROOT);
+        return message.contains("401") || message.contains("unauthorized")
+                || message.contains("timeout") || message.contains("timed out");
+    }
+
+    private ChatClient clientFor(TaskRecord record, boolean withTools, ModelSlot selectedSlot) {
         if ("EPHEMERAL".equals(record.getModelSource())) {
             EphemeralCredential credential = ephemeralCredentials.get(record.getId());
             if (credential == null) {
@@ -675,7 +720,10 @@ public class TaskService {
                     withTools ? com.example.vatica.config.ReasoningMode.LOW
                             : com.example.vatica.config.ReasoningMode.HIGH);
         }
-        return withTools ? registry.taskExecutorClient() : registry.judgeClient();
+        if (withTools) {
+            return selectedSlot == null ? registry.taskExecutorClient() : registry.taskClientFor(selectedSlot);
+        }
+        return registry.judgeClient();
     }
 
     private ChatClient plannerClientFor(TaskRecord record) {
@@ -690,18 +738,6 @@ public class TaskService {
         return registry.plannerClient();
     }
 
-    /** AgentScope 使用与 legacy 执行角色一致的模型槽位；临时凭据仍只从任务内存快照读取。 */
-    private ModelSlot modelSlotFor(TaskRecord record, String capability) {
-        if ("EPHEMERAL".equals(record.getModelSource())) {
-            EphemeralCredential credential = ephemeralCredentials.get(record.getId());
-            if (credential == null) {
-                throw new IllegalStateException("操作失败：本任务的临时模型凭据已失效（服务重启），请重新提交任务。");
-            }
-            return credential.toSlot();
-        }
-        return registry.activeSlotFor(capability);
-    }
-
     /** REVIEW 段：Judge 评分 → PASS 交付 DONE；FAIL 自动返工（限次）或超限 NEEDS_REVISION；评测异常 FAILED。 */
     private void evaluateAndRoute(TaskRecord record, TaskPlan plan) {
         if (isCancelled(record.getId())) {
@@ -710,7 +746,7 @@ public class TaskService {
         JudgeAgent.Evaluation eval;
         try {
             UsageContext.set(usageSnapshot(record, "JUDGE", null, "HIGH", contextBudget.judgeTokens(),
-                    !"EPHEMERAL".equals(record.getModelSource())));
+                    !"EPHEMERAL".equals(record.getModelSource()), "judge", "Judge"));
             try {
                 eval = judgeAgent.evaluate(record.getGoal(), plan, clientFor(record, false));
             } finally {
@@ -812,6 +848,20 @@ public class TaskService {
                 budgetTokens, null, platformQuota);
     }
 
+    private UsageContext.Snapshot usageSnapshot(TaskRecord record, String requestType, Integer stepId,
+            String reasoningMode, int budgetTokens, boolean platformQuota, String agentId, String role) {
+        return usageSnapshot(record, requestType, stepId, reasoningMode, budgetTokens, platformQuota, agentId, role,
+                record.getModelSlotId());
+    }
+
+    private UsageContext.Snapshot usageSnapshot(TaskRecord record, String requestType, Integer stepId,
+            String reasoningMode, int budgetTokens, boolean platformQuota, String agentId, String role,
+            String slotId) {
+        return new UsageContext.Snapshot(UsageContext.newRequestId(), requestType, record.getUserId(),
+                record.getOrgId(), slotId, record.getId(), stepId, reasoningMode,
+                budgetTokens, null, platformQuota, agentId, role);
+    }
+
     /** 迭代 15 I15-7：执行器思考摘要落 agent_trace（toolName=executor.thinking，全文不落库）。 */
     private void persistThinkingTrace(TaskRecord record, TaskStep step, RequestIdentity identity,
             TraceContext.Snapshot trace, String reasoning) {
@@ -823,7 +873,8 @@ public class TaskService {
             String summary = reasoning.length() <= max ? reasoning : reasoning.substring(0, max) + "…（思考已截断）";
             traceRepository.save(new AgentTraceRecord(UUID.randomUUID().toString(),
                     identity.userId(), identity.orgId(), record.getId(), step.getId(), trace.traceId(),
-                    "executor.thinking", "执行步骤 " + step.getId(), summary, reasoning.length(), 0,
+                    trace.agentId(), trace.role(), "executor.thinking", "执行步骤 " + step.getId(), summary,
+                    reasoning.length(), 0,
                     AgentTraceRecord.STATUS_SUCCESS, null));
         } catch (Exception e) {
             log.warn("思考摘要写入 agent_trace 失败：task={} step={}", record.getId(), step.getId(), e);

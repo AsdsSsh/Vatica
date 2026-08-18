@@ -43,6 +43,16 @@ public class UsageRecord {
     @Column(length = 16)
     private String reasoningMode;
 
+    /** 迭代 17C：按稳定 Agent id/角色聚合用量。 */
+    @Column(length = 32)
+    private String agentId;
+
+    @Column(length = 64)
+    private String role;
+
+    @Column(length = 512)
+    private String fallbackReason;
+
     @Column(nullable = false)
     private int inputTokens;
 
@@ -77,6 +87,16 @@ public class UsageRecord {
             int inputTokens, int outputTokens, int totalTokens, int reasoningTokens,
             long cacheReadTokens, long cacheWriteTokens, Integer contextFillRatio,
             long durationMs, double costEstimate) {
+        this(id, requestId, userId, orgId, requestType, slotId, taskId, stepId, reasoningMode,
+                null, null, null, inputTokens, outputTokens, totalTokens, reasoningTokens,
+                cacheReadTokens, cacheWriteTokens, contextFillRatio, durationMs, costEstimate);
+    }
+
+    public UsageRecord(String id, String requestId, Long userId, Long orgId, String requestType,
+            String slotId, String taskId, Integer stepId, String reasoningMode, String agentId, String role,
+            String fallbackReason, int inputTokens, int outputTokens, int totalTokens, int reasoningTokens,
+            long cacheReadTokens, long cacheWriteTokens, Integer contextFillRatio,
+            long durationMs, double costEstimate) {
         this.id = id;
         this.requestId = requestId;
         this.userId = userId;
@@ -86,6 +106,9 @@ public class UsageRecord {
         this.taskId = taskId;
         this.stepId = stepId;
         this.reasoningMode = reasoningMode;
+        this.agentId = agentId;
+        this.role = role;
+        this.fallbackReason = fallbackReason;
         this.inputTokens = inputTokens;
         this.outputTokens = outputTokens;
         this.totalTokens = totalTokens;
@@ -113,6 +136,9 @@ public class UsageRecord {
     public String getTaskId() { return taskId; }
     public Integer getStepId() { return stepId; }
     public String getReasoningMode() { return reasoningMode; }
+    public String getAgentId() { return agentId; }
+    public String getRole() { return role; }
+    public String getFallbackReason() { return fallbackReason; }
     public int getInputTokens() { return inputTokens; }
     public int getOutputTokens() { return outputTokens; }
     public int getTotalTokens() { return totalTokens; }
