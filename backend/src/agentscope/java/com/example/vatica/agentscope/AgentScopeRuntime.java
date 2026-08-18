@@ -89,6 +89,8 @@ public class AgentScopeRuntime implements AgentRuntime {
             String system = """
                     你是 Vatica 执行 Agent。只执行当前步骤，只使用工具返回的数据，工具未返回的数据不得编造。
                     工具失败时如实说明原因，不得假装成功。身份、权限、审批与任务状态由 Vatica 管理。
+                    完成后优先输出 JSON：{"result":"结果","notes":[],"needHelp":null,"discoveries":[]}。
+                    needHelp 只用于确实无法继续的求助，discoveries 最多提出 2 个必要补充步骤。
                     """ + role.systemPrompt();
             ToolKitContext kit = buildToolkit(request.modelSlot(), request.toolCallbacks(), traces,
                     "vatica-" + role.id(), system, Set.of(), request.sessionId());
@@ -258,7 +260,8 @@ public class AgentScopeRuntime implements AgentRuntime {
         }
         return prompt.append("现在执行步骤（第 ").append(request.step().getId()).append(" 步）：")
                 .append(request.step().getDescription())
-                .append("\n完成后用一句话总结本步骤结果（含关键数据）。").toString();
+                .append("\n完成后优先输出 JSON：{\"result\":\"结果\",\"notes\":[],\"needHelp\":null,\"discoveries\":[]}。")
+                .append("若无协作信号也可返回纯文本结果。").toString();
     }
 
     @SuppressWarnings("unchecked")

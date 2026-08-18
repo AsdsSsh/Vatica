@@ -18,14 +18,17 @@ import {
   ClockCircleOutlined,
   ExclamationCircleOutlined,
   CloudOutlined,
+  BranchesOutlined,
   FileSearchOutlined,
   PlusOutlined,
   ReloadOutlined,
+  SendOutlined,
   StopOutlined,
   UndoOutlined,
 } from "@ant-design/icons";
 import {
   approvePermissionRequest,
+  addTaskNote,
   createTask,
   denyPermissionRequest,
   fetchRecentTasks,
@@ -35,6 +38,7 @@ import {
   subscribeTaskEvents,
   taskAction,
   type AgentTraceView,
+  type BlackboardEntry,
   type FilePermissionRequest,
   type TaskDetail,
   type TaskSummary,
@@ -70,6 +74,20 @@ const STATUS_LABEL: Record<string, string> = {
   CANCELLED: "已终止",
 };
 
+const BLACKBOARD_LABEL: Record<BlackboardEntry["type"], string> = {
+  result: "结果",
+  note: "备注",
+  "need-help": "求助",
+  conflict: "冲突",
+};
+
+const BLACKBOARD_COLOR: Record<BlackboardEntry["type"], string> = {
+  result: "success",
+  note: "default",
+  "need-help": "warning",
+  conflict: "error",
+};
+
 function scoreColor(score: number | null): string {
   if (score == null) return "default";
   return score >= 70 ? "green" : "red";
@@ -100,6 +118,9 @@ export default function StepPanel() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [goalInput, setGoalInput] = useState("");
+  const [noteInput, setNoteInput] = useState("");
+  const [arbitrationNote, setArbitrationNote] = useState("");
+  const [noteBusy, setNoteBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [permissionRequests, setPermissionRequests] = useState<FilePermissionRequest[]>([]);
@@ -135,6 +156,18 @@ export default function StepPanel() {
         setPermissionRequests((prev) =>
           prev.some((p) => p.requestId === permission.requestId) ? prev : [...prev, permission],
         );
+      },
+      (entry) => {
+        if (selectedIdRef.current !== id) return;
+        setDetail((current) => {
+          if (!current?.plan || typeof current.plan !== "object") return current;
+          const board = current.plan.blackboard ?? [];
+          const index = board.findIndex((item) => item.id === entry.id);
+          const next = index >= 0
+            ? board.map((item, i) => (i === index ? entry : item))
+            : [...board, entry];
+          return { ...current, plan: { ...current.plan, blackboard: next } };
+        });
       },
     );
     taskSubscriptions.current.set(id, close);
@@ -272,6 +305,40 @@ export default function StepPanel() {
     }
   }
 
+  async function writeHumanNote() {
+    const content = noteInput.trim();
+    if (!selectedId || !content || noteBusy) return;
+    setNoteBusy(true);
+    try {
+      const updated = await addTaskNote(selectedId, content);
+      setDetail(updated);
+      setNoteInput("");
+      message.success("已写入协作黑板");
+    } catch (e) {
+      if (!isAuthExpiredError(e)) message.error((e as Error).message);
+    } finally {
+      setNoteBusy(false);
+    }
+  }
+
+  async function resolveArbitration() {
+    const content = arbitrationNote.trim();
+    if (!selectedId || !content || busy) return;
+    setBusy(true);
+    try {
+      await addTaskNote(selectedId, content);
+      const updated = await taskAction(selectedId, "approve");
+      setDetail(updated);
+      setArbitrationNote("");
+      setApprovalOpen(false);
+      refreshTasks();
+    } catch (e) {
+      if (!isAuthExpiredError(e)) message.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   /** 迭代 15 I15-1：打开某一步骤的执行轨迹（Action/Observation 脱敏摘要）。 */
   async function openStepTraces(stepId: number) {
     if (!selectedId) return;
@@ -289,10 +356,16 @@ export default function StepPanel() {
     }
   }
 
+  const taskPlan = detail?.plan && typeof detail.plan === "object" ? detail.plan : undefined;
   const steps: TaskStep[] =
     detail?.plan && typeof detail.plan === "object" && Array.isArray(detail.plan.steps)
       ? detail.plan.steps
       : [];
+  const blackboard = taskPlan?.blackboard ?? [];
+  const openArbitrations = blackboard.filter(
+    (entry) => entry.status === "OPEN" && (entry.type === "conflict" || entry.type === "need-help"),
+  );
+  const arbitrationPending = detail?.status === "PENDING_APPROVAL" && detail.pendingStepId < 0;
   const approvalStep = steps.find((s) => s.id === detail?.pendingStepId);
   // 执行中的步骤：RUNNING 且 currentStep 指向它（currentStep=下一个待执行步骤下标）
   const runningStepId =
@@ -454,6 +527,78 @@ export default function StepPanel() {
               }}
             />
 
+            {/* 迭代 17B：紧凑协作轨道；不是独立卡片，保持任务面板的扫描密度。 */}
+            <div style={{ borderTop: "1px solid var(--vatica-border)", paddingTop: 8, marginTop: 6 }}>
+              <Flex justify="space-between" align="center" style={{ marginBottom: 4 }}>
+                <Space size={5}>
+                  <BranchesOutlined style={{ color: "var(--vatica-text-secondary)" }} />
+                  <Typography.Text strong style={{ fontSize: 12 }}>协作黑板</Typography.Text>
+                </Space>
+                <Space size={4}>
+                  {(taskPlan?.collaborationRevisionCount ?? 0) > 0 && (
+                    <Tag style={{ marginInlineEnd: 0, fontSize: 10 }}>调整 {taskPlan?.collaborationRevisionCount}/1</Tag>
+                  )}
+                  {(taskPlan?.discoveryStepCount ?? 0) > 0 && (
+                    <Tag style={{ marginInlineEnd: 0, fontSize: 10 }}>补步 {taskPlan?.discoveryStepCount}/2</Tag>
+                  )}
+                </Space>
+              </Flex>
+              {blackboard.length > 0 && (
+                <List
+                  size="small"
+                  split={false}
+                  dataSource={blackboard.slice(-8)}
+                  renderItem={(entry) => (
+                    <List.Item style={{ padding: "3px 0 3px 8px", borderLeft: "2px solid var(--vatica-border-strong)" }}>
+                      <div style={{ minWidth: 0, width: "100%" }}>
+                        <Space size={4} wrap>
+                          <Tag color={BLACKBOARD_COLOR[entry.type]} style={{ marginInlineEnd: 0, fontSize: 10 }}>
+                            {BLACKBOARD_LABEL[entry.type]}
+                          </Tag>
+                          <Typography.Text type="secondary" style={{ fontSize: 10 }}>
+                            {entry.author.startsWith("HUMAN") ? "人工" : entry.agent}
+                            {entry.stepId > 0 ? ` · 步骤 ${entry.stepId}` : ""}
+                          </Typography.Text>
+                          {entry.status !== "RECORDED" && (
+                            <Tag style={{ marginInlineEnd: 0, fontSize: 10 }}>{entry.status}</Tag>
+                          )}
+                        </Space>
+                        <Typography.Paragraph
+                          style={{ fontSize: 11, margin: "2px 0 0", color: "var(--vatica-text-secondary)" }}
+                          ellipsis={{ rows: 2, expandable: true, symbol: "展开" }}
+                        >
+                          {entry.content}
+                        </Typography.Paragraph>
+                      </div>
+                    </List.Item>
+                  )}
+                />
+              )}
+              {!detail.status || !["DONE", "FAILED", "CANCELLED"].includes(detail.status) ? (
+                <Flex gap={5} style={{ marginTop: 6 }}>
+                  <Input
+                    size="small"
+                    value={noteInput}
+                    maxLength={1000}
+                    placeholder="给后续步骤补充信息"
+                    onChange={(event) => setNoteInput(event.target.value)}
+                    onPressEnter={(event) => {
+                      if (!event.nativeEvent.isComposing) void writeHumanNote();
+                    }}
+                  />
+                  <Button
+                    size="small"
+                    aria-label="写入协作备注"
+                    title="写入协作备注"
+                    icon={<SendOutlined />}
+                    loading={noteBusy}
+                    disabled={!noteInput.trim()}
+                    onClick={() => void writeHumanNote()}
+                  />
+                </Flex>
+              ) : null}
+            </div>
+
             {/* 操作按钮（I7-2/4/6） */}
             <Flex gap={6} wrap style={{ marginTop: 8 }}>
               {(detail.status === "PENDING" || detail.status === "PENDING_APPROVAL") && (
@@ -510,7 +655,8 @@ export default function StepPanel() {
       <Modal
         open={approvalOpen}
         title={
-          detail?.status === "PENDING_APPROVAL" ? "敏感步骤审批" : "任务计划审批"
+          arbitrationPending ? "协作冲突仲裁"
+            : detail?.status === "PENDING_APPROVAL" ? "敏感步骤审批" : "任务计划审批"
         }
         onCancel={() => setApprovalOpen(false)}
         footer={[
@@ -526,13 +672,37 @@ export default function StepPanel() {
             key="approve"
             type="primary"
             loading={busy}
-            onClick={() => runAction("approve")}
+            disabled={arbitrationPending && !arbitrationNote.trim()}
+            onClick={() => arbitrationPending ? void resolveArbitration() : runAction("approve")}
           >
-            批准并继续
+            {arbitrationPending ? "确认裁决并继续" : "批准并继续"}
           </Button>,
         ]}
       >
-        {detail?.status === "PENDING_APPROVAL" ? (
+        {arbitrationPending ? (
+          <div>
+            <List
+              size="small"
+              dataSource={openArbitrations}
+              renderItem={(entry) => (
+                <List.Item style={{ padding: "4px 0" }}>
+                  <Typography.Text type={entry.type === "conflict" ? "danger" : "warning"} style={{ fontSize: 12 }}>
+                    {entry.content}
+                  </Typography.Text>
+                </List.Item>
+              )}
+            />
+            <Input.TextArea
+              autoFocus
+              rows={3}
+              maxLength={1000}
+              showCount
+              value={arbitrationNote}
+              placeholder="写下判断依据，系统会将冲突步骤串行化后继续"
+              onChange={(event) => setArbitrationNote(event.target.value)}
+            />
+          </div>
+        ) : detail?.status === "PENDING_APPROVAL" ? (
           <div>
             <Typography.Paragraph>
               步骤 <b>{approvalStep?.id}</b> 涉及敏感操作，执行前需要你的确认：

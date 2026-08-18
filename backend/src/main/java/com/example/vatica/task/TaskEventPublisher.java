@@ -55,6 +55,14 @@ public class TaskEventPublisher {
         gateway.publish(channel, "task_snapshot", snapshot(record, type));
     }
 
+    /** 迭代 17B：四原语使用独立统一事件，随后仍发布任务快照供断线回放后的完整重建。 */
+    public void publishBlackboard(TaskRecord record, BlackboardEntry entry) {
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("taskId", record.getId());
+        data.put("entry", entry);
+        gateway.publish(channel(record), "blackboard_entry", data);
+    }
+
     private Map<String, Object> snapshot(TaskRecord r, String type) {
         Map<String, Object> snap = new java.util.LinkedHashMap<>();
         snap.put("type", type);

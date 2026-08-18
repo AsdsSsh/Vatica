@@ -27,6 +27,7 @@ public class ExecutorAgent {
             永远不要指导用户去"文件权限设置"手动添加授权目录。
             工具执行失败时，把失败原因如实写进总结，不要假装成功。""";
 
+
     private final ChatClient executorClient;
 
     public ExecutorAgent(ChatClient executorClient) {
@@ -84,7 +85,9 @@ public class ExecutorAgent {
             prompt = prompt.toolCallbacks(toolCallbacks);
         }
         var callSpec = prompt.user("现在执行步骤（第 " + step.getId() + " 步）：" + step.getDescription()
-                + "\n完成后用一句话总结本步骤结果（含关键数据）。").call();
+                + "\n完成后优先输出 JSON：{\"result\":\"结果\",\"notes\":[],\"needHelp\":null,"
+                + "\"discoveries\":[]}。若无协作信号，也可返回纯文本结果。needHelp 表示确实无法继续，"
+                + "不得用它代替普通失败说明；discoveries 最多提出 2 个必要补充步骤。").call();
         // 迭代 15 I15-7：优先 chatResponse 取完整响应（含 reasoning 元数据）；mock/异常路径回退 content()
         ChatResponse response = null;
         try {

@@ -13,6 +13,8 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 
 import com.example.vatica.task.ReflectionFeedback;
+import com.example.vatica.task.BlackboardEntry;
+import com.example.vatica.task.CollaborationDecision;
 import com.example.vatica.task.TaskPlan;
 import com.example.vatica.task.TaskPlan.TaskStep;
 import com.example.vatica.runtime.AgentRegistry;
@@ -43,7 +45,7 @@ public class PlannerAgent {
 
     private static final String SYSTEM_PROMPT = """
             你是任务规划 Agent。把用户目标拆解为可执行的步骤，只输出一个 JSON 对象（不要 markdown 代码块、不要任何解释文字），格式：
-            {"steps":[{"description":"步骤描述：具体、可执行、写明要调用哪个工具","agent":"workspace","needsApproval":false,"dependsOn":[]}]}
+            {"steps":[{"description":"步骤描述：具体、可执行、写明要调用哪个工具","agent":"workspace","needsApproval":false,"dependsOn":[],"writeResources":[]}]}
             规则：
             1. 步骤 1-8 个，按执行顺序排列；
             2. 涉及发送邮件、覆盖用户已有文件、删除数据等不可逆操作的步骤，needsApproval 必须为 true，其余为 false；
@@ -58,7 +60,7 @@ public class PlannerAgent {
     private static final String REVISE_SYSTEM_PROMPT = """
             你是任务规划 Agent。上一轮计划执行后质量评测不合格，请根据反馈修订计划，只输出一个 JSON 对象
             （不要 markdown 代码块、不要任何解释文字），格式：
-            {"steps":[{"description":"步骤描述：具体、可执行、写明要调用哪个工具","agent":"workspace","needsApproval":false,"dependsOn":[]}]}
+            {"steps":[{"description":"步骤描述：具体、可执行、写明要调用哪个工具","agent":"workspace","needsApproval":false,"dependsOn":[],"writeResources":[]}]}
             修订规则：
             1. 只针对反馈中失败的步骤改进：换更合适的工具、补充校验步骤、明确数据来源或拆分过大的步骤；
             2. 仍然正确的步骤可以保留，但输出必须包含完整步骤列表（不要省略）；
@@ -136,6 +138,50 @@ public class PlannerAgent {
         return normalize(revised);
     }
 
+    /**
+     * 迭代 17B：运行中协作裁决。Planner 只能修改未完成步骤或提出补步，
+     * 不能直接改业务状态；TaskBlackboard 负责机械校验和预算。
+     */
+    public CollaborationDecision resolveCollaboration(String goal, TaskPlan plan,
+            List<BlackboardEntry> signals, int maxDiscoveries) {
+        return resolveCollaboration(goal, plan, signals, maxDiscoveries, plannerClient);
+    }
+
+    /** 请求级模型凭据版本，EPHEMERAL 任务不会在协作重规划时意外切回平台模型。 */
+    public CollaborationDecision resolveCollaboration(String goal, TaskPlan plan,
+            List<BlackboardEntry> signals, int maxDiscoveries, ChatClient client) {
+        String system = """
+                你是 Vatica 协作 Planner。任务已经开始执行，收到 Worker 的 need-help 或 conflict 信号。
+                只在未完成步骤范围内做最小调整，不得改变原始目标，不得删除已完成步骤，不得引入自由对话。
+                冲突优先通过增加 dependsOn 串行化或改写当前步骤解决；无法可靠裁决时 resolved=false 交给人工。
+                最多提出 %d 个 discovery，所有补步仍需遵守审批规则。
+                只输出 JSON：
+                {"resolved":true,"summary":"裁决说明","patches":[{"stepId":2,"description":"改派后的步骤",
+                "agent":"workspace","needsApproval":false,"dependsOn":[1],"writeResources":[]}],
+                "discoveries":[]}
+                """.formatted(Math.max(0, maxDiscoveries)) + roleListSuffix() + toolListSuffix();
+        String user = collaborationUserPrompt(goal, plan, signals);
+        try {
+            CollaborationDecision structured = client.prompt().system(system).user(user)
+                    .call().entity(CollaborationDecision.class);
+            if (structured != null) {
+                return structured;
+            }
+        } catch (Exception e) {
+            log.info("协作裁决结构化输出不可用，回退 JSON 文本：{}", e.getMessage());
+        }
+        try {
+            String raw = client.prompt().system(system).user(user).call().content();
+            Matcher matcher = JSON_BLOCK.matcher(raw == null ? "" : raw);
+            if (matcher.find()) {
+                return mapper.readValue(matcher.group(), CollaborationDecision.class);
+            }
+        } catch (Exception e) {
+            log.warn("协作裁决输出无法解析，升级人工：{}", e.getMessage());
+        }
+        return CollaborationDecision.unresolved("Planner 无法可靠裁决，请人工仲裁。");
+    }
+
     /** 迭代 15 I15-12：系统提示 + 动态工具清单（provider 缺失时回退已知本地工具名，测试/降级友好）。 */
     private String systemPrompt() {
         return SYSTEM_PROMPT + roleListSuffix() + toolListSuffix();
@@ -207,7 +253,9 @@ public class PlannerAgent {
         for (TaskStep step : steps) {
             step.setId(i);
             step.setResult(null);
+            step.setResultDigest(null);
             step.setAgent(agentRegistry.normalizeId(step.getAgent()));
+            step.setWriteResources(normalizeWriteResources(step.getWriteResources()));
             step.setDependsOn(normalizeDependencies(step.getDependsOn(), i));
             i++;
         }
@@ -239,6 +287,15 @@ public class PlannerAgent {
         return List.copyOf(valid);
     }
 
+    private static List<String> normalizeWriteResources(List<String> raw) {
+        if (raw == null) {
+            return List.of();
+        }
+        return raw.stream().filter(value -> value != null && !value.isBlank())
+                .map(value -> value.trim().replace('\\', '/').toLowerCase(java.util.Locale.ROOT))
+                .distinct().limit(8).toList();
+    }
+
     private static String reviseUserPrompt(String goal, TaskPlan previous, ReflectionFeedback feedback) {
         StringBuilder sb = new StringBuilder("原始任务目标：").append(goal).append("\n\n上一轮计划与执行结果：\n");
         for (TaskStep step : previous.getSteps()) {
@@ -251,6 +308,25 @@ public class PlannerAgent {
             sb.append("被认定不合格的步骤编号：").append(feedback.failStepIds()).append('\n');
         }
         return sb.append("请输出修订后的完整计划。").toString();
+    }
+
+    private static String collaborationUserPrompt(String goal, TaskPlan plan,
+            List<BlackboardEntry> signals) {
+        StringBuilder sb = new StringBuilder("原始任务目标：").append(goal).append("\n\n协作信号：\n");
+        for (BlackboardEntry signal : signals) {
+            sb.append("- ").append(signal.type()).append("，步骤 ").append(signal.relatedStepIds())
+                    .append("，资源 ").append(signal.resource()).append("：").append(snippet(signal.content()))
+                    .append('\n');
+        }
+        sb.append("\n当前计划（已完成步骤只能参考，不能修改）：\n");
+        for (TaskPlan.TaskStep step : plan.getSteps()) {
+            sb.append("步骤 ").append(step.getId()).append(" [")
+                    .append(step.getResult() == null ? "未完成" : "已完成").append("] ")
+                    .append(step.getDescription()).append("，agent=").append(step.getAgent())
+                    .append("，dependsOn=").append(step.getDependsOn())
+                    .append("，writeResources=").append(step.getWriteResources()).append('\n');
+        }
+        return sb.append("请给出最小、可审计的裁决。").toString();
     }
 
     private static String snippet(String raw) {

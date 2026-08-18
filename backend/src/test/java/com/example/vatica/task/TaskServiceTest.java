@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
@@ -516,11 +517,142 @@ class TaskServiceTest {
         assertThat(feedbackCaptor.getAllValues()).anyMatch(v -> v != null && v.contains("关键数字缺失"));
     }
 
+    /** 17B：need-help 只消耗一次运行中重规划，Planner 改派后原步骤重跑且已完成步骤不重复。 */
+    @Test
+    void needHelpTriggersOneCollaborationRevisionAndRerunsStep() {
+        when(plannerAgent.plan("目标")).thenReturn(oneStepPlan());
+        when(executorAgent.executeStep(eq("目标"), any(), anyList(), any(ToolCallback[].class),
+                any(ChatClient.class), any())).thenReturn(
+                        "{\"result\":\"缺少目标路径\",\"needHelp\":\"请改派 workspace 确认路径\"}",
+                        "路径已确认，处理完成");
+        when(plannerAgent.resolveCollaboration(anyString(), any(), anyList(), anyInt(), any(ChatClient.class)))
+                .thenReturn(new CollaborationDecision(true, "改派 workspace",
+                        List.of(new CollaborationDecision.StepPatch(1, "确认路径后完成处理", "workspace",
+                                false, List.of(), List.of())), List.of()));
+
+        TaskRecord done = taskService.approve(taskService.create("目标").getId());
+        TaskPlan plan = parsePlan(done);
+
+        assertThat(done.getStatus()).isEqualTo(TaskStatus.DONE);
+        assertThat(plan.getCollaborationRevisionCount()).isEqualTo(1);
+        assertThat(plan.getSteps().getFirst().getAgent()).isEqualTo("workspace");
+        assertThat(plan.getSteps().getFirst().getResult()).contains("处理完成");
+        assertThat(plan.getBlackboard()).extracting(BlackboardEntry::type)
+                .contains(BlackboardEntry.NEED_HELP, BlackboardEntry.NOTE, BlackboardEntry.RESULT);
+        verify(plannerAgent, times(1)).resolveCollaboration(
+                anyString(), any(), anyList(), anyInt(), any(ChatClient.class));
+        verify(executorAgent, times(2)).executeStep(eq("目标"), any(), anyList(),
+                any(ToolCallback[].class), any(ChatClient.class), any());
+    }
+
+    /** 17B：Planner 可把同路径并发写改为串行，冲突解决前 Worker 不会开始执行。 */
+    @Test
+    void plannerSerializesSharedResourceConflictBeforeExecution() {
+        when(plannerAgent.plan("目标")).thenReturn(conflictingWritePlan());
+        when(plannerAgent.resolveCollaboration(anyString(), any(), anyList(), anyInt(), any(ChatClient.class)))
+                .thenReturn(new CollaborationDecision(true, "按步骤编号串行写入",
+                        List.of(new CollaborationDecision.StepPatch(2, null, null, false,
+                                List.of(1), List.of("file:report.docx"))), List.of()));
+
+        TaskRecord done = taskService.approve(taskService.create("目标").getId());
+        TaskPlan plan = parsePlan(done);
+
+        assertThat(done.getStatus()).isEqualTo(TaskStatus.DONE);
+        assertThat(plan.getSteps().get(1).getDependsOn()).containsExactly(1);
+        assertThat(plan.getBlackboard()).filteredOn(entry -> BlackboardEntry.CONFLICT.equals(entry.type()))
+                .extracting(BlackboardEntry::status).containsExactly(BlackboardEntry.PLANNER_RESOLVED);
+        verify(executorAgent, times(2)).executeStep(eq("目标"), any(), anyList(),
+                any(ToolCallback[].class), any(ChatClient.class), any());
+    }
+
+    /** 17B：Planner 未决时进入 HITL；没有人工 note 不能继续，写 note 后按安全默认串行化。 */
+    @Test
+    void unresolvedConflictRequiresHumanNoteBeforeContinuing() {
+        when(plannerAgent.plan("目标")).thenReturn(conflictingWritePlan());
+        when(plannerAgent.resolveCollaboration(anyString(), any(), anyList(), anyInt(), any(ChatClient.class)))
+                .thenReturn(CollaborationDecision.unresolved("两个写入都可能覆盖用户内容"));
+
+        TaskRecord pending = taskService.approve(taskService.create("目标").getId());
+
+        assertThat(pending.getStatus()).isEqualTo(TaskStatus.PENDING_APPROVAL);
+        assertThat(pending.getPendingStepId()).isEqualTo(-1);
+        assertThatThrownBy(() -> taskService.approve(pending.getId()))
+                .hasMessageContaining("人工判断说明");
+
+        taskService.addHumanNote(pending.getId(), "先执行步骤 1，再由步骤 2 校验并覆盖。");
+        TaskRecord done = taskService.approve(pending.getId());
+        TaskPlan plan = parsePlan(done);
+
+        assertThat(done.getStatus()).isEqualTo(TaskStatus.DONE);
+        assertThat(plan.getSteps().get(1).getDependsOn()).containsExactly(1);
+        assertThat(plan.getBlackboard()).anyMatch(entry -> entry.author().startsWith("HUMAN"));
+        assertThat(plan.getBlackboard()).filteredOn(entry -> BlackboardEntry.CONFLICT.equals(entry.type()))
+                .extracting(BlackboardEntry::status).containsExactly(BlackboardEntry.HUMAN_RESOLVED);
+    }
+
+    /** 17B：discovery 补出的副作用步骤仍命中原审批屏障。 */
+    @Test
+    void discoverySideEffectStepStillRequiresApproval() {
+        when(plannerAgent.plan("目标")).thenReturn(oneStepPlan());
+        when(executorAgent.executeStep(eq("目标"), any(), anyList(), any(ToolCallback[].class),
+                any(ChatClient.class), any())).thenReturn("""
+                {"result":"分析完成","discoveries":[{"description":"调用 mail_send 发送分析结果",
+                 "agent":"pim","needsApproval":false,"dependsOn":[1]}]}
+                """);
+
+        TaskRecord pending = taskService.approve(taskService.create("目标").getId());
+        TaskPlan plan = parsePlan(pending);
+
+        assertThat(pending.getStatus()).isEqualTo(TaskStatus.PENDING_APPROVAL);
+        assertThat(pending.getPendingStepId()).isEqualTo(2);
+        assertThat(plan.getDiscoveryStepCount()).isEqualTo(1);
+        assertThat(plan.getSteps().get(1).isNeedsApproval()).isTrue();
+    }
+
+    /** 17B：第二次 need-help 不再调用 Planner，按预算耗尽结果交给 Judge 收口。 */
+    @Test
+    void secondNeedHelpExhaustsBudgetWithoutAnotherReplan() {
+        when(plannerAgent.plan("目标")).thenReturn(oneStepPlan());
+        when(executorAgent.executeStep(eq("目标"), any(), anyList(), any(ToolCallback[].class),
+                any(ChatClient.class), any())).thenReturn(
+                        "{\"needHelp\":\"第一次求助\"}",
+                        "{\"needHelp\":\"第二次求助\"}");
+        when(plannerAgent.resolveCollaboration(anyString(), any(), anyList(), anyInt(), any(ChatClient.class)))
+                .thenReturn(new CollaborationDecision(true, "补充步骤说明",
+                        List.of(new CollaborationDecision.StepPatch(1, "按补充说明重试", "general",
+                                false, List.of(), List.of())), List.of()));
+
+        TaskRecord done = taskService.approve(taskService.create("目标").getId());
+        TaskPlan plan = parsePlan(done);
+
+        assertThat(done.getStatus()).isEqualTo(TaskStatus.DONE);
+        assertThat(plan.getSteps().getFirst().getResult()).contains("未解决求助");
+        assertThat(plan.getBlackboard()).filteredOn(entry -> BlackboardEntry.NEED_HELP.equals(entry.type()))
+                .extracting(BlackboardEntry::status)
+                .contains(BlackboardEntry.PLANNER_RESOLVED, BlackboardEntry.BUDGET_EXHAUSTED);
+        verify(plannerAgent, times(1)).resolveCollaboration(
+                anyString(), any(), anyList(), anyInt(), any(ChatClient.class));
+    }
+
     private static TaskPlan twoStepPlan() {
         TaskPlan plan = new TaskPlan();
         plan.setSteps(List.of(
                 new TaskStep(1, "读取数据文件", false),
                 new TaskStep(2, "发送邮件通知", true)));
+        return plan;
+    }
+
+    private static TaskPlan conflictingWritePlan() {
+        TaskPlan plan = new TaskPlan();
+        TaskStep first = new TaskStep(1, "生成报告", false);
+        first.setAgent("document");
+        first.setDependsOn(List.of());
+        first.setWriteResources(List.of("file:report.docx"));
+        TaskStep second = new TaskStep(2, "校验并修订报告", false);
+        second.setAgent("document");
+        second.setDependsOn(List.of());
+        second.setWriteResources(List.of("file:report.docx"));
+        plan.setSteps(List.of(first, second));
         return plan;
     }
 

@@ -27,6 +27,7 @@ import jakarta.persistence.PersistenceContext;
 
 import com.example.vatica.agent.JudgeAgent;
 import com.example.vatica.agent.PlannerAgent;
+import com.example.vatica.agent.HumanAgent;
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
 import com.example.vatica.auth.TenantChannels;
@@ -90,6 +91,7 @@ public class TaskService {
     private final AgentRuntimeFactory runtimeFactory;
     private final AgentRegistry agentRegistry;
     private final DirectModelUsageRecorder directUsage;
+    private final HumanAgent humanAgent;
 
     /** 终止标志（迭代 7 I7-4）：取消接口与执行线程的协作式协调点（波次粒度生效）。 */
     private final Map<String, AtomicBoolean> cancelFlags = new ConcurrentHashMap<>();
@@ -110,7 +112,7 @@ public class TaskService {
             AgentToolCatalog agentTools, FilePermissionRequestService permissionRequests,
             ModelRegistry registry, AgentTraceRecordRepository traceRepository, TaskBlackboard blackboard,
             ContextBudget contextBudget, AgentRuntimeFactory runtimeFactory, AgentRegistry agentRegistry,
-            DirectModelUsageRecorder directUsage) {
+            DirectModelUsageRecorder directUsage, HumanAgent humanAgent) {
         this.plannerAgent = plannerAgent;
         this.judgeAgent = judgeAgent;
         this.judgeProps = judgeProps;
@@ -127,6 +129,7 @@ public class TaskService {
         this.runtimeFactory = runtimeFactory;
         this.agentRegistry = agentRegistry;
         this.directUsage = directUsage;
+        this.humanAgent = humanAgent;
     }
 
     /** 创建任务：Planner 拆解 → PENDING 待审批计划。 */
@@ -199,6 +202,24 @@ public class TaskService {
                 PageRequest.of(0, Math.min(Math.max(limit, 1), 100)));
     }
 
+    /** 迭代 17B：HumanAgent 写 note；与任务计划同事务落库并立即发布黑板事件。 */
+    @Transactional
+    public TaskRecord addHumanNote(String id, String content) {
+        TaskRecord record = get(id);
+        if (record.getStatus().isTerminal()) {
+            throw new IllegalArgumentException("操作失败：终态任务不能再写协作备注。");
+        }
+        TaskPlan plan = parse(record.getPlanJson());
+        int currentStepId = record.getCurrentStep() >= 0 && record.getCurrentStep() < plan.getSteps().size()
+                ? plan.getSteps().get(record.getCurrentStep()).getId() : 0;
+        BlackboardEntry entry = humanAgent.note(plan, RequestIdentityContext.require(), currentStepId, content);
+        record.setPlanJson(toJson(plan));
+        repository.save(record);
+        eventPublisher.publishBlackboard(record, entry);
+        eventPublisher.publish(record, "human_note");
+        return record;
+    }
+
     /**
      * 迭代 13 I13-6：启动清理器——EPHEMERAL 任务重启后凭据已丢，直接 FAILED 提示重提；
      * PLATFORM 任务中断标 FAILED + recoverable，可手动 continue。
@@ -266,8 +287,20 @@ public class TaskService {
             case PENDING_APPROVAL -> {
                 TaskStateMachine.requireTransition(from, TaskStatus.RUNNING);
                 TaskPlan plan = parse(record.getPlanJson());
-                TaskStep pending = findStep(plan, record.getPendingStepId());
-                pending.setApproved(true); // 批准后跳过该审批点
+                if (record.getPendingStepId() >= 0) {
+                    TaskStep pending = findStep(plan, record.getPendingStepId());
+                    pending.setApproved(true); // 批准后跳过该审批点
+                } else {
+                    if (blackboard.openArbitrations(plan).isEmpty()) {
+                        throw new IllegalArgumentException("操作失败：当前没有待处理的协作仲裁。");
+                    }
+                    if (!blackboard.hasHumanNoteForOpenArbitration(plan)) {
+                        throw new IllegalArgumentException("操作失败：请先写入人工判断说明，再批准继续。");
+                    }
+                    List<BlackboardEntry> resolved = blackboard.resolveOpenArbitrationsByHuman(plan);
+                    resolved.forEach(entry -> eventPublisher.publishBlackboard(record, entry));
+                    record.setError(null);
+                }
                 record.setPendingStepId(-1);
                 record.setPlanJson(toJson(plan));
                 record.setStatus(TaskStatus.RUNNING);
@@ -356,82 +389,137 @@ public class TaskService {
     /** 从 currentStep 波次执行（迭代 6 并行）：遇审批点挂起；全部完成 → REVIEW 评测段；异常 → FAILED。 */
     private void executeUntilBlocked(TaskRecord record) {
         TaskPlan plan = parse(record.getPlanJson());
-        List<List<Integer>> waves = WaveScheduler.waves(plan);
+        boolean restartScheduling;
+        do {
+            restartScheduling = false;
+            List<List<Integer>> waves = WaveScheduler.waves(plan);
+            for (List<Integer> wave : waves) {
+                // 迭代 17B：以持久化 result 判断是否完成；重规划重算波次时绝不重复执行已完成步骤。
+                List<Integer> todo = wave.stream()
+                        .filter(index -> !TaskBlackboard.hasResult(plan.getSteps().get(index)))
+                        .toList();
+                if (todo.isEmpty()) {
+                    continue;
+                }
+                if (isCancelled(record.getId())) {
+                    return;
+                }
+                record.setCurrentStep(todo.stream().min(Integer::compareTo).orElse(0));
 
-        for (List<Integer> wave : waves) {
-            List<Integer> todo = wave.stream().filter(i -> i >= record.getCurrentStep()).toList();
-            if (todo.isEmpty()) {
-                continue;
-            }
-            if (isCancelled(record.getId())) {
-                return;   // 已被终止：状态已由 cancel() 落 CANCELLED，本线程不回写
-            }
-            // 审批点屏障：未批准的审批步骤独占一波（WaveScheduler 保证），挂起等待人工
-            if (todo.size() == 1) {
-                int idx = todo.get(0);
-                TaskStep step = plan.getSteps().get(idx);
-                if (step.isNeedsApproval() && !step.isApproved()) {
-                    TaskStateMachine.requireTransition(record.getStatus(), TaskStatus.PENDING_APPROVAL);
-                    record.setStatus(TaskStatus.PENDING_APPROVAL);
-                    record.setPendingStepId(step.getId());
-                    record.setCurrentStep(idx);
+                // 显式共享写资源冲突在任何工具调用之前机械阻断。
+                List<BlackboardEntry> conflicts = blackboard.detectWriteConflicts(plan, todo);
+                if (!conflicts.isEmpty()) {
+                    record.setPlanJson(toJson(plan));
                     repository.save(record);
-                    eventPublisher.publish(record, "approval_required");
-                    log.info("任务 {} 步骤 {} 命中审批点，挂起等待人工审批", record.getId(), step.getId());
+                    conflicts.forEach(entry -> eventPublisher.publishBlackboard(record, entry));
+                    eventPublisher.publish(record, "conflict_detected");
+                    CollaborationRoute route = handleCollaboration(record, plan, conflicts);
+                    if (route == CollaborationRoute.HUMAN) {
+                        return;
+                    }
+                    if (route == CollaborationRoute.RESTART) {
+                        restartScheduling = true;
+                        break;
+                    }
+                }
+
+                // 审批点屏障：未批准的审批步骤独占一波（discovery 动态补步同样适用）。
+                if (todo.size() == 1) {
+                    int idx = todo.getFirst();
+                    TaskStep step = plan.getSteps().get(idx);
+                    if (step.isNeedsApproval() && !step.isApproved()) {
+                        TaskStateMachine.requireTransition(record.getStatus(), TaskStatus.PENDING_APPROVAL);
+                        record.setStatus(TaskStatus.PENDING_APPROVAL);
+                        record.setPendingStepId(step.getId());
+                        record.setCurrentStep(idx);
+                        record.setPlanJson(toJson(plan));
+                        repository.save(record);
+                        eventPublisher.publish(record, "approval_required");
+                        log.info("任务 {} 步骤 {} 命中审批点，挂起等待人工审批", record.getId(), step.getId());
+                        return;
+                    }
+                }
+
+                String reflection = reflectionPrompt(record);
+                List<CompletableFuture<String>> futures = new ArrayList<>();
+                try {
+                    eventPublisher.publish(record, "step_running");
+                    for (int idx : todo) {
+                        TaskStep step = plan.getSteps().get(idx);
+                        List<String> context = blackboard.contextFor(record.getGoal(), plan, step);
+                        futures.add(CompletableFuture
+                                .supplyAsync(() -> execute(record, step, context, reflection), parallelExecutor));
+                    }
+                    CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
+                    if (isCancelled(record.getId())) {
+                        futures.forEach(future -> future.cancel(true));
+                        return;
+                    }
+
+                    List<BlackboardEntry> waveEntries = new ArrayList<>();
+                    List<BlackboardEntry> helpSignals = new ArrayList<>();
+                    boolean discoveryAdded = false;
+                    UsageContext.set(usageSnapshot(record, "SUMMARIZER", null, "DISABLED",
+                            contextBudget.summarizerTokens(), true));
+                    try {
+                        for (int k = 0; k < todo.size(); k++) {
+                            TaskStep step = plan.getSteps().get(todo.get(k));
+                            TaskBlackboard.ProcessedOutcome outcome = blackboard.recordStepOutput(
+                                    plan, step, futures.get(k).join());
+                            waveEntries.addAll(outcome.entries());
+                            if (outcome.needHelp() != null) {
+                                helpSignals.add(outcome.needHelp());
+                            }
+                            TaskBlackboard.DiscoveryResult discovery = blackboard.appendDiscoveries(
+                                    plan, outcome.discoveries(), step.getId(), agentRegistry);
+                            discoveryAdded |= discovery.addedCount() > 0;
+                            waveEntries.addAll(discovery.entries());
+                        }
+                        blackboard.mergeWaveNotes(plan);
+                    } finally {
+                        UsageContext.clear();
+                    }
+                    record.setPlanJson(toJson(plan));
+                    record.setCurrentStep(nextIncompleteIndex(plan));
+                    repository.save(record);
+                    waveEntries.forEach(entry -> eventPublisher.publishBlackboard(record, entry));
+                    eventPublisher.publish(record, helpSignals.isEmpty() ? "step_done" : "need_help");
+                    log.info("任务 {} 波次完成：步骤下标 {}（{} 个并行）", record.getId(), todo, todo.size());
+
+                    if (!helpSignals.isEmpty()) {
+                        CollaborationRoute route = handleCollaboration(record, plan, helpSignals);
+                        if (route == CollaborationRoute.HUMAN) {
+                            return;
+                        }
+                        if (route == CollaborationRoute.RESTART) {
+                            restartScheduling = true;
+                            break;
+                        }
+                    }
+                    if (discoveryAdded) {
+                        restartScheduling = true;
+                        break;
+                    }
+                } catch (Exception e) {
+                    futures.forEach(future -> future.cancel(true));
+                    if (isCancelled(record.getId())) {
+                        return;
+                    }
+                    Throwable cause = e instanceof CompletionException ? e.getCause() : e;
+                    log.error("任务 {} 波次执行失败（步骤 {}）", record.getId(), todo, cause);
+                    TaskStateMachine.requireTransition(record.getStatus(), TaskStatus.FAILED);
+                    record.setStatus(TaskStatus.FAILED);
+                    record.setError(cause.getMessage());
+                    cancelFlags.remove(record.getId());
+                    ephemeralCredentials.remove(record.getId());
+                    ephemeralMailCredentials.remove(record.getId());
+                    repository.save(record);
+                    eventPublisher.publish(record, "failed");
                     return;
                 }
             }
-            // 并行执行本波：虚拟线程 + CompletableFuture（每步骤一个 Worker Agent）
-            // 迭代 15 I15-11：每个步骤独立取黑板上下文（dependsOn 摘要 + 滚动笔记），不再共享全部前序结果
-            String reflection = reflectionPrompt(record);
-            List<CompletableFuture<String>> futures = new ArrayList<>();
-            try {
-                eventPublisher.publish(record, "step_running");
-                for (int idx : todo) {
-                    TaskStep step = plan.getSteps().get(idx);
-                    List<String> context = blackboard.contextFor(record.getGoal(), plan, step);
-                    futures.add(CompletableFuture
-                            .supplyAsync(() -> execute(record, step, context, reflection), parallelExecutor));
-                }
-                CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
-                if (isCancelled(record.getId())) {
-                    futures.forEach(f -> f.cancel(true));
-                    return;   // 终止在波执行期间生效：不落进度，状态保持 CANCELLED（防旧状态覆盖）
-                }
-                UsageContext.set(usageSnapshot(record, "SUMMARIZER", null, "DISABLED",
-                        contextBudget.summarizerTokens(), true));
-                try {
-                    for (int k = 0; k < todo.size(); k++) {
-                        TaskStep step = plan.getSteps().get(todo.get(k));
-                        blackboard.recordStepResult(plan, step, futures.get(k).join());
-                    }
-                    blackboard.mergeWaveNotes(plan);
-                } finally {
-                    UsageContext.clear();
-                }
-                record.setPlanJson(toJson(plan));
-                record.setCurrentStep(todo.get(todo.size() - 1) + 1);
-                repository.save(record);
-                eventPublisher.publish(record, "step_done");
-                log.info("任务 {} 波次完成：步骤下标 {}（{} 个并行）", record.getId(), todo, todo.size());
-            } catch (Exception e) {
-                futures.forEach(f -> f.cancel(true));
-                if (isCancelled(record.getId())) {
-                    return;   // 终止引发的执行中断：不覆盖 CANCELLED
-                }
-                Throwable cause = e instanceof CompletionException ? e.getCause() : e;
-                log.error("任务 {} 波次执行失败（步骤 {}）", record.getId(), todo, cause);
-                TaskStateMachine.requireTransition(record.getStatus(), TaskStatus.FAILED);
-                record.setStatus(TaskStatus.FAILED);
-                record.setError(cause.getMessage());
-                cancelFlags.remove(record.getId());
-                ephemeralCredentials.remove(record.getId());
-                ephemeralMailCredentials.remove(record.getId());
-                repository.save(record);
-                eventPublisher.publish(record, "failed");
-                return;
-            }
-        }
+        } while (restartScheduling);
+
         // 全部完成：进入 REVIEW 评测段（迭代 5.5：Judge 评分分流）
         if (isCancelled(record.getId())) {
             return;
@@ -443,6 +531,82 @@ public class TaskService {
         repository.save(record);
         eventPublisher.publish(record, "review");
         evaluateAndRoute(record, plan);
+    }
+
+    /** 运行中协作只有一次 Planner 调整预算；未决冲突/首次未决求助进入 HumanAgent。 */
+    private CollaborationRoute handleCollaboration(TaskRecord record, TaskPlan plan,
+            List<BlackboardEntry> signals) {
+        boolean onlyNeedHelp = signals.stream().allMatch(entry -> BlackboardEntry.NEED_HELP.equals(entry.type()));
+        if (plan.getCollaborationRevisionCount() >= 1) {
+            if (onlyNeedHelp) {
+                List<BlackboardEntry> exhausted = blackboard.exhaustNeedHelp(plan, signals);
+                record.setPlanJson(toJson(plan));
+                record.setCurrentStep(nextIncompleteIndex(plan));
+                repository.save(record);
+                exhausted.forEach(entry -> eventPublisher.publishBlackboard(record, entry));
+                eventPublisher.publish(record, "collaboration_budget_exhausted");
+                return CollaborationRoute.CONTINUE;
+            }
+            pauseForHuman(record, plan, "共享资源冲突已超过自动裁决预算，请写入人工判断说明后继续。");
+            return CollaborationRoute.HUMAN;
+        }
+
+        plan.setCollaborationRevisionCount(plan.getCollaborationRevisionCount() + 1);
+        CollaborationDecision decision;
+        boolean platformQuota = !"EPHEMERAL".equals(record.getModelSource());
+        UsageContext.set(usageSnapshot(record, "PLANNER_COLLABORATION", null, "HIGH",
+                contextBudget.plannerTokens(), platformQuota));
+        try {
+            int remainingDiscoveries = Math.max(0,
+                    TaskBlackboard.MAX_DISCOVERY_STEPS - plan.getDiscoveryStepCount());
+            decision = plannerAgent.resolveCollaboration(record.getGoal(), plan, signals,
+                    remainingDiscoveries, plannerClientFor(record));
+        } catch (RuntimeException e) {
+            log.warn("任务 {} 协作 Planner 裁决失败，升级人工：{}", record.getId(), e.getMessage());
+            decision = CollaborationDecision.unresolved("Planner 裁决失败：" + e.getMessage());
+        } finally {
+            UsageContext.clear();
+        }
+
+        TaskBlackboard.ApplyResult applied = blackboard.applyDecision(plan, decision, signals, agentRegistry);
+        if (applied.changed()) {
+            record.setPlanJson(toJson(plan));
+            record.setCurrentStep(nextIncompleteIndex(plan));
+            repository.save(record);
+            applied.entries().forEach(entry -> eventPublisher.publishBlackboard(record, entry));
+            eventPublisher.publish(record, "collaboration_replanned");
+            return CollaborationRoute.RESTART;
+        }
+
+        String reason = decision == null || decision.summary() == null || decision.summary().isBlank()
+                ? "Planner 无法可靠裁决，请写入人工判断说明后继续。" : decision.summary();
+        pauseForHuman(record, plan, reason);
+        return CollaborationRoute.HUMAN;
+    }
+
+    private void pauseForHuman(TaskRecord record, TaskPlan plan, String reason) {
+        TaskStateMachine.requireTransition(record.getStatus(), TaskStatus.PENDING_APPROVAL);
+        record.setStatus(TaskStatus.PENDING_APPROVAL);
+        record.setPendingStepId(-1);
+        record.setError("等待人工仲裁：" + reason);
+        record.setPlanJson(toJson(plan));
+        repository.save(record);
+        eventPublisher.publish(record, "arbitration_required");
+    }
+
+    private static int nextIncompleteIndex(TaskPlan plan) {
+        for (int i = 0; i < plan.getSteps().size(); i++) {
+            if (!TaskBlackboard.hasResult(plan.getSteps().get(i))) {
+                return i;
+            }
+        }
+        return plan.getSteps().size();
+    }
+
+    private enum CollaborationRoute {
+        CONTINUE,
+        RESTART,
+        HUMAN
     }
 
     /** 单步骤执行包装：异常附步骤号（并行波中定位失败来源）；supplyAsync 会再包一层 CompletionException。 */
@@ -512,6 +676,18 @@ public class TaskService {
                             : com.example.vatica.config.ReasoningMode.HIGH);
         }
         return withTools ? registry.taskExecutorClient() : registry.judgeClient();
+    }
+
+    private ChatClient plannerClientFor(TaskRecord record) {
+        if ("EPHEMERAL".equals(record.getModelSource())) {
+            EphemeralCredential credential = ephemeralCredentials.get(record.getId());
+            if (credential == null) {
+                throw new IllegalStateException("操作失败：本任务的临时模型凭据已失效（服务重启），请重新提交任务。");
+            }
+            return registry.ephemeralClient(credential, false,
+                    com.example.vatica.config.ReasoningMode.HIGH);
+        }
+        return registry.plannerClient();
     }
 
     /** AgentScope 使用与 legacy 执行角色一致的模型槽位；临时凭据仍只从任务内存快照读取。 */
@@ -587,6 +763,8 @@ public class TaskService {
                 TaskPlan revised = plannerAgent.revise(record.getGoal(), plan, feedback);
                 record.setPlanRevisionCount(record.getPlanRevisionCount() + 1);
                 if (revised != plan) {
+                    revised.setCollaborationRevisionCount(plan.getCollaborationRevisionCount());
+                    revised.setDiscoveryStepCount(plan.getDiscoveryStepCount());
                     plan = revised;
                     record.setPlanJson(toJson(plan));
                     record.setCurrentStep(0);
@@ -687,6 +865,7 @@ public class TaskService {
         }
         plan.setGlobalNotes(null);
         plan.setNoteThroughStepId(0);
+        plan.setBlackboard(List.of());
         record.setPlanJson(toJson(plan));
         record.setCurrentStep(0);
         record.setPendingStepId(-1);

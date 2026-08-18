@@ -18,6 +18,8 @@ import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.definition.ToolDefinition;
 
 import com.example.vatica.task.TaskPlan;
+import com.example.vatica.task.BlackboardEntry;
+import com.example.vatica.task.CollaborationDecision;
 import com.example.vatica.task.TaskPlan.TaskStep;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -210,5 +212,44 @@ class PlannerAgentTest {
         assertThat(plan.getSteps().get(1).getDependsOn()).containsExactly(1);
         // 声明的依赖全部非法 → 不授予并行，退回依赖上一步
         assertThat(plan.getSteps().get(2).getDependsOn()).containsExactly(2);
+    }
+
+    /** 17B：协作 Planner 的 JSON 裁决可改派/串行化，无法结构化时仍走文本解析。 */
+    @Test
+    void parsesCollaborationDecision() {
+        when(callSpec.content()).thenReturn("""
+                {"resolved":true,"summary":"先读后写","patches":[
+                  {"stepId":2,"agent":"workspace","dependsOn":[1],"writeResources":["FILE:C:\\\\Work\\\\A.txt"]}
+                ],"discoveries":[]}
+                """);
+        TaskPlan plan = new TaskPlan();
+        plan.setSteps(List.of(new TaskStep(1, "读取", false), new TaskStep(2, "写入", false)));
+        BlackboardEntry conflict = new BlackboardEntry(null, BlackboardEntry.CONFLICT, 1,
+                "planner", "SYSTEM", "同路径写冲突", "file:c:/work/a.txt", List.of(1, 2),
+                BlackboardEntry.OPEN, null);
+
+        CollaborationDecision decision = planner.resolveCollaboration(
+                "整理文件", plan, List.of(conflict), 2);
+
+        assertThat(decision.resolved()).isTrue();
+        assertThat(decision.patches()).singleElement().satisfies(patch -> {
+            assertThat(patch.stepId()).isEqualTo(2);
+            assertThat(patch.agent()).isEqualTo("workspace");
+            assertThat(patch.dependsOn()).containsExactly(1);
+        });
+    }
+
+    /** 17B：初始计划中的共享资源键在进入调度前做大小写和路径分隔符归一化。 */
+    @Test
+    void normalizesWriteResourceKeys() {
+        when(callSpec.content()).thenReturn("""
+                {"steps":[{"description":"写报告","agent":"document","needsApproval":false,
+                 "dependsOn":[],"writeResources":["FILE:C:\\\\Work\\\\Report.docx"]}]}
+                """);
+
+        TaskPlan plan = planner.plan("目标");
+
+        assertThat(plan.getSteps().getFirst().getWriteResources())
+                .containsExactly("file:c:/work/report.docx");
     }
 }

@@ -34,6 +34,10 @@ public class TaskController {
             String status, String error, String createdAt) {
     }
 
+    /** 迭代 17B：HumanAgent 写入黑板的请求契约。 */
+    public record HumanNoteRequest(String content) {
+    }
+
     private final TaskService taskService;
     private final TaskEventPublisher eventPublisher;
     private final ObjectMapper mapper;
@@ -77,6 +81,12 @@ public class TaskController {
     @PostMapping("/{id}/resume")
     public TaskDetailDto resume(@PathVariable String id) {
         return detail(taskService.resume(id));
+    }
+
+    /** 人工 note 立即进入任务黑板，后续波次可见；终态任务拒绝写入。 */
+    @PostMapping("/{id}/notes")
+    public TaskDetailDto addNote(@PathVariable String id, @RequestBody HumanNoteRequest body) {
+        return detail(taskService.addHumanNote(id, body == null ? null : body.content()));
     }
 
     /** 步骤级进度事件（迭代 7 I7-1；迭代 16 I16-3）：支持 JWT 头和 Last-Event-ID 续传。 */

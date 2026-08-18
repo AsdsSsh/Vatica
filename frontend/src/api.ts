@@ -881,6 +881,28 @@ export interface TaskStep {
   result: string | null;
   /** 依赖的步骤 id（迭代 6 波次并行；无=依赖上一步）。 */
   dependsOn?: number[];
+  /** 迭代 17B：显式共享写资源键；同波重复声明会先进入冲突仲裁。 */
+  writeResources?: string[];
+}
+
+export interface BlackboardEntry {
+  id: string;
+  type: "result" | "note" | "need-help" | "conflict";
+  stepId: number;
+  agent: string;
+  author: string;
+  content: string;
+  resource: string | null;
+  relatedStepIds: number[];
+  status: "RECORDED" | "OPEN" | "PLANNER_RESOLVED" | "HUMAN_RESOLVED" | "BUDGET_EXHAUSTED";
+  createdAt: string;
+}
+
+export interface TaskPlanView {
+  steps?: TaskStep[];
+  blackboard?: BlackboardEntry[];
+  collaborationRevisionCount?: number;
+  discoveryStepCount?: number;
 }
 
 /**
@@ -904,7 +926,7 @@ export interface TaskDetail {
   /** 失败/终止/评测不合格原因（正常为 null）。 */
   error: string | null;
   /** 任务计划（后端解析后的 JSON 对象；数据损坏时为提示字符串）。 */
-  plan?: { steps?: TaskStep[] } | string;
+  plan?: TaskPlanView | string;
   /** 迭代 13：服务重启中断后是否可"继续执行"。 */
   recoverable: boolean;
 }
@@ -966,6 +988,11 @@ export async function taskAction(id: string, action: "approve" | "rework" | "can
   return (await post(`/api/task/${id}/${action}`, {})).json();
 }
 
+/** 迭代 17B：HumanAgent 写 note，服务端按当前用户和任务归属落黑板。 */
+export async function addTaskNote(id: string, content: string): Promise<TaskDetail> {
+  return (await post(`/api/task/${encodeURIComponent(id)}/notes`, { content })).json();
+}
+
 /**
  * 订阅任务进度事件（迭代 16 I16-4）：
  * 使用统一 fetch-SSE，自动携带 JWT、Last-Event-ID，断线后回放并按 id 去重。
@@ -974,6 +1001,7 @@ export function subscribeTaskEvents(
   id: string,
   onEvent: (e: TaskEvent) => void,
   onPermission?: (e: FilePermissionRequest) => void,
+  onBlackboard?: (entry: BlackboardEntry) => void,
 ): () => void {
   const controller = new AbortController();
   let cancelled = false;
@@ -984,6 +1012,8 @@ export function subscribeTaskEvents(
       }, controller.signal, true)) {
         if (event.type === "permission_request") {
           onPermission?.(event.data as FilePermissionRequest);
+        } else if (event.type === "blackboard_entry") {
+          onBlackboard?.((event.data as { taskId: string; entry: BlackboardEntry }).entry);
         } else if (event.type === "task_snapshot" || event.type === "task") {
           onEvent(event.data as TaskEvent);
         }

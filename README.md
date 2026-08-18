@@ -414,6 +414,16 @@ curl localhost:8080/api/task/不存在   # {"message":"操作失败：任务不�
 - **验收**：零外网 OpenAI 兼容端点真实穿过 `TaskService → AgentScope ReAct → H2`，验证 `research` 仅获得 `text_stats / calculator`；完成报告见 `docs/20260818_iteration17a/report.md`
 - **回归**：后端 `mvn test` **共 354 项，0 failure、0 error、2 项真实 Qwen POC 按环境条件跳过** + 前端 `npm run build` 通过
 
+### 迭代 17B：受限黑板协作
+
+- **四原语**：Worker 在 `TaskPlan` 内写入 `result / note / need-help / conflict`，通过统一 `blackboard_entry` SSE 事件发布；任务快照仍是断线恢复的完整事实源
+- **受限动态**：`need-help` 最多触发 1 次 Planner 运行中调整，Agent discovery 全任务最多补 2 步、计划最多 10 步；动态副作用步骤继续命中原 HITL 审批屏障
+- **冲突仲裁**：Planner 计划声明 `writeResources`，同波共享写资源在工具调用前机械阻断；Planner 无法可靠串行化时进入人工仲裁，HumanAgent 必须先写 note 才能继续
+- **隔离与限额**：黑板随计划 JSON 原子持久化并按任务隔离，人工/Agent 共用 64 条上限；人工与 Agent note 可被后续波次读取，重规划按结果过滤已完成步骤
+- **前端**：任务详情增加紧凑协作黑板、预算计数、人工备注入口和冲突裁决弹窗；API 类型与后端 `TaskPlan` 契约同步
+- **边界**：不引入自由 Agent 对话、无限探索或第二套状态机；角色模型绑定和角色级 trace/usage 留在 17C
+- **回归**：后端 `mvn test` **共 371 项，0 failure、0 error、2 项真实 Qwen POC 按环境条件跳过** + 前端 `npm run build` 通过；完成报告见 `docs/20260818_iteration17b/report.md`
+
 ### 迭代 2.5 新增配置（application.yml，均可调）
 
 | 配置 | 默认 | 说明 |

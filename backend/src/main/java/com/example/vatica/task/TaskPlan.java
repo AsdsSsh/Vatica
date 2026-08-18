@@ -1,5 +1,6 @@
 package com.example.vatica.task;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -8,9 +9,12 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
  * 任务计划（Planner 输出结构，迭代 5 I5-1）：步骤列表 + 各步骤结果。
  * 序列化为 JSON 存 TaskRecord.planJson。
  * 迭代 15 I15-11：黑板模型——globalNotes 滚动笔记 + noteThroughStepId 水位线 + 每步 resultDigest。
+ * 迭代 17B：增加四原语审计条目、运行中重规划预算与 discovery 补步预算。
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class TaskPlan {
+
+    public static final int MAX_BLACKBOARD_ENTRIES = 64;
 
     private List<TaskStep> steps = List.of();
 
@@ -19,6 +23,15 @@ public class TaskPlan {
 
     /** 已并入 globalNotes 的最大步骤 id（水位线）。 */
     private int noteThroughStepId;
+
+    /** result/note/need-help/conflict 条目；与计划一起原子持久化，天然按任务隔离。 */
+    private List<BlackboardEntry> blackboard = new ArrayList<>();
+
+    /** 运行中 need-help/conflict 已消耗的 Planner 调整次数，上限 1。 */
+    private int collaborationRevisionCount;
+
+    /** Agent discovery 已追加步骤数，上限 2。 */
+    private int discoveryStepCount;
 
     public List<TaskStep> getSteps() {
         return steps;
@@ -44,6 +57,53 @@ public class TaskPlan {
         this.noteThroughStepId = noteThroughStepId;
     }
 
+    public List<BlackboardEntry> getBlackboard() {
+        return blackboard;
+    }
+
+    public void setBlackboard(List<BlackboardEntry> blackboard) {
+        this.blackboard = new ArrayList<>();
+        if (blackboard != null) {
+            blackboard.forEach(this::addBlackboardEntry);
+        }
+    }
+
+    public void addBlackboardEntry(BlackboardEntry entry) {
+        if (entry == null) {
+            return;
+        }
+        if (blackboard == null) {
+            blackboard = new ArrayList<>();
+        }
+        blackboard.add(entry);
+        while (blackboard.size() > MAX_BLACKBOARD_ENTRIES) {
+            int removable = -1;
+            for (int i = 0; i < blackboard.size(); i++) {
+                if (!BlackboardEntry.OPEN.equals(blackboard.get(i).status())) {
+                    removable = i;
+                    break;
+                }
+            }
+            blackboard.remove(removable >= 0 ? removable : 0);
+        }
+    }
+
+    public int getCollaborationRevisionCount() {
+        return collaborationRevisionCount;
+    }
+
+    public void setCollaborationRevisionCount(int collaborationRevisionCount) {
+        this.collaborationRevisionCount = collaborationRevisionCount;
+    }
+
+    public int getDiscoveryStepCount() {
+        return discoveryStepCount;
+    }
+
+    public void setDiscoveryStepCount(int discoveryStepCount) {
+        this.discoveryStepCount = discoveryStepCount;
+    }
+
     /** 单个执行步骤。 */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class TaskStep {
@@ -61,6 +121,8 @@ public class TaskPlan {
         private String resultDigest;
         /** 迭代 6：依赖的前序步骤编号（1 起）。null=依赖上一步（顺序执行）；空列表=与步骤 1 并行。 */
         private List<Integer> dependsOn;
+        /** 迭代 17B：显式共享写资源键，例如 file:C:/work/report.docx；同波重复声明会在执行前冲突检测。 */
+        private List<String> writeResources = List.of();
 
         public TaskStep() {
         }
@@ -133,6 +195,14 @@ public class TaskPlan {
 
         public void setDependsOn(List<Integer> dependsOn) {
             this.dependsOn = dependsOn;
+        }
+
+        public List<String> getWriteResources() {
+            return writeResources;
+        }
+
+        public void setWriteResources(List<String> writeResources) {
+            this.writeResources = writeResources == null ? List.of() : List.copyOf(writeResources);
         }
     }
 }
