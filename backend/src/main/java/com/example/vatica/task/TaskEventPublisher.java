@@ -80,6 +80,7 @@ public class TaskEventPublisher {
         snap.put("recoverable", r.isRecoverable());
         snap.put("executionAttempt", r.getExecutionAttempt());
         snap.put("executionRuntime", r.getExecutionRuntime());
+        snap.put("benchmarkCaseId", r.getBenchmarkCaseId());
         snap.put("lastHeartbeatAt", r.getLastHeartbeatAt() == null ? null : r.getLastHeartbeatAt().toString());
         snap.put("recoveryApprovalRequired", r.isRecoveryApprovalRequired());
         try {

@@ -1005,6 +1005,58 @@ export async function fetchBenchmarkCases(): Promise<BenchmarkCase[]> {
   return (await getJson("/api/evaluation/benchmark-cases")).json();
 }
 
+export interface EvaluationThresholds {
+  minSamplesPerCase: number;
+  minPassRate: number;
+  minAverageScore: number;
+  maxFailedToolRate: number;
+}
+
+export interface CaseRuntimeResult {
+  caseId: string;
+  title: string;
+  runtime: "agentscope" | "legacy";
+  taskCount: number;
+  terminalSamples: number;
+  passedTasks: number;
+  failedTasks: number;
+  cancelledTasks: number;
+  passRate: number | null;
+  averageScore: number | null;
+  averageDurationMs: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costEstimate: number;
+  toolCalls: number;
+  failedToolCalls: number;
+}
+
+export interface RuntimeEvaluationGate {
+  runtime: "agentscope" | "legacy";
+  status: "PENDING" | "PASS" | "FAIL";
+  coveredCases: number;
+  totalCases: number;
+  terminalSamples: number;
+  passRate: number | null;
+  averageScore: number | null;
+  failedToolRate: number | null;
+  totalTokens: number;
+  costEstimate: number;
+  reasons: string[];
+}
+
+export interface EvaluationReport {
+  generatedAt: string;
+  thresholds: EvaluationThresholds;
+  results: CaseRuntimeResult[];
+  gates: RuntimeEvaluationGate[];
+}
+
+export async function fetchEvaluationReport(): Promise<EvaluationReport> {
+  return (await getJson("/api/evaluation/report")).json();
+}
+
 export interface BlackboardEntry {
   id: string;
   type: "result" | "note" | "need-help" | "conflict";
@@ -1057,6 +1109,8 @@ export interface TaskDetail {
   lastHeartbeatAt: string | null;
   /** 迭代 18：恢复是否需要人工确认中断步骤。 */
   recoveryApprovalRequired: boolean;
+  /** 迭代 18C：固定评测用例 id；普通任务为 null。 */
+  benchmarkCaseId: string | null;
 }
 
 /** SSE 进度事件负载 = 完整任务快照 + 事件类型。 */
@@ -1068,6 +1122,7 @@ export interface TaskSummary {
   goal: string;
   status: string;
   createdAt: string;
+  benchmarkCaseId: string | null;
 }
 
 export async function fetchRecentTasks(): Promise<TaskSummary[]> {
@@ -1078,6 +1133,7 @@ export async function createTask(
   goal: string,
   permission?: FilePermissionPolicy,
   credential?: EphemeralCredential,
+  benchmarkCaseId?: string,
   idempotencyKey = crypto.randomUUID(),
 ): Promise<TaskDetail> {
   const res = await fetch(`${getApiBase()}/api/task`, {
@@ -1088,6 +1144,7 @@ export async function createTask(
       permission,
       credential,
       mailCredential: getEphemeralMailCredential(),
+      benchmarkCaseId,
     }),
   });
   if (!res.ok) throw await toRequestError(res, `请求失败（HTTP ${res.status}）`);

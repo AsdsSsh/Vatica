@@ -15,9 +15,10 @@ package com.example.vatica.task;
  * @param executionRuntime 迭代 18：本次执行使用的运行时（legacy / agentscope）
  * @param lastHeartbeatAt 迭代 18：最近一次执行心跳
  * @param recoveryApprovalRequired 迭代 18：恢复是否需要人工确认中断步骤
+ * @param benchmarkCaseId 迭代 18C：固定评测用例 id；普通任务为 null
  */
 public record TaskDetailDto(String id, String goal, String status, String createdAt,
         int currentStep, int pendingStepId, Integer score, String verdict, int reworkCount,
         String error, Object plan, boolean recoverable, int executionAttempt, String executionRuntime,
-        String lastHeartbeatAt, boolean recoveryApprovalRequired) {
+        String lastHeartbeatAt, boolean recoveryApprovalRequired, String benchmarkCaseId) {
 }

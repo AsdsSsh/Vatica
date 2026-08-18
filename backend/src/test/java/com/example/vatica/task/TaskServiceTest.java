@@ -762,6 +762,42 @@ class TaskServiceTest {
         }
     }
 
+    /** 18C：固定用例 id 随任务持久化，Judge 收到目录中的验收条件。 */
+    @Test
+    void benchmarkTaskPersistsCaseAndUsesAcceptanceForJudge() {
+        String goal = "读取项目说明并生成三点摘要。";
+        when(plannerAgent.plan(goal)).thenReturn(oneStepPlan());
+        when(executorAgent.executeStep(eq(goal), any(), anyList(), any(ToolCallback[].class),
+                any(ChatClient.class), any())).thenReturn("三个事实摘要");
+
+        TaskRecord created = taskService.create(goal, null, null, null,
+                "benchmark-1", "document-summary");
+        TaskRecord done = taskService.approve(created.getId());
+
+        assertThat(done.getBenchmarkCaseId()).isEqualTo("document-summary");
+        org.mockito.ArgumentCaptor<String> goalCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(judgeAgent).evaluate(goalCaptor.capture(), any(), any(ChatClient.class));
+        assertThat(goalCaptor.getValue()).contains(goal).contains("三个可核对事实");
+    }
+
+    /** 18C：未知用例或被修改的固定目标不能伪装成可比较样本。 */
+    @Test
+    void benchmarkTaskRejectsUnknownCaseAndGoalDrift() {
+        assertThatThrownBy(() -> taskService.create("目标", null, null, null,
+                "benchmark-unknown", "unknown"))
+                .hasMessageContaining("评测用例不存在");
+        assertThatThrownBy(() -> taskService.create("被修改的目标", null, null, null,
+                "benchmark-drift", "document-summary"))
+                .hasMessageContaining("固定任务集保持一致");
+
+        String fixedGoal = "读取项目说明并生成三点摘要。";
+        when(plannerAgent.plan(fixedGoal)).thenReturn(oneStepPlan());
+        taskService.create(fixedGoal, null, null, null, "benchmark-attribution", null);
+        assertThatThrownBy(() -> taskService.create(fixedGoal, null, null, null,
+                "benchmark-attribution", "document-summary"))
+                .hasMessageContaining("幂等键已用于其他任务目标");
+    }
+
     private static TaskPlan twoStepPlan() {
         TaskPlan plan = new TaskPlan();
         plan.setSteps(List.of(

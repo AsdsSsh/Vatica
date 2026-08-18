@@ -116,6 +116,12 @@ vatica:
   task:
     # 单波次步骤的最长等待时间；超时后任务 FAILED，已完成步骤不会回滚
     step-timeout: 5m
+  # ===== 固定评测发布门禁（迭代 18C）=====
+  evaluation:
+    min-samples-per-case: 1
+    min-pass-rate: 0.8
+    min-average-score: 70
+    max-failed-tool-rate: 0.1
   # ===== 模型选择器（迭代 7 I7-5）=====
   # 主模型 DeepSeek 走 spring.ai.openai.*；备用模型通义千问（OpenAI 兼容）：
   #   setx QWEN_API_KEY <你的通义Key> 后重启，前端模型选择器即可切换

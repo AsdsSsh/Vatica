@@ -45,6 +45,8 @@ import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.config.ModelSlot;
 import com.example.vatica.config.TaskReliabilityProperties;
 import com.example.vatica.context.ContextBudget;
+import com.example.vatica.evaluation.BenchmarkCase;
+import com.example.vatica.evaluation.BenchmarkCatalog;
 import com.example.vatica.mail.MailConnectionSettings;
 import com.example.vatica.permission.FilePermissionPolicy;
 import com.example.vatica.permission.FilePermissionRequestService;
@@ -104,6 +106,7 @@ public class TaskService {
     private final HumanAgent humanAgent;
     private final TaskReliabilityProperties reliability;
     private final TaskExecutionFaultInjector faultInjector;
+    private final BenchmarkCatalog benchmarkCatalog;
 
     /** 终止标志（迭代 7 I7-4）：取消接口与执行线程的协作式协调点（波次粒度生效）。 */
     private final Map<String, AtomicBoolean> cancelFlags = new ConcurrentHashMap<>();
@@ -131,7 +134,8 @@ public class TaskService {
             ModelRegistry registry, AgentTraceRecordRepository traceRepository, TaskBlackboard blackboard,
             ContextBudget contextBudget, AgentRuntimeFactory runtimeFactory, AgentRegistry agentRegistry,
             DirectModelUsageRecorder directUsage, HumanAgent humanAgent, AgentModelBindingService agentModelBindings,
-            TaskReliabilityProperties reliability, TaskExecutionFaultInjector faultInjector) {
+            TaskReliabilityProperties reliability, TaskExecutionFaultInjector faultInjector,
+            BenchmarkCatalog benchmarkCatalog) {
         this.plannerAgent = plannerAgent;
         this.judgeAgent = judgeAgent;
         this.judgeProps = judgeProps;
@@ -152,6 +156,7 @@ public class TaskService {
         this.agentModelBindings = agentModelBindings;
         this.reliability = reliability;
         this.faultInjector = faultInjector;
+        this.benchmarkCatalog = benchmarkCatalog;
     }
 
     /** 创建任务：Planner 拆解 → PENDING 待审批计划。 */
@@ -187,9 +192,18 @@ public class TaskService {
     @Transactional
     public TaskRecord create(String goal, FilePermissionPolicy permission, EphemeralCredential credential,
             MailConnectionSettings mailCredential, String rawIdempotencyKey) {
+        return create(goal, permission, credential, mailCredential, rawIdempotencyKey, null);
+    }
+
+    /** 迭代 18C：固定评测任务必须引用稳定目录，且目标文本不得与目录漂移。 */
+    @Transactional
+    public TaskRecord create(String goal, FilePermissionPolicy permission, EphemeralCredential credential,
+            MailConnectionSettings mailCredential, String rawIdempotencyKey, String rawBenchmarkCaseId) {
         if (goal == null || goal.isBlank()) {
             throw new IllegalArgumentException("操作失败：任务目标不能为空。");
         }
+        BenchmarkCase benchmarkCase = resolveBenchmarkCase(rawBenchmarkCaseId, goal);
+        String benchmarkCaseId = benchmarkCase == null ? null : benchmarkCase.id();
         RequestIdentity identity = RequestIdentityContext.require();
         String idempotencyKey = normalizeIdempotencyKey(rawIdempotencyKey);
         if (idempotencyKey != null) {
@@ -209,27 +223,31 @@ public class TaskService {
                 TaskRecord existing = repository.findByUserIdAndIdempotencyKey(identity.userId(), idempotencyKey)
                         .orElse(null);
                 if (existing != null) {
-                    if (!existing.getGoal().equals(goal.trim())) {
+                    if (!existing.getGoal().equals(goal.trim())
+                            || !java.util.Objects.equals(existing.getBenchmarkCaseId(), benchmarkCaseId)) {
                         throw new IllegalArgumentException("操作失败：幂等键已用于其他任务目标，请更换 Idempotency-Key。");
                     }
                     return existing;
                 }
-                return createNewTask(goal, permission, credential, mailCredential, idempotencyKey, identity);
+                return createNewTask(goal, permission, credential, mailCredential, idempotencyKey,
+                        benchmarkCaseId, identity);
             } finally {
                 if (releaseHere) {
                     lock.release();
                 }
             }
         }
-        return createNewTask(goal, permission, credential, mailCredential, null, identity);
+        return createNewTask(goal, permission, credential, mailCredential, null, benchmarkCaseId, identity);
     }
 
     private TaskRecord createNewTask(String goal, FilePermissionPolicy permission, EphemeralCredential credential,
-            MailConnectionSettings mailCredential, String idempotencyKey, RequestIdentity identity) {
+            MailConnectionSettings mailCredential, String idempotencyKey, String benchmarkCaseId,
+            RequestIdentity identity) {
         TaskRecord record = new TaskRecord(UUID.randomUUID().toString(), identity.userId(), identity.orgId(),
                 goal.trim(), TaskStatus.PENDING, null, 0,
                 permission == null ? null : toPermissionJson(permission));
         record.setIdempotencyKey(idempotencyKey);
+        record.setBenchmarkCaseId(benchmarkCaseId);
         if (credential != null) {
             record.setModelSource("EPHEMERAL");
             ephemeralCredentials.put(record.getId(), credential);
@@ -258,6 +276,19 @@ public class TaskService {
             ephemeralMailCredentials.put(record.getId(), mailCredential);
         }
         return repository.save(record);
+    }
+
+    private BenchmarkCase resolveBenchmarkCase(String rawBenchmarkCaseId, String goal) {
+        if (rawBenchmarkCaseId == null || rawBenchmarkCaseId.isBlank()) {
+            return null;
+        }
+        BenchmarkCase benchmarkCase = benchmarkCatalog.find(rawBenchmarkCaseId)
+                .orElseThrow(() -> new IllegalArgumentException("操作失败：评测用例不存在。"));
+        if (!benchmarkCase.goal().equals(goal.trim())) {
+            throw new IllegalArgumentException("操作失败：评测任务目标必须与固定任务集保持一致。\n"
+                    + "请使用目录中的目标：" + benchmarkCase.goal());
+        }
+        return benchmarkCase;
     }
 
     private static String normalizeIdempotencyKey(String raw) {
@@ -874,7 +905,7 @@ public class TaskService {
             UsageContext.set(usageSnapshot(record, "JUDGE", null, "HIGH", contextBudget.judgeTokens(),
                     !"EPHEMERAL".equals(record.getModelSource()), "judge", "Judge"));
             try {
-                eval = judgeAgent.evaluate(record.getGoal(), plan, clientFor(record, false));
+                eval = judgeAgent.evaluate(evaluationGoal(record), plan, clientFor(record, false));
             } finally {
                 UsageContext.clear();
             }
@@ -975,6 +1006,16 @@ public class TaskService {
         return new UsageContext.Snapshot(UsageContext.newRequestId(), requestType, record.getUserId(),
                 record.getOrgId(), record.getModelSlotId(), record.getId(), stepId, reasoningMode,
                 budgetTokens, null, platformQuota);
+    }
+
+    /** 固定评测任务把验收标准显式交给 Judge；普通任务保持原有目标。 */
+    private String evaluationGoal(TaskRecord record) {
+        if (record.getBenchmarkCaseId() == null) {
+            return record.getGoal();
+        }
+        return benchmarkCatalog.find(record.getBenchmarkCaseId())
+                .map(item -> record.getGoal() + "\n固定评测验收条件：" + item.acceptance())
+                .orElse(record.getGoal());
     }
 
     private UsageContext.Snapshot usageSnapshot(TaskRecord record, String requestType, Integer stepId,

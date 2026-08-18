@@ -8,6 +8,7 @@ import {
   Input,
   List,
   Modal,
+  Select,
   Space,
   Table,
   Tag,
@@ -17,6 +18,7 @@ import {
   CheckCircleOutlined,
   ClockCircleOutlined,
   ExclamationCircleOutlined,
+  ExperimentOutlined,
   CloudOutlined,
   BranchesOutlined,
   FileSearchOutlined,
@@ -32,6 +34,7 @@ import {
   createTask,
   denyPermissionRequest,
   fetchRecentTasks,
+  fetchBenchmarkCases,
   fetchTaskDetail,
   fetchTaskTraces,
   isAuthExpiredError,
@@ -39,6 +42,7 @@ import {
   taskAction,
   type AgentTraceView,
   type BlackboardEntry,
+  type BenchmarkCase,
   type FilePermissionRequest,
   type TaskDetail,
   type TaskSummary,
@@ -118,6 +122,8 @@ export default function StepPanel() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [goalInput, setGoalInput] = useState("");
+  const [benchmarkCases, setBenchmarkCases] = useState<BenchmarkCase[]>([]);
+  const [benchmarkCaseId, setBenchmarkCaseId] = useState<string | null>(null);
   const [noteInput, setNoteInput] = useState("");
   const [arbitrationNote, setArbitrationNote] = useState("");
   const [noteBusy, setNoteBusy] = useState(false);
@@ -208,9 +214,16 @@ export default function StepPanel() {
     setSelectedId(null);
     setApprovalOpen(false);
     setPermissionRequests([]);
+    setBenchmarkCases([]);
+    setBenchmarkCaseId(null);
     prevStatus.current = null;
     if (online && authStatus !== "loading" && authStatus !== "anonymous") {
       void refreshTasks();
+      void fetchBenchmarkCases()
+        .then(setBenchmarkCases)
+        .catch((e: Error) => {
+          if (!isAuthExpiredError(e)) message.warning("固定评测集加载失败");
+        });
     }
   }, [authKey, online, authStatus, refreshTasks]);
 
@@ -257,8 +270,9 @@ export default function StepPanel() {
     setBusy(true);
     try {
       const policy = loadPermissionPolicy();
-      const created = await createTask(goal, policy);
+      const created = await createTask(goal, policy, undefined, benchmarkCaseId ?? undefined);
       setGoalInput("");
+      setBenchmarkCaseId(null);
       setSelectedId(created.id);
       setDetail(created);
       prevStatus.current = null; // 让审批弹窗对新任务触发一次
@@ -382,11 +396,30 @@ export default function StepPanel() {
           <Button size="small" aria-label="刷新任务列表" icon={<ReloadOutlined />} onClick={() => refreshTasks()} />
         </Flex>
         <Flex gap={6}>
+          <Select
+            size="small"
+            allowClear
+            value={benchmarkCaseId ?? undefined}
+            placeholder="普通任务"
+            aria-label="固定评测用例"
+            style={{ width: 126, flexShrink: 0 }}
+            options={benchmarkCases.map((item) => ({ value: item.id, label: item.title }))}
+            onChange={(value: string | undefined) => {
+              setBenchmarkCaseId(value ?? null);
+              const selected = benchmarkCases.find((item) => item.id === value);
+              if (selected) setGoalInput(selected.goal);
+            }}
+          />
           <Input
             size="small"
             placeholder="一句话任务，如：整理下周日程"
             value={goalInput}
-            onChange={(e) => setGoalInput(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              setGoalInput(next);
+              const selected = benchmarkCases.find((item) => item.id === benchmarkCaseId);
+              if (selected && next !== selected.goal) setBenchmarkCaseId(null);
+            }}
             onPressEnter={(e) => {
               // 迭代 12 I12-3：中文输入法选词回车不创建任务
               if (e.nativeEvent.isComposing) return;
@@ -432,6 +465,9 @@ export default function StepPanel() {
                   <Tag color={STATUS_COLOR[t.status]} style={{ marginInlineEnd: 0 }}>
                     {STATUS_LABEL[t.status] ?? t.status}
                   </Tag>
+                  {t.benchmarkCaseId && (
+                    <Tag icon={<ExperimentOutlined />} style={{ marginInlineEnd: 0, fontSize: 10 }}>评测</Tag>
+                  )}
                   <Typography.Text
                     ellipsis={{ tooltip: t.goal }}
                     style={{ fontSize: 12, flex: 1 }}
@@ -464,6 +500,9 @@ export default function StepPanel() {
               )}
               {detail.reworkCount > 0 && <Tag>返工 {detail.reworkCount} 次</Tag>}
               {detail.executionRuntime && <Tag>{detail.executionRuntime}</Tag>}
+              {detail.benchmarkCaseId && (
+                <Tag icon={<ExperimentOutlined />}>{detail.benchmarkCaseId}</Tag>
+              )}
               {detail.executionAttempt > 1 && <Tag>执行尝试 {detail.executionAttempt}</Tag>}
             </Flex>
             {detail.error && (

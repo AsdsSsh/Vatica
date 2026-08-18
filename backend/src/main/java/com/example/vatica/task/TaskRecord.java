@@ -22,6 +22,7 @@ import jakarta.persistence.Index;
 @Entity
 @Table(name = "vatica_task", indexes = {
         @Index(name = "idx_task_owner_created", columnList = "userId,createdAt"),
+        @Index(name = "idx_task_benchmark_runtime", columnList = "userId,benchmarkCaseId,executionRuntime"),
         @Index(name = "uk_task_owner_idempotency", columnList = "userId,idempotencyKey", unique = true) })
 public class TaskRecord {
 
@@ -39,6 +40,10 @@ public class TaskRecord {
     /** 迭代 18：同一用户的创建请求幂等键；空值表示调用方未启用幂等语义。 */
     @Column(length = 128)
     private String idempotencyKey;
+
+    /** 迭代 18C：固定评测目录中的用例 id；普通任务为空。 */
+    @Column(length = 64)
+    private String benchmarkCaseId;
 
     /** 用户原始目标（一句话）。 */
     @Column(nullable = false, length = 4000)
@@ -183,6 +188,14 @@ public class TaskRecord {
 
     public void setIdempotencyKey(String idempotencyKey) {
         this.idempotencyKey = idempotencyKey;
+    }
+
+    public String getBenchmarkCaseId() {
+        return benchmarkCaseId;
+    }
+
+    public void setBenchmarkCaseId(String benchmarkCaseId) {
+        this.benchmarkCaseId = benchmarkCaseId;
     }
 
     public String getGoal() {

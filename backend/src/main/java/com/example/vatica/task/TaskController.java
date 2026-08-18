@@ -56,7 +56,7 @@ public class TaskController {
     public TaskDetailDto create(@RequestBody TaskCreateRequest body,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         TaskRecord record = taskService.create(body.goal(), body.permission(), body.credential(),
-                body.mailCredential(), idempotencyKey);
+                body.mailCredential(), idempotencyKey, body.benchmarkCaseId());
         return detail(record);
     }
 
@@ -126,7 +126,7 @@ public class TaskController {
 
     private TaskSummaryDto summary(TaskRecord r) {
         return new TaskSummaryDto(r.getId(), r.getGoal(), r.getStatus().name(),
-                r.getCreatedAt().toString());
+                r.getCreatedAt().toString(), r.getBenchmarkCaseId());
     }
 
     /** 详情与 SSE 事件负载同构（事件 = 详情 + type 字段），前端一个类型两处复用。 */
@@ -142,6 +142,6 @@ public class TaskController {
                 r.getScore(), r.getVerdict() == null ? null : r.getVerdict().name(),
                 r.getReworkCount(), r.getError(), plan, r.isRecoverable(), r.getExecutionAttempt(),
                 r.getExecutionRuntime(), r.getLastHeartbeatAt() == null ? null : r.getLastHeartbeatAt().toString(),
-                r.isRecoveryApprovalRequired());
+                r.isRecoveryApprovalRequired(), r.getBenchmarkCaseId());
     }
 }

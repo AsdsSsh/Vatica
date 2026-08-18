@@ -22,6 +22,7 @@ import { DeleteOutlined, EditOutlined, PlusOutlined, ThunderboltOutlined } from 
 import {
   fetchModelSlots,
   fetchAgentBindings,
+  fetchEvaluationReport,
   fetchReliabilityBaseline,
   fetchUsageToday,
   isAuthExpiredError,
@@ -31,6 +32,7 @@ import {
   testModelConnection,
   type ModelSlot,
   type AgentBindingSettings,
+  type EvaluationReport,
   type ReliabilityView,
   type UsageToday,
 } from "../api";
@@ -78,6 +80,7 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
   const [bindingSaving, setBindingSaving] = useState<string | null>(null);
   const [usageToday, setUsageToday] = useState<UsageToday | null>(null);
   const [reliability, setReliability] = useState<ReliabilityView | null>(null);
+  const [evaluationReport, setEvaluationReport] = useState<EvaluationReport | null>(null);
   const [form] = Form.useForm<ModelSlot>();
   // 迭代 12 I12-9：dirty 跟踪——打开时快照，任何槽位变更后取消需确认
   const [baseline, setBaseline] = useState("");
@@ -102,6 +105,7 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
       });
     fetchUsageToday().then(setUsageToday).catch(() => setUsageToday(null));
     fetchReliabilityBaseline().then(setReliability).catch(() => setReliability(null));
+    fetchEvaluationReport().then(setEvaluationReport).catch(() => setEvaluationReport(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -269,6 +273,93 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
             { title: "Token", dataIndex: "totalTokens", width: 90 },
             { title: "工具调用", dataIndex: "toolCalls", width: 90 },
             { title: "多次执行", dataIndex: "multiAttemptTasks", width: 90 },
+          ]}
+        />
+      </Space>
+    );
+  }
+
+  function renderEvaluationReport() {
+    const thresholds = evaluationReport?.thresholds;
+    const gateColor = { PENDING: "default", PASS: "success", FAIL: "error" } as const;
+    const gateLabel = { PENDING: "样本不足", PASS: "通过", FAIL: "未通过" } as const;
+    return (
+      <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {thresholds
+            ? `每个用例 ${thresholds.minSamplesPerCase} 个样本 · 通过率 ${Math.round(thresholds.minPassRate * 100)}% · 平均评分 ${thresholds.minAverageScore} · 工具失败率不高于 ${Math.round(thresholds.maxFailedToolRate * 100)}%`
+            : "尚未读取评测门禁"}
+        </Typography.Text>
+        <Table
+          size="small"
+          rowKey="runtime"
+          pagination={false}
+          locale={{ emptyText: "还没有评测门禁数据" }}
+          dataSource={evaluationReport?.gates ?? []}
+          columns={[
+            { title: "运行时", dataIndex: "runtime", width: 110 },
+            {
+              title: "门禁", dataIndex: "status", width: 100,
+              render: (status: EvaluationReport["gates"][number]["status"], row: EvaluationReport["gates"][number]) => (
+                <Tooltip title={row.reasons.length ? row.reasons.join("；") : "全部阈值已满足"}>
+                  <Tag color={gateColor[status]}>{gateLabel[status]}</Tag>
+                </Tooltip>
+              ),
+            },
+            {
+              title: "覆盖", width: 80,
+              render: (_: unknown, row: EvaluationReport["gates"][number]) => `${row.coveredCases}/${row.totalCases}`,
+            },
+            { title: "样本", dataIndex: "terminalSamples", width: 70 },
+            {
+              title: "通过率", dataIndex: "passRate", width: 85,
+              render: (value: number | null) => value == null ? "-" : `${Math.round(value * 100)}%`,
+            },
+            {
+              title: "平均分", dataIndex: "averageScore", width: 80,
+              render: (value: number | null) => value == null ? "-" : value.toFixed(1),
+            },
+            {
+              title: "工具失败", dataIndex: "failedToolRate", width: 90,
+              render: (value: number | null) => value == null ? "-" : `${Math.round(value * 100)}%`,
+            },
+            { title: "Token", dataIndex: "totalTokens", width: 85 },
+          ]}
+        />
+        <Divider style={{ margin: "2px 0" }} />
+        <Table
+          size="small"
+          rowKey={(row) => `${row.runtime}:${row.caseId}`}
+          pagination={false}
+          scroll={{ x: 900 }}
+          locale={{ emptyText: "还没有固定评测结果" }}
+          dataSource={evaluationReport?.results ?? []}
+          columns={[
+            { title: "用例", dataIndex: "title", width: 120, fixed: "left" },
+            { title: "运行时", dataIndex: "runtime", width: 100 },
+            { title: "样本", dataIndex: "terminalSamples", width: 65 },
+            {
+              title: "通过率", dataIndex: "passRate", width: 80,
+              render: (value: number | null) => value == null ? "-" : `${Math.round(value * 100)}%`,
+            },
+            {
+              title: "平均分", dataIndex: "averageScore", width: 75,
+              render: (value: number | null) => value == null ? "-" : value.toFixed(1),
+            },
+            {
+              title: "平均耗时", dataIndex: "averageDurationMs", width: 105,
+              render: (value: number | null) => value == null ? "-" : `${Math.round(value)} ms`,
+            },
+            { title: "Token", dataIndex: "totalTokens", width: 80 },
+            {
+              title: "工具调用", width: 90,
+              render: (_: unknown, row: EvaluationReport["results"][number]) =>
+                row.failedToolCalls ? `${row.toolCalls} / 失败 ${row.failedToolCalls}` : row.toolCalls,
+            },
+            {
+              title: "估算成本", dataIndex: "costEstimate", width: 90,
+              render: (value: number) => value ? value.toFixed(4) : "0",
+            },
           ]}
         />
       </Space>
@@ -515,6 +606,10 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
           key: "agents",
           label: "Agent 模型",
           children: renderAgentBindings(),
+        }, {
+          key: "evaluation",
+          label: "评测门禁",
+          children: renderEvaluationReport(),
         }]} />
       </Modal>
 
