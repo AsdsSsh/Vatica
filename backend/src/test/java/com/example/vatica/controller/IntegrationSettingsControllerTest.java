@@ -53,7 +53,7 @@ class IntegrationSettingsControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(mvcResult -> {
                     String body = mvcResult.getResponse().getContentAsString(StandardCharsets.UTF_8);
-                    assertThat(body).contains("\"amapKeySet\":false").contains("\"dbMode\":\"MYSQL\"");
+                    assertThat(body).contains("\"amapKeySet\":false").contains("\"dbMode\":\"POSTGRESQL\"");
                 });
     }
 

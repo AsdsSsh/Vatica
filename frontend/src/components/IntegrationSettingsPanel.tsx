@@ -57,9 +57,9 @@ export default function IntegrationSettingsPanel({ open, onClose }: Props) {
       await saveIntegrationSettings({
         amap: { apiKey: clearAmap ? "" : values.amapKey || null },
         db: {
-          mode: values.dbMode ?? "MYSQL",
+          mode: values.dbMode ?? "POSTGRESQL",
           host: values.dbHost ?? "localhost",
-          port: values.dbPort ?? 3306,
+          port: values.dbPort ?? 5432,
           database: values.dbDatabase ?? "vatica",
           username: values.dbUsername ?? "vatica",
           password: clearDb ? "" : values.dbPassword || null,
@@ -91,9 +91,9 @@ export default function IntegrationSettingsPanel({ open, onClose }: Props) {
         form={form}
         layout="vertical"
         initialValues={{
-          dbMode: view?.dbMode ?? "MYSQL",
+          dbMode: view?.dbMode ?? "POSTGRESQL",
           dbHost: view?.dbHost ?? "localhost",
-          dbPort: view?.dbPort ?? 3306,
+          dbPort: view?.dbPort ?? 5432,
           dbDatabase: view?.dbDatabase ?? "vatica",
           dbUsername: view?.dbUsername ?? "vatica",
         }}
@@ -112,7 +112,8 @@ export default function IntegrationSettingsPanel({ open, onClose }: Props) {
         <Form.Item name="dbMode" label="数据库模式">
           <Select options={[
             { value: "H2", label: "H2 本地文件（零依赖，默认推荐）" },
-            { value: "MYSQL", label: "MySQL（云端/本机 MySQL）" },
+            { value: "POSTGRESQL", label: "PostgreSQL + pgvector（开发/云端主库）" },
+            { value: "MYSQL", label: "MySQL（旧配置兼容）" },
           ]} />
         </Form.Item>
         <Flex gap={12}>

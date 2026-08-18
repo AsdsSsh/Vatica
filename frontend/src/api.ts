@@ -707,7 +707,7 @@ export interface IntegrationSettingsView {
   mailUsername: string;
   mailPasswordSet: boolean;
   mailPasswordHint: string | null;
-  dbMode: "H2" | "MYSQL";
+  dbMode: "H2" | "POSTGRESQL" | "MYSQL";
   dbHost: string;
   dbPort: number;
   dbDatabase: string;

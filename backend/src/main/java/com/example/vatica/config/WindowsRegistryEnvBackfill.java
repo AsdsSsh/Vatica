@@ -22,6 +22,12 @@ public final class WindowsRegistryEnvBackfill {
 
     /** 后端配置引用的全部环境变量键（迭代 13：模型/AMAP/邮件凭据已移出）。 */
     private static final List<String> KEYS = List.of(
+            "POSTGRES_HOST",
+            "POSTGRES_PORT",
+            "POSTGRES_DATABASE",
+            "POSTGRES_USERNAME",
+            "POSTGRES_PASSWORD",
+            // 旧 MySQL 配置保留回填，便于已有 integrations.json 平滑迁移。
             "MYSQL_HOST",
             "MYSQL_PORT",
             "MYSQL_DATABASE",

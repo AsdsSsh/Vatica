@@ -162,16 +162,17 @@ curl localhost:8080/api/task
 ```
 
 - 状态机：PENDING → RUNNING → PENDING_APPROVAL → REVIEW → DONE / FAILED，低分自动返工 RETRY（限 2 次）→ 超限 NEEDS_REVISION；DONE 可人工返工重开
-- **MySQL 配置**（开发模式依赖 MySQL，凭据走环境变量、不进 git；打包模式自动切 H2 文件库零依赖，见迭代 8）：
+- **PostgreSQL 配置**（迭代 19A 起开发/云端主库为 PostgreSQL，凭据走环境变量、不进 git；打包模式仍自动切 H2 文件库零依赖）：
   ```powershell
-  # 本机 MySQL（默认）：建库建用户后设置
-  setx MYSQL_USERNAME vatica
-  setx MYSQL_PASSWORD <密码>
-  # 云 MySQL（演示环境）：额外设置主机，重启终端后生效
-  setx MYSQL_HOST REDACTED_DB_HOST
+  # 本地 PostgreSQL + pgvector
+  docker compose -f docker-compose.postgres.yml up -d
+  # 应用连接配置（设置后重启后端生效）
+  setx POSTGRES_USERNAME vatica
+  setx POSTGRES_PASSWORD vatica-local
+  setx POSTGRES_HOST localhost
   ```
-  表结构由 JPA 自动创建（ddl-auto: update）；测试环境用 H2（MySQL 兼容模式），单测零外部依赖
-- 会话记忆已持久化：多轮对话重启后仍可引用前文（内存滑窗热缓存 + MySQL 落库）
+  `docker-compose.postgres.yml` 首次启动会执行 `CREATE EXTENSION vector`；表结构由 JPA 自动创建（`ddl-auto: update`），测试环境继续用 H2，单测零外部依赖。
+- 会话记忆已持久化：多轮对话重启后仍可引用前文（内存滑窗热缓存 + PostgreSQL 落库）
 
 ### 迭代 5.5：质量闭环（LLM-as-Judge 评分 + 自动/人工返工）
 
@@ -241,7 +242,7 @@ vatica-backend-x86_64-pc-windows-msvc.exe —— Rust 启动器（externalBin si
 后端 Spring Boot 4.1（--spring.profiles.active=packaged）
   ├─ 17 个本地工具 ── MCP Server 暴露 POST /mcp（鉴权开启时仅平台管理员）
   ├─ MCP Client ── 高德官方 MCP（懒初始化 + 失败退避兜底）
-  ├─ 持久化：H2 文件库 .vatica/vatica-db.mv.db（零依赖开箱即用；PACKAGED_DB_URL + PACKAGED_DB_USERNAME/PASSWORD 可切回 MySQL）
+  ├─ 持久化：H2 文件库 .vatica/vatica-db.mv.db（零依赖开箱即用；PACKAGED_DB_URL + PACKAGED_DB_USERNAME/PASSWORD 可切到 PostgreSQL）
   └─ 看门狗 SidecarWatchdog：轮询不到启动器 PID → 10 秒内自行退出（防 8080 孤儿进程）
 ```
 
@@ -267,7 +268,7 @@ npm run tauri build                # NSIS 安装包 → target/release/bundle/ns
 
 #### 安装后体验（零依赖）
 
-安装包在**没有 MySQL / 没有 JDK** 的机器上双击即可用，数据全部落 `%APPDATA%\Vatica`。
+安装包在**没有 PostgreSQL / 没有 JDK** 的机器上双击即可用，数据全部落 `%APPDATA%\Vatica`。
 需要联网/聊天时再配置环境变量（设置后重启应用生效）：
 
 | 环境变量 | 用途 | 缺省影响 |

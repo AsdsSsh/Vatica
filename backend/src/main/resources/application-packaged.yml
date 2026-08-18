@@ -3,7 +3,7 @@
 # 数据文件落 ./.vatica/vatica-db.mv.db——launcher 已把工作目录切到 %APPDATA%\Vatica，
 # 即用户目录；启动前 AppStateMigration 会把旧 ./data 内的 H2 文件迁到 .vatica。
 #
-# 想切回 MySQL：设环境变量 PACKAGED_DB_URL=jdbc:mysql://<host>:3306/vatica
+# 想切到 PostgreSQL：设环境变量 PACKAGED_DB_URL=jdbc:postgresql://<host>:5432/vatica
 # + PACKAGED_DB_USERNAME + PACKAGED_DB_PASSWORD，其余配置与开发模式一致。
 spring:
   datasource:
@@ -12,7 +12,7 @@ spring:
     # 开发模式 setx 过的 MYSQL_USERNAME/MYSQL_PASSWORD 会泄漏进打包版（H2 凭据是
     # DriverManager 参数，优先级高于 URL 内嵌 USER/PASSWORD 参数），首启建库用户
     # 与二次启动不一致 → "Wrong user name or password" 启动失败。独立变量保证
-    # H2 默认凭据永远确定（sa/空），切 MySQL 时显式设置三个变量
+    # H2 默认凭据永远确定（sa/空），切 PostgreSQL 时显式设置三个变量
     username: ${PACKAGED_DB_USERNAME:sa}
     password: ${PACKAGED_DB_PASSWORD:}
   jpa:

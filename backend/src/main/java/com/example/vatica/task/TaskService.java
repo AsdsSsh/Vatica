@@ -452,7 +452,7 @@ public class TaskService {
         }
         executeUntilBlocked(record);
         // 执行期间被终止：状态已由 cancel() 事务提交为 CANCELLED。
-        // MySQL REPEATABLE_READ 下普通 refresh 是快照读（读到本事务起始的旧状态），
+        // 在事务隔离级别下普通 refresh 可能读到事务快照，
         // 必须用悲观锁做"当前读"才能拿到 CANCELLED；实体刷新后与库一致（干净态），
         // 提交时不会把旧状态覆盖回库
         if (isCancelled(record.getId())) {

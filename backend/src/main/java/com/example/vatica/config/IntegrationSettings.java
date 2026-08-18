@@ -15,6 +15,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 public record IntegrationSettings(Amap amap, Mail mail, Db db) {
 
     public static final String MODE_H2 = "H2";
+    public static final String MODE_POSTGRESQL = "POSTGRESQL";
+    /** 旧版本配置兼容；新配置不再默认写入 MYSQL。 */
     public static final String MODE_MYSQL = "MYSQL";
 
     public record Amap(String apiKey) {
@@ -31,7 +33,7 @@ public record IntegrationSettings(Amap amap, Mail mail, Db db) {
     public static IntegrationSettings defaults() {
         return new IntegrationSettings(new Amap(""),
                 new Mail("", 993, "", 465, "", ""),
-                new Db(MODE_MYSQL, "localhost", 3306, "vatica", "vatica", ""));
+                new Db(MODE_POSTGRESQL, "localhost", 5432, "vatica", "vatica", ""));
     }
 
     public static IntegrationSettings load(Path stateDir, MasterKeyProvider masterKey, ObjectMapper mapper) {

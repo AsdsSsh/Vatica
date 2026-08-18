@@ -1,16 +1,16 @@
 spring:
   application:
     name: vatica
-  # ═══ 迭代 5：MySQL 持久化（任务 + 会话）═══
-  # 凭据走环境变量（仿 DEEPSEEK_API_KEY 模式），默认指向本机 MySQL：
-  #   setx MYSQL_USERNAME vatica / setx MYSQL_PASSWORD <密码>
-  # 云 MySQL（演示环境）：setx MYSQL_HOST REDACTED_DB_HOST + setx MYSQL_PASSWORD <密码>
+  # ═══ 迭代 19A：PostgreSQL 持久化（任务 + 会话 + pgvector 基础）═══
+  # 凭据走环境变量（仿 DEEPSEEK_API_KEY 模式），默认指向本机 PostgreSQL：
+  #   setx POSTGRES_USERNAME vatica / setx POSTGRES_PASSWORD <密码>
+  # 云 PostgreSQL：setx POSTGRES_HOST <主机> + setx POSTGRES_PASSWORD <密码>
   # 注意：云库凭据不要写进 yml/提交 git（仓库公开）
-  # 测试环境用 H2（MySQL 兼容模式，见测试类 properties）
+  # 测试环境用 H2（兼容模式，见测试类 properties）
   datasource:
-    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:vatica}?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
-    username: ${MYSQL_USERNAME:vatica}
-    password: ${MYSQL_PASSWORD:}
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DATABASE:vatica}
+    username: ${POSTGRES_USERNAME:vatica}
+    password: ${POSTGRES_PASSWORD:}
   jpa:
     hibernate:
       ddl-auto: update      # 开发期自动建表；生产应改 validate + 迁移脚本
@@ -66,7 +66,7 @@ spring:
 
 # ===== 工具层配置（迭代 2；迭代 11 改为 Codex workspace 语义）=====
 # workspace-dir = 默认工作区根（相对路径以进程工作目录为基准，即 Codex 的启动目录）
-# 内部状态（日历/待办/模型配置/H2）在 vatica.app.state-dir，取代旧 ./data
+# 内部状态（日历/待办/模型配置/H2 打包库）在 vatica.app.state-dir，取代旧 ./data
 vatica:
   app:
     state-dir: ./.vatica

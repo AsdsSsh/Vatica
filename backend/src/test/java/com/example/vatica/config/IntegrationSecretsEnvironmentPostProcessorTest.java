@@ -40,4 +40,24 @@ class IntegrationSecretsEnvironmentPostProcessorTest {
         assertThat(env.getProperty("spring.datasource.url")).contains("jdbc:h2:file:");
         assertThat(env.getProperty("spring.datasource.username")).isEqualTo("sa");
     }
+
+    @Test
+    void injectsPostgresqlPropertiesByDefaultMode() {
+        AppStateProperties props = new AppStateProperties(dir.toString());
+        FileMasterKeyProvider masterKey = new FileMasterKeyProvider(props);
+        ObjectMapper mapper = new ObjectMapper();
+        IntegrationSettings.save(dir, masterKey, mapper, new IntegrationSettings(
+                new IntegrationSettings.Amap(""),
+                new IntegrationSettings.Mail("", 993, "", 465, "", ""),
+                new IntegrationSettings.Db(IntegrationSettings.MODE_POSTGRESQL, "db.example", 5432,
+                        "vatica", "vatica", "secret")));
+
+        MockEnvironment env = new MockEnvironment().withProperty("vatica.app.state-dir", dir.toString());
+        new IntegrationSecretsEnvironmentPostProcessor().postProcessEnvironment(env, null);
+
+        assertThat(env.getProperty("spring.datasource.url"))
+                .isEqualTo("jdbc:postgresql://db.example:5432/vatica");
+        assertThat(env.getProperty("spring.datasource.username")).isEqualTo("vatica");
+        assertThat(env.getProperty("spring.datasource.password")).isEqualTo("secret");
+    }
 }

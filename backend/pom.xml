@@ -117,11 +117,17 @@
 			<version>3.1.0</version>
 		</dependency>
 
-		<!-- 迭代 5：任务/会话持久化。生产 MySQL；测试用 H2（MySQL 兼容模式）保持单测零外部依赖 -->
+		<!-- 迭代 19A：开发/云端主库切换 PostgreSQL；测试仍用 H2 保持单测零外部依赖 -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-data-jpa</artifactId>
 		</dependency>
+		<dependency>
+			<groupId>org.postgresql</groupId>
+			<artifactId>postgresql</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+		<!-- 旧 integrations.json 的 MYSQL 模式暂保兼容，默认配置已切 PostgreSQL。 -->
 		<dependency>
 			<groupId>com.mysql</groupId>
 			<artifactId>mysql-connector-j</artifactId>

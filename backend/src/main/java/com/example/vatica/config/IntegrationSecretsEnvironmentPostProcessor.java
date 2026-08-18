@@ -50,10 +50,16 @@ public class IntegrationSecretsEnvironmentPostProcessor implements EnvironmentPo
                         "jdbc:h2:file:" + stateDir + "/vatica-db;MODE=MySQL;DATABASE_TO_LOWER=TRUE");
                 props.put("spring.datasource.username", "sa");
                 props.put("spring.datasource.password", "");
-            } else {
+            } else if (IntegrationSettings.MODE_MYSQL.equalsIgnoreCase(db.mode())) {
+                // 兼容已有 integrations.json；新建配置默认走 PostgreSQL。
                 props.put("spring.datasource.url", "jdbc:mysql://" + db.host() + ":" + db.port()
                         + "/" + db.database() + "?createDatabaseIfNotExist=true&useUnicode=true"
                         + "&characterEncoding=utf8&serverTimezone=Asia/Shanghai");
+                props.put("spring.datasource.username", db.username());
+                props.put("spring.datasource.password", db.password());
+            } else {
+                props.put("spring.datasource.url", "jdbc:postgresql://" + db.host() + ":" + db.port()
+                        + "/" + db.database());
                 props.put("spring.datasource.username", db.username());
                 props.put("spring.datasource.password", db.password());
             }
