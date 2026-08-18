@@ -100,6 +100,19 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [remoteLoaded, sessions.map((s) => `${s.id}:${s.title}`).join("|")]);
 
+  // 迭代 18D：窄窗口优先保留聊天与任务创建区，侧栏仍可通过顶栏按钮手动展开。
+  useEffect(() => {
+    function collapseForNarrowWindow() {
+      if (window.innerWidth < 1050) {
+        setLeftCollapsed(true);
+        setRightCollapsed(true);
+      }
+    }
+    collapseForNarrowWindow();
+    window.addEventListener("resize", collapseForNarrowWindow);
+    return () => window.removeEventListener("resize", collapseForNarrowWindow);
+  }, []);
+
   const active = useMemo(
     () => sessions.find((s) => s.id === activeId) ?? sessions[0],
     [sessions, activeId],
@@ -226,7 +239,7 @@ function App() {
               collapsed={leftCollapsed}
               trigger={null}
               theme="light"
-              className="app-sider"
+              className="app-sider app-sider-left"
               style={{
                 borderRight: "1px solid var(--vatica-border)",
                 backgroundColor: "var(--vatica-surface)",
@@ -261,7 +274,7 @@ function App() {
               collapsed={rightCollapsed}
               trigger={null}
               theme="light"
-              className="app-sider"
+              className="app-sider app-sider-right"
               style={{
                 borderLeft: "1px solid var(--vatica-border)",
                 backgroundColor: "var(--vatica-surface)",

@@ -84,6 +84,16 @@ export default function SessionList({
                 onClick={() => {
                   if (!disabled && editingId !== s.id) onSelect(s.id);
                 }}
+                onKeyDown={(event) => {
+                  if (disabled || editingId === s.id) return;
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelect(s.id);
+                  }
+                }}
+                role="button"
+                tabIndex={disabled ? -1 : 0}
+                aria-current={s.id === activeId ? "true" : undefined}
                 style={{
                   cursor: disabled ? "not-allowed" : "pointer",
                   opacity: disabled && s.id !== activeId ? 0.55 : undefined,

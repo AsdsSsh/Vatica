@@ -395,14 +395,15 @@ export default function StepPanel() {
           <Typography.Text strong>任务面板</Typography.Text>
           <Button size="small" aria-label="刷新任务列表" icon={<ReloadOutlined />} onClick={() => refreshTasks()} />
         </Flex>
-        <Flex gap={6}>
+        <div className="task-create-form">
           <Select
             size="small"
+            className="task-create-case"
             allowClear
             value={benchmarkCaseId ?? undefined}
             placeholder="普通任务"
             aria-label="固定评测用例"
-            style={{ width: 126, flexShrink: 0 }}
+            style={{ width: "100%" }}
             options={benchmarkCases.map((item) => ({ value: item.id, label: item.title }))}
             onChange={(value: string | undefined) => {
               setBenchmarkCaseId(value ?? null);
@@ -410,32 +411,35 @@ export default function StepPanel() {
               if (selected) setGoalInput(selected.goal);
             }}
           />
-          <Input
-            size="small"
-            placeholder="一句话任务，如：整理下周日程"
-            value={goalInput}
-            onChange={(e) => {
-              const next = e.target.value;
-              setGoalInput(next);
-              const selected = benchmarkCases.find((item) => item.id === benchmarkCaseId);
-              if (selected && next !== selected.goal) setBenchmarkCaseId(null);
-            }}
-            onPressEnter={(e) => {
-              // 迭代 12 I12-3：中文输入法选词回车不创建任务
-              if (e.nativeEvent.isComposing) return;
-              void handleCreate();
-            }}
-          />
-          <Button
-            size="small"
-            type="primary"
-            icon={<PlusOutlined />}
-            loading={busy}
-            onClick={handleCreate}
-          >
-            创建
-          </Button>
-        </Flex>
+          <Flex className="task-create-goal-row" gap={6}>
+            <Input
+              size="small"
+              className="task-create-goal"
+              placeholder="一句话任务，如：整理下周日程"
+              value={goalInput}
+              onChange={(e) => {
+                const next = e.target.value;
+                setGoalInput(next);
+                const selected = benchmarkCases.find((item) => item.id === benchmarkCaseId);
+                if (selected && next !== selected.goal) setBenchmarkCaseId(null);
+              }}
+              onPressEnter={(e) => {
+                // 迭代 12 I12-3：中文输入法选词回车不创建任务
+                if (e.nativeEvent.isComposing) return;
+                void handleCreate();
+              }}
+            />
+            <Button
+              size="small"
+              type="primary"
+              icon={<PlusOutlined />}
+              loading={busy}
+              onClick={handleCreate}
+            >
+              创建
+            </Button>
+          </Flex>
+        </div>
         <Typography.Text type="secondary" style={{ display: "block", marginTop: 6, fontSize: 11 }}>
           <CloudOutlined /> 任务产物写入当前账号的个人云工作区
         </Typography.Text>
@@ -458,6 +462,18 @@ export default function StepPanel() {
                 // 迭代 12 I12-8：切任务重置审批弹窗；权限弹窗保留（可能来自后台运行任务）
                 setApprovalOpen(false);
               }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setSelectedId(t.id);
+                  setDetail(null);
+                  prevStatus.current = null;
+                  setApprovalOpen(false);
+                }
+              }}
+              role="button"
+              tabIndex={0}
+              aria-current={t.id === selectedId ? "true" : undefined}
               style={{ cursor: "pointer", padding: "8px 10px" }}
             >
               <Flex vertical gap={2} style={{ width: "100%" }}>

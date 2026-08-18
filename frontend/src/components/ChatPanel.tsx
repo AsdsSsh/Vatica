@@ -3,8 +3,10 @@ import {
   Alert,
   App,
   Button,
+  Dropdown,
   Flex,
   Input,
+  type MenuProps,
   Select,
   Spin,
   Switch,
@@ -156,6 +158,38 @@ export default function ChatPanel({
   const autoScrollRef = useRef(true);
   /** 迭代 14.5：账号身份变化时清掉上一账号的用户模型/模型选择等内存态。 */
   const previousAuthKey = useRef<string | null>(null);
+
+  const settingsMenuItems: MenuProps["items"] = [
+    {
+      type: "group",
+      label: "账号与工作区",
+      children: [
+        { key: "auth", icon: <UserOutlined />, label: "账号" },
+        { key: "user-models", icon: <RobotOutlined />, label: "我的模型" },
+        { key: "workspace", icon: <CloudOutlined />, label: "个人工作台" },
+      ],
+    },
+    {
+      type: "group",
+      label: "系统设置",
+      children: [
+        { key: "models", icon: <SettingOutlined />, label: "模型设置" },
+        { key: "permissions", icon: <SafetyCertificateOutlined />, label: "文件权限与工作区" },
+        { key: "integrations", icon: <GlobalOutlined />, label: "外部服务" },
+        { key: "server", icon: <ApiOutlined />, label: "服务地址" },
+      ],
+    },
+  ];
+
+  function handleSettingsMenu(key: string) {
+    if (key === "auth") setAuthOpen(true);
+    if (key === "user-models") setUserModelsOpen(true);
+    if (key === "workspace") setPersonalWorkspaceOpen(true);
+    if (key === "models") setSettingsOpen(true);
+    if (key === "permissions") setPermissionSettingsOpen(true);
+    if (key === "integrations") setIntegrationOpen(true);
+    if (key === "server") setServerSettingsOpen(true);
+  }
 
   /** 智能滚动（U2）：只有原本就在底部附近才跟随新内容；用户上翻历史不拽回。 */
   function scrollToBottom(behavior: ScrollBehavior) {
@@ -388,12 +422,13 @@ export default function ChatPanel({
     <Flex vertical style={{ height: "100%" }}>
       {/* 顶栏：侧栏折叠 + 会话标题 + 模型选择器 + 设置 */}
       <Flex
+        className="chat-header"
         justify="space-between"
         align="center"
         gap={8}
         style={{ padding: "8px 16px", borderBottom: "1px solid var(--vatica-border)" }}
       >
-        <Flex gap={4} align="center" style={{ minWidth: 0 }}>
+        <Flex className="chat-header-left" gap={4} align="center" style={{ minWidth: 0 }}>
           <Tooltip title={leftCollapsed ? "展开会话栏" : "收起会话栏"}>
             <Button
               size="small"
@@ -405,6 +440,7 @@ export default function ChatPanel({
             />
           </Tooltip>
           <Typography.Text
+            className="chat-header-session-title"
             ellipsis={{ tooltip: session.title }}
             strong
             style={{ maxWidth: "36%", fontSize: 13 }}
@@ -412,9 +448,10 @@ export default function ChatPanel({
             {session.title}
           </Typography.Text>
         </Flex>
-        <Flex gap={6} align="center" style={{ flexShrink: 0 }}>
+        <Flex className="chat-header-actions" gap={6} align="center" style={{ flexShrink: 0 }}>
           <Select
             size="small"
+            className="chat-header-model"
             style={{ width: 210 }}
             placeholder={models.length ? "选择模型" : "未连接后端"}
             value={models.length ? model : undefined}
@@ -472,60 +509,24 @@ export default function ChatPanel({
               onClick={() => setAuthOpen(true)}
             />
           </Tooltip>
-          <Tooltip title="我的模型">
+          <Dropdown
+            trigger={["click"]}
+            placement="bottomRight"
+            menu={{
+              items: settingsMenuItems,
+              onClick: ({ key }) => handleSettingsMenu(key),
+            }}
+          >
             <Button
               size="small"
               type="text"
-              aria-label="我的模型"
-              icon={<RobotOutlined />}
-              onClick={() => setUserModelsOpen(true)}
-            />
-          </Tooltip>
-          <Tooltip title="个人工作台">
-            <Button
-              size="small"
-              type="text"
-              aria-label="个人工作台"
-              icon={<CloudOutlined />}
-              onClick={() => setPersonalWorkspaceOpen(true)}
-            />
-          </Tooltip>
-          <Tooltip title="模型设置">
-            <Button
-              size="small"
-              type="text"
-              aria-label="模型设置"
+              className="header-settings-button"
+              aria-label="打开设置菜单"
               icon={<SettingOutlined />}
-              onClick={() => setSettingsOpen(true)}
-            />
-          </Tooltip>
-          <Tooltip title="文件权限与工作区">
-            <Button
-              size="small"
-              type="text"
-              aria-label="文件权限设置"
-              icon={<SafetyCertificateOutlined />}
-              onClick={() => setPermissionSettingsOpen(true)}
-            />
-          </Tooltip>
-          <Tooltip title="平台外部服务（AMAP / 数据库）">
-            <Button
-              size="small"
-              type="text"
-              aria-label="外部服务设置"
-              icon={<GlobalOutlined />}
-              onClick={() => setIntegrationOpen(true)}
-            />
-          </Tooltip>
-          <Tooltip title="服务设置（后端接口地址）">
-            <Button
-              size="small"
-              type="text"
-              aria-label="服务设置"
-              icon={<ApiOutlined />}
-              onClick={() => setServerSettingsOpen(true)}
-            />
-          </Tooltip>
+            >
+              <span className="header-settings-label">设置</span>
+            </Button>
+          </Dropdown>
           <Tooltip title={rightCollapsed ? "展开任务面板" : "收起任务面板"}>
             <Button
               size="small"
@@ -747,8 +748,9 @@ export default function ChatPanel({
             unCheckedChildren="关"
           />
         </Flex>
-        <Flex gap={8} align="end">
+        <Flex className="chat-input-row" gap={8} align="end">
           <Input.TextArea
+            className="chat-input-control"
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}

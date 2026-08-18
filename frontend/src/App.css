@@ -120,6 +120,65 @@ body {
   background: var(--vatica-bg);
 }
 
+/* ─── 工作区适配（迭代 18D）：宽桌面三栏，窄窗口优先聊天/任务操作 ─── */
+
+.chat-header {
+  min-height: 44px;
+}
+
+.chat-header-left {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chat-header-session-title {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chat-header-actions {
+  min-width: 0;
+}
+
+.chat-header-model {
+  flex: 0 1 210px;
+  min-width: 120px;
+}
+
+.header-settings-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-input-row,
+.chat-input-control {
+  min-width: 0;
+}
+
+.chat-input-control {
+  flex: 1 1 auto;
+}
+
+.task-create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.task-create-case,
+.task-create-goal {
+  min-width: 0;
+}
+
+.task-create-goal-row {
+  min-width: 0;
+}
+
+.task-create-goal {
+  flex: 1 1 auto;
+}
+
 /* ─── 面板通用：section 眉题 + 计数 ─── */
 
 .sidebar-eyebrow {
@@ -326,6 +385,12 @@ body {
   opacity: 1;
 }
 
+.session-item:focus-visible,
+.task-item:focus-visible {
+  outline: 2px solid var(--vatica-indigo);
+  outline-offset: -2px;
+}
+
 /* ─── 右栏：任务列表选中态 ─── */
 
 .task-item {
@@ -514,9 +579,48 @@ body {
 /* 键盘可达性：不隐藏 AntD 焦点，只给自有按钮补一个可见焦点环 */
 
 .suggestion-card:focus-visible,
-.titlebar-button:focus-visible {
+.titlebar-button:focus-visible,
+.header-settings-button:focus-visible {
   outline: 2px solid var(--vatica-indigo);
   outline-offset: -2px;
+}
+
+@media (max-width: 1180px) {
+  .chat-header-model {
+    flex-basis: 160px;
+  }
+
+  .header-settings-label {
+    display: none;
+  }
+
+  .chat-header {
+    padding-inline: 10px !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .chat-header-model {
+    min-width: 0;
+    flex-basis: 132px;
+  }
+
+  .chat-header-actions {
+    gap: 2px !important;
+  }
+
+  .chat-header-session-title {
+    max-width: 45% !important;
+  }
+
+  .chat-empty {
+    margin-top: 8vh;
+    padding-inline: 12px;
+  }
+
+  .suggestion-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
