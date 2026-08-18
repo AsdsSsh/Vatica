@@ -42,4 +42,24 @@ class SseEventGatewayTest {
         initial.complete();
         gateway.shutdown();
     }
+
+    @Test
+    void marksReplayGapWhenCursorIsUnavailableAndKeepsChannelsIsolated() {
+        SseEventGateway gateway = new SseEventGateway(new ObjectMapper());
+        for (int i = 0; i < 300; i++) {
+            gateway.publish("user:1:task:a", "task_snapshot", java.util.Map.of("step", i));
+        }
+        gateway.publish("user:2:task:a", "task_snapshot", java.util.Map.of("step", 1));
+
+        assertThat(gateway.history("user:1:task:a")).hasSize(256)
+                .allMatch(event -> event.data() instanceof java.util.Map<?, ?> data
+                        && data.containsKey("step"));
+        assertThat(gateway.replayGap("user:1:task:a", "1")).isTrue();
+        assertThat(gateway.history("user:2:task:a")).hasSize(1);
+        String retainedUser2EventId = gateway.history("user:2:task:a").getFirst().id();
+        assertThat(gateway.replayGap("user:2:task:a", retainedUser2EventId)).isFalse();
+        assertThat(gateway.replayGap("user:2:task:a", "1")).isTrue();
+        assertThat(gateway.replayGap("user:3:task:a", "301")).isTrue();
+        gateway.shutdown();
+    }
 }

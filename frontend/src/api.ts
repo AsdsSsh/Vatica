@@ -974,6 +974,11 @@ export interface RuntimeReliabilityTotals {
   passRate: number | null;
   averageScore: number | null;
   averageDurationMs: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  toolCalls: number;
+  failedToolCalls: number;
 }
 
 export interface ReliabilityView {
@@ -982,6 +987,22 @@ export interface ReliabilityView {
 
 export async function fetchReliabilityBaseline(): Promise<ReliabilityView> {
   return (await getJson("/api/usage/reliability")).json();
+}
+
+/** 迭代 18B：Legacy / AgentScope 固定评测任务集目录。 */
+export interface BenchmarkCase {
+  id: string;
+  title: string;
+  goal: string;
+  expectedAgent: string;
+  requiredTools: string[];
+  requiresApproval: boolean;
+  hasSideEffect: boolean;
+  acceptance: string;
+}
+
+export async function fetchBenchmarkCases(): Promise<BenchmarkCase[]> {
+  return (await getJson("/api/evaluation/benchmark-cases")).json();
 }
 
 export interface BlackboardEntry {

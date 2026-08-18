@@ -73,6 +73,9 @@ public class SseEventGateway {
     private record Subscription(SseEmitter emitter, Runnable close) {
     }
 
+    private record ReplayBatch(ArrayList<EventEnvelope> events, boolean gap) {
+    }
+
     /** 订阅事件流，不附带首个快照。 */
     public SseEmitter subscribe(String channel, String lastEventId, Duration timeout) {
         return subscribe(channel, lastEventId, timeout, null);
@@ -101,12 +104,16 @@ public class SseEventGateway {
             state.subscribers.put(emitter, subscription);
             try {
                 // 没有续传游标表示一次全新的业务订阅：聊天不能重复旧回复，任务只发当前快照。
+                boolean replayGap = false;
                 if (lastEventId != null && !lastEventId.isBlank()) {
-                    for (EventEnvelope event : replayAfter(state.history, lastEventId)) {
+                    ReplayBatch replay = replayAfter(state.history, lastEventId);
+                    replayGap = replay.gap();
+                    for (EventEnvelope event : replay.events()) {
                         send(emitter, event);
                     }
                 }
-                if (initial != null) {
+                // 事件环已淘汰游标或服务重启丢失历史时，快照是唯一可靠的重建方式。
+                if (initial != null && ((lastEventId == null || lastEventId.isBlank()) || replayGap)) {
                     EventEnvelope snapshot = next(initial.type(), initial.data());
                     append(state.history, snapshot);
                     send(emitter, snapshot);
@@ -179,7 +186,29 @@ public class SseEventGateway {
         }
     }
 
-    private static ArrayList<EventEnvelope> replayAfter(Deque<EventEnvelope> history, String lastEventId) {
+    /** 供回归测试检查事件环淘汰边界，不暴露为 HTTP API。 */
+    boolean replayGap(String channel, String lastEventId) {
+        ChannelState state = channels.get(channel);
+        if (state == null) {
+            return lastEventId != null && !lastEventId.isBlank();
+        }
+        synchronized (state) {
+            return replayAfter(state.history, lastEventId).gap();
+        }
+    }
+
+    /** 供回归测试检查租户频道只保留自己的事件。 */
+    java.util.List<EventEnvelope> history(String channel) {
+        ChannelState state = channels.get(channel);
+        if (state == null) {
+            return java.util.List.of();
+        }
+        synchronized (state) {
+            return java.util.List.copyOf(state.history);
+        }
+    }
+
+    private static ReplayBatch replayAfter(Deque<EventEnvelope> history, String lastEventId) {
         long last = parseEventId(lastEventId);
         ArrayList<EventEnvelope> replay = new ArrayList<>();
         for (EventEnvelope event : history) {
@@ -187,7 +216,10 @@ public class SseEventGateway {
                 replay.add(event);
             }
         }
-        return replay;
+        boolean cursorRetained = history.stream()
+                .anyMatch(event -> parseEventId(event.id()) == last);
+        boolean gap = !cursorRetained;
+        return new ReplayBatch(replay, gap);
     }
 
     private static long parseEventId(String value) {

@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -68,6 +69,8 @@ class TaskServiceTest {
     ExecutorAgent executorAgent;
     @MockitoBean
     JudgeAgent judgeAgent;
+    @MockitoBean
+    TaskExecutionFaultInjector faultInjector;
 
     @Autowired
     TaskService taskService;
@@ -709,6 +712,53 @@ class TaskServiceTest {
             assertThat(parsePlan(failed).getSteps().getFirst().getResult()).isNull();
         } finally {
             release.countDown();
+        }
+    }
+
+    /** 18B：统一故障注入点应沿真实状态机落 FAILED，且不进入 Judge 评测。 */
+    @Test
+    void injectedStepFailureMarksFailedWithoutJudge() {
+        doThrow(new IllegalStateException("注入的上游不可用")).when(faultInjector)
+                .beforeStep(any(TaskRecord.class), any(TaskPlan.TaskStep.class));
+
+        TaskRecord failed = taskService.approve(taskService.create("目标").getId());
+
+        assertThat(failed.getStatus()).isEqualTo(TaskStatus.FAILED);
+        assertThat(failed.getError()).contains("注入的上游不可用");
+        verify(judgeAgent, org.mockito.Mockito.never()).evaluate(anyString(), any(), any(ChatClient.class));
+    }
+
+    /** 18B：幂等键按用户隔离；不同租户可以并行使用相同客户端请求键。 */
+    @Test
+    void sameIdempotencyKeyIsIsolatedAcrossTenants() {
+        TaskRecord first = taskService.create("目标", null, null, null, "tenant-key");
+        TaskRecord second = RequestIdentityContext.callWith(new RequestIdentity(2L, 2L, "LOCAL", "other"),
+                () -> taskService.create("目标", null, null, null, "tenant-key"));
+
+        assertThat(second.getId()).isNotEqualTo(first.getId());
+        assertThat(repository.findByUserId(1L)).hasSize(1);
+        assertThat(repository.findByUserId(2L)).hasSize(1);
+        verify(plannerAgent, times(2)).plan("目标");
+    }
+
+    /** 18B：同一租户并发提交相同键只允许一个 Planner 副作用。 */
+    @Test
+    void concurrentDuplicateCreatesShareOneTask() throws Exception {
+        when(plannerAgent.plan("目标")).thenAnswer(invocation -> twoStepPlan());
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<TaskRecord> first = pool.submit(() -> RequestIdentityContext.callWith(TEST_IDENTITY,
+                    () -> taskService.create("目标", null, null, null, "parallel-key")));
+            Future<TaskRecord> second = pool.submit(() -> RequestIdentityContext.callWith(TEST_IDENTITY,
+                    () -> taskService.create("目标", null, null, null, "parallel-key")));
+
+            TaskRecord left = first.get(5, TimeUnit.SECONDS);
+            TaskRecord right = second.get(5, TimeUnit.SECONDS);
+            assertThat(right.getId()).isEqualTo(left.getId());
+            assertThat(repository.count()).isOne();
+            verify(plannerAgent, times(1)).plan("目标");
+        } finally {
+            pool.shutdownNow();
         }
     }
 

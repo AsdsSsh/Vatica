@@ -103,6 +103,7 @@ public class TaskService {
     private final DirectModelUsageRecorder directUsage;
     private final HumanAgent humanAgent;
     private final TaskReliabilityProperties reliability;
+    private final TaskExecutionFaultInjector faultInjector;
 
     /** 终止标志（迭代 7 I7-4）：取消接口与执行线程的协作式协调点（波次粒度生效）。 */
     private final Map<String, AtomicBoolean> cancelFlags = new ConcurrentHashMap<>();
@@ -130,7 +131,7 @@ public class TaskService {
             ModelRegistry registry, AgentTraceRecordRepository traceRepository, TaskBlackboard blackboard,
             ContextBudget contextBudget, AgentRuntimeFactory runtimeFactory, AgentRegistry agentRegistry,
             DirectModelUsageRecorder directUsage, HumanAgent humanAgent, AgentModelBindingService agentModelBindings,
-            TaskReliabilityProperties reliability) {
+            TaskReliabilityProperties reliability, TaskExecutionFaultInjector faultInjector) {
         this.plannerAgent = plannerAgent;
         this.judgeAgent = judgeAgent;
         this.judgeProps = judgeProps;
@@ -150,6 +151,7 @@ public class TaskService {
         this.humanAgent = humanAgent;
         this.agentModelBindings = agentModelBindings;
         this.reliability = reliability;
+        this.faultInjector = faultInjector;
     }
 
     /** 创建任务：Planner 拆解 → PENDING 待审批计划。 */
@@ -740,6 +742,7 @@ public class TaskService {
     /** 单步骤执行包装：异常附步骤号（并行波中定位失败来源）；supplyAsync 会再包一层 CompletionException。 */
     private String execute(TaskRecord record, TaskStep step, List<String> context, String reflection) {
         try {
+            faultInjector.beforeStep(record, step);
             // 迭代 11：把任务创建时的权限快照绑定到本次步骤的全部工具调用
             FilePermissionPolicy policy = parsePermission(record.getPermissionJson());
             RequestIdentity identity = identityOf(record);

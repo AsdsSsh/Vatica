@@ -43,9 +43,9 @@ public class TaskEventPublisher {
     /** 订阅任务进度：首次订阅回放当前快照，重连按 Last-Event-ID 回放缺失事件。 */
     public SseEmitter subscribe(TaskRecord record, String lastEventId) {
         String channel = channel(record);
-        SseEventGateway.InitialEvent initial = lastEventId == null || lastEventId.isBlank()
-                ? new SseEventGateway.InitialEvent("task_snapshot", snapshot(record, "snapshot"))
-                : null;
+        // 迭代 18B：正常续传不重复快照；游标被淘汰或服务重启丢失历史后自动补当前快照。
+        SseEventGateway.InitialEvent initial = new SseEventGateway.InitialEvent("task_snapshot",
+                snapshot(record, "snapshot"));
         return gateway.subscribe(channel, lastEventId, Duration.ofMillis(SUBSCRIBER_TIMEOUT_MS), initial);
     }
 

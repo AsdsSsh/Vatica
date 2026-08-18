@@ -10,6 +10,8 @@ import java.util.Map;
 import org.springframework.stereotype.Service;
 
 import com.example.vatica.auth.RequestIdentity;
+import com.example.vatica.trace.AgentTraceRecord;
+import com.example.vatica.trace.AgentTraceRecordRepository;
 import com.example.vatica.task.TaskRecord;
 import com.example.vatica.task.TaskRecordRepository;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -22,13 +24,15 @@ public class UsageService {
     private final UsageRecordRepository repository;
     private final UsageQuotaService quotaService;
     private final TaskRecordRepository taskRepository;
+    private final AgentTraceRecordRepository traceRepository;
     private final ObjectMapper mapper;
 
     public UsageService(UsageRecordRepository repository, UsageQuotaService quotaService,
-            TaskRecordRepository taskRepository, ObjectMapper mapper) {
+            TaskRecordRepository taskRepository, AgentTraceRecordRepository traceRepository, ObjectMapper mapper) {
         this.repository = repository;
         this.quotaService = quotaService;
         this.taskRepository = taskRepository;
+        this.traceRepository = traceRepository;
         this.mapper = mapper;
     }
 
@@ -55,7 +59,8 @@ public class UsageService {
     /** 迭代 18：按运行时汇总任务质量/耗时，供 Legacy 与 AgentScope 对照。 */
     public record RuntimeTotals(String runtime, int taskCount, int completedTasks, int passedTasks,
             int failedTasks, int cancelledTasks, int multiAttemptTasks, Double passRate,
-            Double averageScore, Double averageDurationMs) {
+            Double averageScore, Double averageDurationMs, int inputTokens, int outputTokens, int totalTokens,
+            int toolCalls, int failedToolCalls) {
     }
 
     public record ReliabilityView(List<RuntimeTotals> runtimes) {
@@ -108,6 +113,27 @@ public class UsageService {
 
     public ReliabilityView reliability(RequestIdentity identity) {
         Map<String, RuntimeAccumulator> totals = new LinkedHashMap<>();
+        Map<String, TokenAccumulator> usageByTask = new java.util.HashMap<>();
+        for (UsageRecord row : repository.findTaskUsageByUserId(identity.userId())) {
+            if (row.getTaskId() == null) {
+                continue;
+            }
+            TokenAccumulator acc = usageByTask.computeIfAbsent(row.getTaskId(), ignored -> new TokenAccumulator());
+            acc.input += row.getInputTokens();
+            acc.output += row.getOutputTokens();
+            acc.total += row.getTotalTokens();
+        }
+        Map<String, ToolAccumulator> toolsByTask = new java.util.HashMap<>();
+        for (AgentTraceRecord row : traceRepository.findTaskTracesByUserId(identity.userId())) {
+            if (row.getTaskId() == null) {
+                continue;
+            }
+            ToolAccumulator acc = toolsByTask.computeIfAbsent(row.getTaskId(), ignored -> new ToolAccumulator());
+            acc.calls++;
+            if (AgentTraceRecord.STATUS_FAILED.equals(row.getStatus())) {
+                acc.failed++;
+            }
+        }
         for (TaskRecord task : taskRepository.findByUserId(identity.userId())) {
             String runtime = task.getExecutionRuntime();
             if (runtime == null || runtime.isBlank()) {
@@ -115,6 +141,17 @@ public class UsageService {
             }
             RuntimeAccumulator acc = totals.computeIfAbsent(runtime, RuntimeAccumulator::new);
             acc.tasks++;
+            TokenAccumulator token = usageByTask.get(task.getId());
+            if (token != null) {
+                acc.inputTokens += token.input;
+                acc.outputTokens += token.output;
+                acc.totalTokens += token.total;
+            }
+            ToolAccumulator tools = toolsByTask.get(task.getId());
+            if (tools != null) {
+                acc.toolCalls += tools.calls;
+                acc.failedToolCalls += tools.failed;
+            }
             if (task.getStatus() == com.example.vatica.task.TaskStatus.DONE) {
                 acc.completed++;
                 if (task.getVerdict() == com.example.vatica.task.TaskVerdict.PASS) {
@@ -206,6 +243,11 @@ public class UsageService {
         private int scoreTotal;
         private int timed;
         private long durationTotal;
+        private int inputTokens;
+        private int outputTokens;
+        private int totalTokens;
+        private int toolCalls;
+        private int failedToolCalls;
 
         private RuntimeAccumulator(String runtime) {
             this.runtime = runtime;
@@ -215,8 +257,20 @@ public class UsageService {
             return new RuntimeTotals(runtime, tasks, completed, passed, failed, cancelled, multiAttempt,
                     completed == 0 ? null : (double) passed / completed,
                     scored == 0 ? null : (double) scoreTotal / scored,
-                    timed == 0 ? null : (double) durationTotal / timed);
+                    timed == 0 ? null : (double) durationTotal / timed,
+                    inputTokens, outputTokens, totalTokens, toolCalls, failedToolCalls);
         }
+    }
+
+    private static final class TokenAccumulator {
+        private int input;
+        private int output;
+        private int total;
+    }
+
+    private static final class ToolAccumulator {
+        private int calls;
+        private int failed;
     }
 
     private static Instant todayStart() {

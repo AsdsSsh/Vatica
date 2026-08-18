@@ -266,6 +266,8 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
               title: "平均耗时", dataIndex: "averageDurationMs", width: 110,
               render: (v: number | null) => v == null ? "-" : `${Math.round(v)} ms`,
             },
+            { title: "Token", dataIndex: "totalTokens", width: 90 },
+            { title: "工具调用", dataIndex: "toolCalls", width: 90 },
             { title: "多次执行", dataIndex: "multiAttemptTasks", width: 90 },
           ]}
         />
