@@ -13,6 +13,8 @@ import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.example.vatica.event.SseEventSink;
+import com.example.vatica.auth.RequestIdentity;
+import com.example.vatica.observability.AgentObservabilityRecorder;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
@@ -31,20 +33,33 @@ public final class TracedToolCallbacks {
     private final ObjectMapper mapper;
     private final SseEventSink eventSink;
     private final AgentTraceRecordRepository traceRepository;
+    private final AgentObservabilityRecorder observability;
 
     public TracedToolCallbacks(ObjectMapper mapper, SseEmitter emitter,
             AgentTraceRecordRepository traceRepository) {
+        this(mapper, emitter, traceRepository, null);
+    }
+
+    public TracedToolCallbacks(ObjectMapper mapper, SseEmitter emitter,
+            AgentTraceRecordRepository traceRepository, AgentObservabilityRecorder observability) {
         this.mapper = mapper;
         this.eventSink = emitter == null ? null : emitterSink(mapper, emitter);
         this.traceRepository = traceRepository;
+        this.observability = observability;
     }
 
     /** 聊天生产链路：事件通过统一网关发布，不直接写 SseEmitter。 */
     public TracedToolCallbacks(ObjectMapper mapper, SseEventSink eventSink,
             AgentTraceRecordRepository traceRepository) {
+        this(mapper, eventSink, traceRepository, null);
+    }
+
+    public TracedToolCallbacks(ObjectMapper mapper, SseEventSink eventSink,
+            AgentTraceRecordRepository traceRepository, AgentObservabilityRecorder observability) {
         this.mapper = mapper;
         this.eventSink = eventSink;
         this.traceRepository = traceRepository;
+        this.observability = observability;
     }
 
     /** 聊天：只发 SSE，不落库。 */
@@ -60,6 +75,12 @@ public final class TracedToolCallbacks {
     /** 任务：落 agent_trace；无 SSE 订阅者时零开销。 */
     public TracedToolCallbacks(ObjectMapper mapper, AgentTraceRecordRepository traceRepository) {
         this(mapper, (SseEmitter) null, traceRepository);
+    }
+
+    /** 任务链路：同时写旧版工具 trace 和统一 Span。 */
+    public TracedToolCallbacks(ObjectMapper mapper, AgentTraceRecordRepository traceRepository,
+            AgentObservabilityRecorder observability) {
+        this(mapper, (SseEmitter) null, traceRepository, observability);
     }
 
     public ToolCallback[] wrap(ToolCallback[] callbacks, TraceContext.Snapshot trace) {
@@ -87,17 +108,20 @@ public final class TracedToolCallbacks {
                 String tool = delegate.getToolDefinition().name();
                 String inputSummary = TraceSanitizer.inputSummary(mapper, toolInput);
                 long start = System.nanoTime();
+                AgentObservabilityRecorder.SpanHandle span = startSpan(tool, trace, inputSummary);
                 send(startPayload(tool, trace, inputSummary));
                 try {
                     String out = delegate.call(toolInput);
                     // 迭代 15 I15-10：超限输出先按预算截断再交给模型；trace 记录原始长度
                     String modelVisible = com.example.vatica.tool.ToolResultPolicy.limit(out, maxOutputChars);
                     long durationMs = (System.nanoTime() - start) / 1_000_000;
-                    String outputSummary = TraceSanitizer.outputSummary(modelVisible, null);
+                    String outputSummary = TraceSanitizer.outputSummary(
+                            TraceSanitizer.sanitize(mapper, modelVisible), null);
                     int outputLength = out.length();
                     send(endPayload(tool, trace, durationMs, inputSummary, outputSummary, outputLength, null));
                     persist(trace, tool, inputSummary, outputSummary, outputLength, durationMs,
                             AgentTraceRecord.STATUS_SUCCESS, null);
+                    finishSpan(span, AgentObservabilityRecorder.SpanFinish.success(modelVisible), start);
                     return modelVisible;
                 } catch (RuntimeException e) {
                     long durationMs = (System.nanoTime() - start) / 1_000_000;
@@ -108,10 +132,30 @@ public final class TracedToolCallbacks {
                     send(endPayload(tool, trace, durationMs, inputSummary, "", 0, message));
                     persist(trace, tool, inputSummary, "", 0, durationMs,
                             AgentTraceRecord.STATUS_FAILED, message);
+                    finishSpan(span, AgentObservabilityRecorder.SpanFinish.failed("TOOL_ERROR", message), start);
                     throw e;
                 }
             }
         };
+    }
+
+    private AgentObservabilityRecorder.SpanHandle startSpan(String tool, TraceContext.Snapshot trace,
+            String inputSummary) {
+        if (observability == null || !trace.persist() || trace.userId() == null || trace.orgId() == null) {
+            return null;
+        }
+        return observability.start(new AgentObservabilityRecorder.SpanStart(
+                new RequestIdentity(trace.userId(), trace.orgId(), trace.role(), null), trace.traceId(),
+                trace.runId() == null ? trace.taskId() : trace.runId(), trace.spanId(), trace.taskId(),
+                trace.stepId(), trace.attempt(), "TOOL_CALL", tool, trace.runtime(), trace.agentId(),
+                trace.role(), trace.modelSlotId(), trace.skillId(), trace.skillVersion(), inputSummary));
+    }
+
+    private void finishSpan(AgentObservabilityRecorder.SpanHandle span,
+            AgentObservabilityRecorder.SpanFinish finish, long startedNanos) {
+        if (observability != null) {
+            observability.finish(span, finish, startedNanos);
+        }
     }
 
     private void persist(TraceContext.Snapshot trace, String tool, String inputSummary,

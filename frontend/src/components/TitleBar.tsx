@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Tooltip } from "antd";
 import {
   BorderOutlined,
+  FundProjectionScreenOutlined,
   CloseOutlined,
   MinusOutlined,
 } from "@ant-design/icons";
@@ -93,6 +94,18 @@ export default function TitleBar({ working }: { working: boolean }) {
         </Tooltip>
       </div>
       <div className="titlebar-spacer" data-tauri-drag-region />
+      <div className="titlebar-nav" onDoubleClick={(e) => e.stopPropagation()}>
+        <Tooltip title="Agent 可观测性">
+          <button
+            type="button"
+            className="titlebar-button"
+            aria-label="打开 Agent 可观测性"
+            onClick={() => { window.location.hash = "#/observability"; }}
+          >
+            <FundProjectionScreenOutlined />
+          </button>
+        </Tooltip>
+      </div>
       {tauri && (
         <div className="titlebar-controls" onDoubleClick={(e) => e.stopPropagation()}>
           <button type="button" className="titlebar-button" aria-label="最小化" onClick={() => void minimize()}>

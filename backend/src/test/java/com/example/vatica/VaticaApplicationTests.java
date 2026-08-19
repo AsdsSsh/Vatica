@@ -72,4 +72,14 @@ class VaticaApplicationTests {
 				.andExpect(content().string(containsString("skillPermissions")));
 	}
 
+	/** 迭代 21B：Run/Span 诊断 API 进入 OpenAPI 契约。 */
+	@Test
+	void openApiContainsObservabilityContract() throws Exception {
+		mvc.perform(get("/v3/api-docs"))
+				.andExpect(status().isOk())
+				.andExpect(content().string(containsString("/api/observability/overview")))
+				.andExpect(content().string(containsString("OverviewView")))
+				.andExpect(content().string(containsString("SpanView")));
+	}
+
 }

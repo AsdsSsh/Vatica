@@ -9,6 +9,7 @@ import TitleBar from "./components/TitleBar";
 import { createSession, type ChatMessage, type ChatSession } from "./types";
 import { loadSessions, saveSessions } from "./sessions";
 import { readUiPref, useTheme, writeUiPref } from "./theme";
+import ObservabilityPage from "./ObservabilityPage";
 import {
   deleteRemoteSession,
   fetchSessionDetail,
@@ -25,7 +26,7 @@ const { Sider, Content } = Layout;
  * 左：会话列表 | 中：对话区（SSE 流式 Markdown） | 右：任务步骤面板。
  * 两侧栏可收起，状态持久化到 localStorage。
  */
-function App() {
+function WorkspaceApp() {
   const { isDark } = useTheme();
   // 迭代 12 I12-5：会话从 localStorage 恢复，变更自动持久化
   const [sessions, setSessions] = useState<ChatSession[]>(loadSessions);
@@ -287,6 +288,22 @@ function App() {
       </AntApp>
     </ConfigProvider>
   );
+}
+
+/** 迭代 21C：观测工作台使用 Hash 路由，桌面壳与静态 Web 均无需服务端 rewrite。 */
+function App() {
+  const [hash, setHash] = useState(() => window.location.hash || "#/workspace");
+
+  useEffect(() => {
+    const onHashChange = () => setHash(window.location.hash || "#/workspace");
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  if (hash.startsWith("#/observability")) {
+    return <ObservabilityPage key={hash} />;
+  }
+  return <WorkspaceApp />;
 }
 
 export default App;

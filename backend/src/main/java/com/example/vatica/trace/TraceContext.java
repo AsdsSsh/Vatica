@@ -27,7 +27,9 @@ public final class TraceContext {
      */
     public record Snapshot(String traceId, String channel, String taskId, Integer stepId,
             Long userId, Long orgId, boolean persist, String agentId, String role,
-            String skillId, String skillVersion, List<String> skillPermissions) {
+            String skillId, String skillVersion, List<String> skillPermissions,
+            String runId, String spanId, String parentSpanId, String runtime,
+            String modelSlotId, int attempt) {
         public Snapshot {
             skillPermissions = skillPermissions == null ? List.of() : List.copyOf(skillPermissions);
         }
@@ -36,14 +38,22 @@ public final class TraceContext {
         public Snapshot(String traceId, String channel, String taskId, Integer stepId,
                 Long userId, Long orgId, boolean persist) {
             this(traceId, channel, taskId, stepId, userId, orgId, persist,
-                    null, null, null, null, List.of());
+                    null, null, null, null, List.of(), null, null, null, null, null, 0);
         }
 
         /** 迭代 17C 构造器兼容：没有 Skill 时审计字段为空。 */
         public Snapshot(String traceId, String channel, String taskId, Integer stepId,
                 Long userId, Long orgId, boolean persist, String agentId, String role) {
             this(traceId, channel, taskId, stepId, userId, orgId, persist,
-                    agentId, role, null, null, List.of());
+                    agentId, role, null, null, List.of(), null, null, null, null, null, 0);
+        }
+
+        /** 迭代 20D/测试兼容：带 Skill 审计字段但尚未携带统一 Span 元数据。 */
+        public Snapshot(String traceId, String channel, String taskId, Integer stepId,
+                Long userId, Long orgId, boolean persist, String agentId, String role,
+                String skillId, String skillVersion, List<String> skillPermissions) {
+            this(traceId, channel, taskId, stepId, userId, orgId, persist, agentId, role,
+                    skillId, skillVersion, skillPermissions, null, null, null, null, null, 0);
         }
     }
 

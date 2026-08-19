@@ -65,6 +65,7 @@ import com.example.vatica.trace.AgentTraceRecordRepository;
 import com.example.vatica.trace.ReasoningContext;
 import com.example.vatica.trace.TraceContext;
 import com.example.vatica.trace.TracedToolCallbacks;
+import com.example.vatica.observability.AgentObservabilityRecorder;
 import com.example.vatica.tool.RetryableToolCallbacks;
 import com.example.vatica.usage.DirectModelUsageRecorder;
 import com.example.vatica.usage.UsageContext;
@@ -100,6 +101,7 @@ public class TaskService {
     private final FilePermissionRequestService permissionRequests;
     private final ModelRegistry registry;
     private final AgentTraceRecordRepository traceRepository;
+    private final AgentObservabilityRecorder observability;
     private final TaskBlackboard blackboard;
     private final ContextBudget contextBudget;
     private final AgentRuntimeFactory runtimeFactory;
@@ -127,6 +129,11 @@ public class TaskService {
     /** 仅本次邮件凭据与模型临时凭据同样只驻留内存，不进入任务表。 */
     private final Map<String, MailConnectionSettings> ephemeralMailCredentials = new ConcurrentHashMap<>();
 
+    /** 迭代 21A：任务 Run 的内存句柄只用于结束根 Span，不承载业务数据。 */
+    private final Map<String, AgentObservabilityRecorder.SpanHandle> runSpans = new ConcurrentHashMap<>();
+    private final Map<String, AgentObservabilityRecorder.SpanHandle> hitlSpans = new ConcurrentHashMap<>();
+    private final Map<String, Long> hitlStartedNanos = new ConcurrentHashMap<>();
+
     /** 用于跨事务重读被终止任务的最新状态（需悲观锁"当前读"，避开 REPEATABLE_READ 快照）。 */
     @PersistenceContext
     private EntityManager entityManager;
@@ -135,7 +142,8 @@ public class TaskService {
             JudgeProperties judgeProps, TaskRecordRepository repository, ObjectMapper mapper,
             @Qualifier("taskParallelExecutor") Executor parallelExecutor, TaskEventPublisher eventPublisher,
             AgentToolCatalog agentTools, FilePermissionRequestService permissionRequests,
-            ModelRegistry registry, AgentTraceRecordRepository traceRepository, TaskBlackboard blackboard,
+            ModelRegistry registry, AgentTraceRecordRepository traceRepository,
+            AgentObservabilityRecorder observability, TaskBlackboard blackboard,
             ContextBudget contextBudget, AgentRuntimeFactory runtimeFactory, AgentRegistry agentRegistry,
             DirectModelUsageRecorder directUsage, HumanAgent humanAgent, AgentModelBindingService agentModelBindings,
             TaskReliabilityProperties reliability, TaskExecutionFaultInjector faultInjector,
@@ -151,6 +159,7 @@ public class TaskService {
         this.permissionRequests = permissionRequests;
         this.registry = registry;
         this.traceRepository = traceRepository;
+        this.observability = observability;
         this.blackboard = blackboard;
         this.contextBudget = contextBudget;
         this.runtimeFactory = runtimeFactory;
@@ -253,32 +262,51 @@ public class TaskService {
                 permission == null ? null : toPermissionJson(permission));
         record.setIdempotencyKey(idempotencyKey);
         record.setBenchmarkCaseId(benchmarkCaseId);
-        if (credential != null) {
-            record.setModelSource("EPHEMERAL");
-            ephemeralCredentials.put(record.getId(), credential);
-            UsageContext.set(usageSnapshot(record, "PLANNER", null, "HIGH", contextBudget.plannerTokens(), false,
-                    "planner", "Planner"));
-            try {
-                TaskPlan plan = plannerAgent.plan(goal.trim(),
-                        registry.ephemeralClient(credential, false, com.example.vatica.config.ReasoningMode.HIGH),
-                        credential.toSlot());
-                bindSkills(plan, identity);
-                record.setPlanJson(toJson(plan));
-            } finally {
-                UsageContext.clear();
+        long runStarted = System.nanoTime();
+        AgentObservabilityRecorder.SpanHandle runSpan = startSpan(identity, record, null, null,
+                "TASK_RUN", "Agent task run", null, null, null, null, null, null,
+                "goal_chars=" + goal.trim().length());
+        runSpans.put(record.getId(), runSpan);
+        long plannerStarted = System.nanoTime();
+        AgentObservabilityRecorder.SpanHandle plannerSpan = startSpan(identity, record,
+                runSpan, null, "PLANNER", "Planner", "planner", "Planner", null, null, null, null,
+                "goal_chars=" + goal.trim().length());
+        try {
+            if (credential != null) {
+                record.setModelSource("EPHEMERAL");
+                ephemeralCredentials.put(record.getId(), credential);
+                UsageContext.set(usageSnapshot(record, "PLANNER", null, "HIGH", contextBudget.plannerTokens(), false,
+                        "planner", "Planner"));
+                try {
+                    TaskPlan plan = plannerAgent.plan(goal.trim(),
+                            registry.ephemeralClient(credential, false, com.example.vatica.config.ReasoningMode.HIGH),
+                            credential.toSlot());
+                    bindSkills(plan, identity);
+                    record.setPlanJson(toJson(plan));
+                } finally {
+                    UsageContext.clear();
+                }
+            } else {
+                record.setModelSource("PLATFORM");
+                record.setModelSlotId(null);
+                UsageContext.set(usageSnapshot(record, "PLANNER", null, "HIGH", contextBudget.plannerTokens(), true,
+                        "planner", "Planner"));
+                try {
+                    TaskPlan plan = plannerAgent.plan(goal.trim());
+                    bindSkills(plan, identity);
+                    record.setPlanJson(toJson(plan));
+                } finally {
+                    UsageContext.clear();
+                }
             }
-        } else {
-            record.setModelSource("PLATFORM");
-            record.setModelSlotId(null);
-            UsageContext.set(usageSnapshot(record, "PLANNER", null, "HIGH", contextBudget.plannerTokens(), true,
-                    "planner", "Planner"));
-            try {
-                TaskPlan plan = plannerAgent.plan(goal.trim());
-                bindSkills(plan, identity);
-                record.setPlanJson(toJson(plan));
-            } finally {
-                UsageContext.clear();
-            }
+            observability.finish(plannerSpan, AgentObservabilityRecorder.SpanFinish.success("plan_ready"), plannerStarted);
+            startHitl(record, null, "等待计划审批");
+        } catch (RuntimeException e) {
+            String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            observability.finish(plannerSpan, AgentObservabilityRecorder.SpanFinish.failed("PLANNER_ERROR", message), plannerStarted);
+            observability.finish(runSpan, AgentObservabilityRecorder.SpanFinish.failed("PLANNER_ERROR", message), runStarted);
+            runSpans.remove(record.getId());
+            throw e;
         }
         if (mailCredential != null) {
             ephemeralMailCredentials.put(record.getId(), mailCredential);
@@ -419,6 +447,7 @@ public class TaskService {
                 record.setError("服务重启后请确认从步骤 " + interrupted.getId() + " 继续；已完成步骤不会重跑。" );
                 record.setPlanJson(toJson(plan));
                 repository.save(record);
+                startHitl(record, interrupted.getId(), "等待恢复审批");
                 eventPublisher.publish(record, "recovery_approval_required");
                 return record;
             }
@@ -447,12 +476,14 @@ public class TaskService {
         TaskStatus from = record.getStatus();
         switch (from) {
             case PENDING -> {
+                finishHitl(record, com.example.vatica.observability.AgentSpanRecord.STATUS_SUCCESS, "approved");
                 TaskStateMachine.requireTransition(from, TaskStatus.RUNNING);
                 beginExecution(record);
                 record.setStatus(TaskStatus.RUNNING);
                 repository.save(record);
             }
             case PENDING_APPROVAL -> {
+                finishHitl(record, com.example.vatica.observability.AgentSpanRecord.STATUS_SUCCESS, "approved");
                 TaskStateMachine.requireTransition(from, TaskStatus.RUNNING);
                 TaskPlan plan = parse(record.getPlanJson());
                 if (record.getPendingStepId() >= 0) {
@@ -507,6 +538,8 @@ public class TaskService {
                 ephemeralMailCredentials.remove(id);
                 record.setLastHeartbeatAt(Instant.now());
                 record.setExecutionFinishedAt(Instant.now());
+                finishHitl(record, com.example.vatica.observability.AgentSpanRecord.STATUS_CANCELLED, "cancelled");
+                finishRunSpan(record);
                 repository.save(record);
                 eventPublisher.publish(record, "cancelled");
                 log.info("任务 {} 被用户终止", id);
@@ -615,6 +648,7 @@ public class TaskService {
                         heartbeat(record);
                         record.setPlanJson(toJson(plan));
                         repository.save(record);
+                        startHitl(record, step.getId(), "等待敏感步骤审批");
                         eventPublisher.publish(record, "approval_required");
                         log.info("任务 {} 步骤 {} 命中审批点，挂起等待人工审批", record.getId(), step.getId());
                         return;
@@ -623,18 +657,26 @@ public class TaskService {
 
                 String reflection = reflectionPrompt(record);
                 List<CompletableFuture<String>> futures = new ArrayList<>();
+                long waveStarted = System.nanoTime();
+                AgentObservabilityRecorder.SpanHandle waveSpan = startSpan(identityOf(record), record,
+                        runSpans.get(record.getId()), null, "WAVE", "Parallel wave", record.getExecutionRuntime(),
+                        null, null, record.getModelSlotId(), null, null, todo.toString());
                 try {
                     eventPublisher.publish(record, "step_running");
                     for (int idx : todo) {
                         TaskStep step = plan.getSteps().get(idx);
                         List<String> context = blackboard.contextFor(record.getGoal(), plan, step);
                         futures.add(CompletableFuture
-                                .supplyAsync(() -> execute(record, step, context, reflection), parallelExecutor)
+                                .supplyAsync(() -> execute(record, step, context, reflection, waveSpan), parallelExecutor)
                                 .orTimeout(reliability.stepTimeout().toMillis(), TimeUnit.MILLISECONDS));
                     }
                     CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
                     if (isCancelled(record.getId())) {
                         futures.forEach(future -> future.cancel(true));
+                        observability.finish(waveSpan, new AgentObservabilityRecorder.SpanFinish(
+                                com.example.vatica.observability.AgentSpanRecord.STATUS_CANCELLED,
+                                "cancelled", null, null, null, null, null, null, null, null, null, null),
+                                waveStarted);
                         return;
                     }
 
@@ -668,6 +710,8 @@ public class TaskService {
                     waveEntries.forEach(entry -> eventPublisher.publishBlackboard(record, entry));
                     eventPublisher.publish(record, helpSignals.isEmpty() ? "step_done" : "need_help");
                     log.info("任务 {} 波次完成：步骤下标 {}（{} 个并行）", record.getId(), todo, todo.size());
+                    observability.finish(waveSpan, AgentObservabilityRecorder.SpanFinish.success(
+                            "completed_steps=" + todo), waveStarted);
 
                     if (!helpSignals.isEmpty()) {
                         CollaborationRoute route = handleCollaboration(record, plan, helpSignals);
@@ -686,6 +730,10 @@ public class TaskService {
                 } catch (Exception e) {
                     futures.forEach(future -> future.cancel(true));
                     if (isCancelled(record.getId())) {
+                        observability.finish(waveSpan, new AgentObservabilityRecorder.SpanFinish(
+                                com.example.vatica.observability.AgentSpanRecord.STATUS_CANCELLED,
+                                "cancelled", null, null, null, null, null, null, null, null, null, null),
+                                waveStarted);
                         return;
                     }
                     Throwable cause = unwrapCompletionException(e);
@@ -694,6 +742,8 @@ public class TaskService {
                                 + formatDuration(reliability.stepTimeout()) + "）。", cause);
                     }
                     log.error("任务 {} 波次执行失败（步骤 {}）", record.getId(), todo, cause);
+                    observability.finish(waveSpan, AgentObservabilityRecorder.SpanFinish.failed(
+                            "WAVE_ERROR", cause.getMessage()), waveStarted);
                     TaskStateMachine.requireTransition(record.getStatus(), TaskStatus.FAILED);
                     record.setStatus(TaskStatus.FAILED);
                     record.setError(cause.getMessage());
@@ -787,6 +837,7 @@ public class TaskService {
         record.setError("等待人工仲裁：" + reason);
         record.setPlanJson(toJson(plan));
         repository.save(record);
+        startHitl(record, null, reason);
         eventPublisher.publish(record, "arbitration_required");
     }
 
@@ -806,7 +857,12 @@ public class TaskService {
     }
 
     /** 单步骤执行包装：异常附步骤号（并行波中定位失败来源）；supplyAsync 会再包一层 CompletionException。 */
-    private String execute(TaskRecord record, TaskStep step, List<String> context, String reflection) {
+    private String execute(TaskRecord record, TaskStep step, List<String> context, String reflection,
+            AgentObservabilityRecorder.SpanHandle waveSpan) {
+        AgentObservabilityRecorder.SpanHandle agentSpan = null;
+        long agentStarted = 0;
+        AgentObservabilityRecorder.SpanHandle modelSpan = null;
+        long modelStarted = 0;
         try {
             faultInjector.beforeStep(record, step);
             // 迭代 11：把任务创建时的权限快照绑定到本次步骤的全部工具调用
@@ -833,15 +889,29 @@ public class TaskService {
             // 迭代 17C：绑定链同时决定执行模型和观测维度；临时凭据只在本任务内优先。
             AgentModelBindingService.Resolution model = agentModelBindings.resolve(identity, agent.id(),
                     agent.modelCapability(), ephemeralCredentials.get(record.getId()));
+            AgentRuntime runtime = runtimeFactory.runtime();
+            agentStarted = System.nanoTime();
+            agentSpan = startSpan(identity, record, waveSpan, step.getId(),
+                    "AGENT_STEP", "Agent step " + step.getId(), runtime.name(), agent.id(),
+                    agent.displayName(), model.slot().id(), skill == null ? null : skill.id(),
+                    skill == null ? null : skill.version(),
+                    "step=" + step.getId() + ",context_items=" + context.size());
+            modelStarted = System.nanoTime();
+            modelSpan = startSpan(identity, record, agentSpan, step.getId(), "MODEL_CALL",
+                    "Model call", runtime.name(), agent.id(), agent.displayName(), model.slot().id(),
+                    skill == null ? null : skill.id(), skill == null ? null : skill.version(), "reasoning=LOW");
             // 迭代 15 I15-1：权限包装在内层，trace 在最外层看到真实耗时与最终结果
-            TraceContext.Snapshot trace = new TraceContext.Snapshot(UUID.randomUUID().toString(),
+            TraceContext.Snapshot trace = new TraceContext.Snapshot(record.getId(),
                     TenantChannels.task(identity, record.getId()), record.getId(), step.getId(),
                     identity.userId(), identity.orgId(), true, agent.id(), agent.displayName(),
                     skill == null ? null : skill.id(), skill == null ? null : skill.version(),
-                    skill == null ? List.of() : skill.permissions());
+                    skill == null ? List.of() : skill.permissions(), record.getId(),
+                    modelSpan == null ? null : modelSpan.spanId(),
+                    agentSpan == null ? null : agentSpan.spanId(),
+                    runtime.name(), model.slot().id(), record.getExecutionAttempt());
             int maxOutputChars = skill == null ? com.example.vatica.tool.ToolResultPolicy.MAX_OUTPUT_CHARS
                     : skill.limits().maxOutputChars();
-            callbacks = new TracedToolCallbacks(mapper, traceRepository)
+            callbacks = new TracedToolCallbacks(mapper, traceRepository, observability)
                     .wrap(callbacks, trace, maxOutputChars);
             boolean platformQuota = !"EPHEMERAL".equals(record.getModelSource());
             UsageContext.set(usageSnapshot(record, "EXECUTOR", step.getId(), "LOW",
@@ -850,8 +920,8 @@ public class TaskService {
                 directUsage.recordFallback(model.fallbackReason(), model.slot().id());
             }
             String result;
+            AgentRuntime.StepUsage observedUsage = null;
             try {
-                AgentRuntime runtime = runtimeFactory.runtime();
                 AgentRuntime.StepRequest request = new AgentRuntime.StepRequest(
                         record.getGoal(), step, context, reflection, identity, callbacks,
                         clientFor(record, true, model.slot()), model.slot(), agent,
@@ -861,6 +931,7 @@ public class TaskService {
                     try {
                         AgentRuntime.StepResult stepResult = runtime.executeStep(request);
                         directUsage.complete(reservation, stepResult.usage(), stepResult.durationMs());
+                        observedUsage = stepResult.usage();
                         result = stepResult.answer();
                     } catch (RuntimeException | Error e) {
                         directUsage.abort(reservation);
@@ -881,6 +952,7 @@ public class TaskService {
                             try {
                                 AgentRuntime.StepResult stepResult = runtime.executeStep(retry);
                                 directUsage.complete(retryReservation, stepResult.usage(), stepResult.durationMs());
+                                observedUsage = stepResult.usage();
                                 result = stepResult.answer();
                             } catch (RuntimeException | Error retryError) {
                                 directUsage.abort(retryReservation);
@@ -891,15 +963,29 @@ public class TaskService {
                         }
                     }
                 } else {
-                    result = runtime.executeStep(request).answer();
+                    AgentRuntime.StepResult stepResult = runtime.executeStep(request);
+                    observedUsage = stepResult.usage();
+                    result = stepResult.answer();
                 }
             } finally {
                 UsageContext.clear();
             }
+            observability.finish(modelSpan, new AgentObservabilityRecorder.SpanFinish(
+                    com.example.vatica.observability.AgentSpanRecord.STATUS_SUCCESS,
+                    "result_chars=" + (result == null ? 0 : result.length()), null, null,
+                    observedUsage == null ? null : observedUsage.inputTokens(),
+                    observedUsage == null ? null : observedUsage.outputTokens(),
+                    observedUsage == null ? null : observedUsage.totalTokens(), null, null, null, null, null),
+                    modelStarted);
             // 迭代 15 I15-7：执行器思考摘要也进 agent_trace（不存全文，与工具 trace 同源可查询）
             persistThinkingTrace(record, step, identity, trace, ReasoningContext.take());
+            observability.finish(agentSpan, AgentObservabilityRecorder.SpanFinish.success(
+                    "result_chars=" + (result == null ? 0 : result.length())), agentStarted);
             return result;
         } catch (RuntimeException e) {
+            String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            observability.finish(modelSpan, AgentObservabilityRecorder.SpanFinish.failed("MODEL_ERROR", message), modelStarted);
+            observability.finish(agentSpan, AgentObservabilityRecorder.SpanFinish.failed("AGENT_STEP_ERROR", message), agentStarted);
             throw new IllegalStateException("步骤 " + step.getId() + " 执行失败：" + e.getMessage(), e);
         }
     }
@@ -952,6 +1038,10 @@ public class TaskService {
             return;   // 评测前/中被终止：状态保持 CANCELLED
         }
         JudgeAgent.Evaluation eval;
+        long judgeStarted = System.nanoTime();
+        AgentObservabilityRecorder.SpanHandle judgeSpan = startSpan(identityOf(record), record,
+                runSpans.get(record.getId()), null, "JUDGE", "Judge quality gate", record.getExecutionRuntime(),
+                "judge", "Judge", record.getModelSlotId(), null, null, "quality_gate");
         try {
             UsageContext.set(usageSnapshot(record, "JUDGE", null, "HIGH", contextBudget.judgeTokens(),
                     !"EPHEMERAL".equals(record.getModelSource()), "judge", "Judge"));
@@ -968,8 +1058,13 @@ public class TaskService {
             } finally {
                 UsageContext.clear();
             }
+            observability.finish(judgeSpan, new AgentObservabilityRecorder.SpanFinish(
+                    AgentObservabilityRecorder.SpanFinish.success(eval.summary()).status(), eval.summary(), null, null,
+                    null, null, null, null, null, null, eval.score(), eval.verdict().name()), judgeStarted);
         } catch (Exception e) {
             log.error("任务 {} 评测异常", record.getId(), e);
+            observability.finish(judgeSpan, AgentObservabilityRecorder.SpanFinish.failed("JUDGE_ERROR",
+                    e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()), judgeStarted);
             TaskStateMachine.requireTransition(TaskStatus.REVIEW, TaskStatus.FAILED);
             record.setStatus(TaskStatus.FAILED);
             record.setError("评测异常：" + e.getMessage());
@@ -1148,6 +1243,17 @@ public class TaskService {
         record.setLastHeartbeatAt(now);
         record.setExecutionFinishedAt(null);
         record.setRecoverable(false);
+        AgentObservabilityRecorder.SpanHandle existing = runSpans.remove(record.getId());
+        if (existing != null) {
+            observability.finish(existing, AgentObservabilityRecorder.SpanFinish.success(
+                    "execution_started,attempt=" + record.getExecutionAttempt()), 0);
+        }
+        if (!runSpans.containsKey(record.getId())) {
+            AgentObservabilityRecorder.SpanHandle runSpan = startSpan(identityOf(record), record, null, null,
+                    "TASK_RUN", "Agent task run", record.getExecutionRuntime(), null, null,
+                    record.getModelSlotId(), null, null, "attempt=" + record.getExecutionAttempt());
+            runSpans.put(record.getId(), runSpan);
+        }
     }
 
     /** 迭代 18：每个波次边界写入心跳，恢复时可区分正常等待审批与进程中断。 */
@@ -1159,6 +1265,55 @@ public class TaskService {
         Instant now = Instant.now();
         record.setLastHeartbeatAt(now);
         record.setExecutionFinishedAt(now);
+        finishRunSpan(record);
+    }
+
+    private void finishRunSpan(TaskRecord record) {
+        AgentObservabilityRecorder.SpanHandle runSpan = runSpans.remove(record.getId());
+        if (runSpan != null) {
+            String status = record.getStatus() == TaskStatus.CANCELLED
+                    ? com.example.vatica.observability.AgentSpanRecord.STATUS_CANCELLED
+                    : (record.getStatus() == TaskStatus.FAILED || record.getStatus() == TaskStatus.NEEDS_REVISION
+                            ? com.example.vatica.observability.AgentSpanRecord.STATUS_FAILED
+                            : com.example.vatica.observability.AgentSpanRecord.STATUS_SUCCESS);
+            observability.finish(runSpan,
+                    new AgentObservabilityRecorder.SpanFinish(status, "task_status=" + record.getStatus(),
+                            status.equals(com.example.vatica.observability.AgentSpanRecord.STATUS_FAILED)
+                                    ? "TASK_FAILED" : null,
+                            record.getError(), null, null, null, null, null, null, record.getScore(),
+                            record.getVerdict() == null ? null : record.getVerdict().name()),
+                    0);
+        }
+    }
+
+    private void startHitl(TaskRecord record, Integer stepId, String reason) {
+        hitlSpans.computeIfAbsent(record.getId(), ignored -> {
+            hitlStartedNanos.put(record.getId(), System.nanoTime());
+            return startSpan(identityOf(record), record, runSpans.get(record.getId()), stepId,
+                    "HITL_WAIT", "Human approval", record.getExecutionRuntime(), "human", "Human",
+                    null, null, null, reason);
+        });
+    }
+
+    private void finishHitl(TaskRecord record, String status, String output) {
+        AgentObservabilityRecorder.SpanHandle span = hitlSpans.remove(record.getId());
+        Long started = hitlStartedNanos.remove(record.getId());
+        if (span == null) {
+            return;
+        }
+        observability.finish(span, new AgentObservabilityRecorder.SpanFinish(status, output, null, null,
+                null, null, null, null, null, null, null, null), started == null ? 0 : started);
+    }
+
+    private AgentObservabilityRecorder.SpanHandle startSpan(RequestIdentity identity, TaskRecord record,
+            AgentObservabilityRecorder.SpanHandle parent, Integer stepId, String spanType, String name,
+            String runtime, String agentId, String role, String modelSlotId, String skillId,
+            String skillVersion, String input) {
+        return observability.start(new AgentObservabilityRecorder.SpanStart(identity, record.getId(),
+                record.getExecutionRunId() == null ? record.getId() : record.getExecutionRunId(),
+                parent == null ? null : parent.spanId(), record.getId(), stepId,
+                record.getExecutionAttempt(), spanType, name, runtime, agentId, role, modelSlotId,
+                skillId, skillVersion, input));
     }
 
     private Object mutationLock(String taskId) {

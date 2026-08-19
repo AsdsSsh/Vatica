@@ -176,6 +176,7 @@ curl localhost:8080/api/task
 - **Skills**（迭代 20A/20B）：桌面端“设置 → Skills”展示内置 Skill 目录；组织管理员可启停、切换发布版本和一键回滚。发布清单来自 `backend/src/main/resources/vatica-skills/`，注册时校验 Agent 角色、工具是否存在及角色工具白名单。任务计划会固定 `skillId@version`；AgentScope SkillRunner 只注册“既有授权工具 ∩ manifest 工具”，升级影响新任务，已创建任务继续使用固定版本，停用会阻断后续执行。
 - **Planner/Judge AgentScope 建议层**（迭代 20C）：AgentScope 负责生成计划、协作重规划和评分卡原始 JSON，不注册工具；Vatica 继续负责 schema、角色/依赖、Skill 固定、评分阈值、返工预算和状态转换。`VATICA_AGENT_RUNTIME=legacy` 可即时回退既有 Spring AI 链路。回归：后端 416 项通过、2 项按条件跳过，前端 `npm run build` 通过。
 - **Skill 权限与审计收口**（迭代 20D）：Vatica 以能力词表机械校验 manifest，并在运行时执行“用户授权 ∩ Agent 白名单 ∩ Skill 工具声明”、固定版本资源上限（推理轮次/工具次数/单次输出）和文件沙箱；AgentScope 与 Legacy 均不能绕过。工具 trace 补齐租户、用户、Agent、Skill 版本和权限声明，Skill 页面可查看资源额度。生命周期失败不改状态，回滚只切换新任务默认版本，已固定发布仍可复现。回归：后端 427 项通过、2 项按条件跳过，前端 `npm run build` 通过。
+- **Agent 全链路可观测性**（迭代 21）：任务执行写入统一 `agent_span`，可从 TASK_RUN 下钻 Planner、Wave、Agent、模型、工具、HITL 和 Judge；只保存脱敏摘要，不保存原始思维链、完整 Prompt 或密钥。浏览器/Tauri 均可从顶栏进入 `/#/observability`；只读 API 为 `/api/observability/overview`、`/runs`、`/traces/{traceId}`、`/tasks/{taskId}`，全部按当前 user/org 隔离。Span 默认保留 30 天，可用 `VATICA_OBSERVABILITY_RETENTION` 调整。回归：后端 433 项通过、2 项按条件跳过，前端生产构建及桌面/窄屏浏览器验收通过。
 - 会话记忆已持久化：多轮对话重启后仍可引用前文（内存滑窗热缓存 + PostgreSQL 落库）
 
 ### 迭代 5.5：质量闭环（LLM-as-Judge 评分 + 自动/人工返工）

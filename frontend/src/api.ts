@@ -1293,6 +1293,92 @@ export async function fetchTaskTraces(taskId: string): Promise<AgentTraceView[]>
   return (await getJson(`/api/task/${encodeURIComponent(taskId)}/traces`)).json();
 }
 
+// ═══ Agent 可观测性（迭代 21A/21B：Run/Span 诊断工作台）═══
+
+export interface ObservabilitySpan {
+  spanId: string;
+  traceId: string;
+  parentSpanId: string | null;
+  runId: string;
+  taskId: string | null;
+  stepId: number | null;
+  attempt: number;
+  spanType: string;
+  name: string;
+  runtime: string | null;
+  agentId: string | null;
+  role: string | null;
+  modelSlotId: string | null;
+  skillId: string | null;
+  skillVersion: string | null;
+  status: "OPEN" | "SUCCESS" | "FAILED" | "CANCELLED" | string;
+  startedAt: string;
+  endedAt: string | null;
+  durationMs: number;
+  inputSummary: string | null;
+  outputSummary: string | null;
+  errorCode: string | null;
+  errorSummary: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  reasoningTokens: number | null;
+  contextFillRatio: number | null;
+  costEstimate: number | null;
+  judgeScore: number | null;
+  judgeVerdict: string | null;
+}
+
+export interface ObservabilityRun {
+  traceId: string;
+  runId: string;
+  taskId: string | null;
+  status: string;
+  startedAt: string | null;
+  endedAt: string | null;
+  durationMs: number;
+  runtime: string | null;
+  attempt: number;
+  spanCount: number;
+  failedSpanCount: number;
+  totalTokens: number | null;
+  costEstimate: number | null;
+  judgeScore: number | null;
+  judgeVerdict: string | null;
+}
+
+export interface ObservabilityOverview {
+  windowStart: string | null;
+  windowEnd: string | null;
+  runCount: number;
+  successCount: number;
+  failedCount: number;
+  successRate: number;
+  p50DurationMs: number;
+  p95DurationMs: number;
+  totalTokens: number;
+  totalCost: number;
+  failedSpanCount: number;
+  droppedSpanWrites: number;
+  recentRuns: ObservabilityRun[];
+}
+
+export async function fetchObservabilityOverview(limit = 20): Promise<ObservabilityOverview> {
+  return (await getJson("/api/observability/overview?limit=" + limit)).json();
+}
+
+export async function fetchObservabilityRuns(limit = 50): Promise<ObservabilityRun[]> {
+  return (await getJson("/api/observability/runs?limit=" + limit)).json();
+}
+
+export async function fetchObservabilityTrace(traceId: string): Promise<ObservabilitySpan[]> {
+  return (await getJson("/api/observability/traces/" + encodeURIComponent(traceId))).json();
+}
+
+export async function fetchObservabilityTask(taskId: string): Promise<ObservabilitySpan[]> {
+  return (await getJson("/api/observability/tasks/" + encodeURIComponent(taskId))).json();
+}
+
 /** 任务动作：approve（审批计划/步骤）/ rework（人工返工）/ cancel（终止）/ resume（继续执行，迭代 13）。 */
 export async function taskAction(id: string, action: "approve" | "rework" | "cancel" | "resume"): Promise<TaskDetail> {
   return (await post(`/api/task/${id}/${action}`, {})).json();

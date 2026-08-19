@@ -29,6 +29,8 @@ import com.example.vatica.agent.PlannerAgent;
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
 import com.example.vatica.runtime.AgentRuntimeFactory;
+import com.example.vatica.observability.AgentSpanRecord;
+import com.example.vatica.observability.AgentSpanRecordRepository;
 import com.example.vatica.task.TaskPlan;
 import com.example.vatica.task.TaskPlan.TaskStep;
 import com.example.vatica.task.TaskRecord;
@@ -76,11 +78,14 @@ class TaskServiceAgentScopeE2eTest {
     AgentRuntimeFactory runtimeFactory;
     @Autowired
     ObjectMapper mapper;
+    @Autowired
+    AgentSpanRecordRepository spanRepository;
 
     @BeforeEach
     void setUp() {
         RequestIdentityContext.set(new RequestIdentity(17L, 21L, "MEMBER", "learner"));
         repository.deleteAll();
+        spanRepository.deleteAll();
         MODEL_CALLS.set(0);
         LAST_REQUEST.set(null);
         TaskStep step = new TaskStep(1, "汇总已核验的信息", false);
@@ -120,6 +125,15 @@ class TaskServiceAgentScopeE2eTest {
         assertThat(MODEL_CALLS).hasValue(1);
         assertThat(LAST_REQUEST.get()).contains("汇总已核验的信息", "knowledge-research@1.1.0",
                 "search_knowledge_base").doesNotContain("calculator", "text_stats");
+        List<AgentSpanRecord> spans = spanRepository
+                .findByUserIdAndOrgIdAndTaskIdOrderByStartedAtAscSpanIdAsc(17L, 21L, created.getId());
+        assertThat(spans).extracting(AgentSpanRecord::getSpanType)
+                .contains("TASK_RUN", "PLANNER", "HITL_WAIT", "WAVE", "AGENT_STEP", "MODEL_CALL", "JUDGE");
+        assertThat(spans).filteredOn(span -> "MODEL_CALL".equals(span.getSpanType()))
+                .singleElement().satisfies(span -> {
+                    assertThat(span.getRuntime()).isEqualTo("agentscope");
+                    assertThat(span.getTotalTokens()).isEqualTo(17);
+                });
     }
 
     private static HttpServer startModelServer() {
