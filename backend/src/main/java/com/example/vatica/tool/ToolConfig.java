@@ -7,6 +7,9 @@ import com.example.vatica.permission.PermissionPolicyService;
 import com.example.vatica.workspace.WorkspaceStore;
 import com.example.vatica.workspace.WorkspaceProperties;
 import com.example.vatica.mail.UserMailService;
+import com.example.vatica.knowledge.KnowledgeBaseService;
+import com.example.vatica.knowledge.KnowledgeTools;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
@@ -78,13 +81,19 @@ public class ToolConfig {
         return new WorkspaceTools(sandboxPolicy);
     }
 
+    @Bean
+    KnowledgeTools knowledgeTools(KnowledgeBaseService service, ObjectMapper mapper) {
+        return new KnowledgeTools(service, mapper);
+    }
+
     /** 把 @Tool 注解方法自动生成为 ToolCallback（任务清单 I2-2 的"ToolCallback Bean 显式注册"）。 */
     @Bean
     ToolCallbackProvider vaticaTools(FileTools fileTools, TextTools textTools, DocumentTools documentTools,
             CalendarTools calendarTools, TodoTools todoTools, MailTools mailTools, WorkspaceTools workspaceTools,
-            ToolProperties props) {
+            KnowledgeTools knowledgeTools, ToolProperties props) {
         ToolCallbackProvider provider = MethodToolCallbackProvider.builder()
-                .toolObjects(fileTools, textTools, documentTools, calendarTools, todoTools, mailTools, workspaceTools)
+                .toolObjects(fileTools, textTools, documentTools, calendarTools, todoTools, mailTools,
+                        workspaceTools, knowledgeTools)
                 .build();
         return new ToolCallLimitProvider(provider, props.maxCallsPerRequest());
     }

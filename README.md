@@ -172,6 +172,7 @@ curl localhost:8080/api/task
   setx POSTGRES_HOST localhost
   ```
   `docker-compose.postgres.yml` 首次启动会执行 `CREATE EXTENSION vector`；表结构由 JPA 自动创建（`ddl-auto: update`），测试环境继续用 H2，单测零外部依赖。
+- **知识库**（迭代 19B）：桌面端“设置 → 知识库”可导入已授权工作区内的 `.txt/.md/.docx`，按“仅自己/组织共享”检索并返回 `C1/C2` 引用和原文偏移。默认 `local-hash` Embedding 用于离线学习；生产语义检索设置 `VATICA_KNOWLEDGE_EMBEDDING_PROVIDER=openai`，并配置 `SPRING_AI_OPENAI_EMBEDDING_API_KEY`、`SPRING_AI_OPENAI_EMBEDDING_BASE_URL`、`SPRING_AI_OPENAI_EMBEDDING_OPTIONS_MODEL`。模型向量维度必须与 `VATICA_KNOWLEDGE_VECTOR_DIMENSIONS` 一致。
 - 会话记忆已持久化：多轮对话重启后仍可引用前文（内存滑窗热缓存 + PostgreSQL 落库）
 
 ### 迭代 5.5：质量闭环（LLM-as-Judge 评分 + 自动/人工返工）

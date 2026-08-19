@@ -5,6 +5,10 @@
 #
 # 想切到 PostgreSQL：设环境变量 PACKAGED_DB_URL=jdbc:postgresql://<host>:5432/vatica
 # + PACKAGED_DB_USERNAME + PACKAGED_DB_PASSWORD，其余配置与开发模式一致。
+vatica:
+  knowledge:
+    enabled: ${VATICA_KNOWLEDGE_ENABLED:false}
+
 spring:
   datasource:
     url: ${PACKAGED_DB_URL:jdbc:h2:file:./.vatica/vatica-db;MODE=MySQL;DATABASE_TO_LOWER=TRUE}

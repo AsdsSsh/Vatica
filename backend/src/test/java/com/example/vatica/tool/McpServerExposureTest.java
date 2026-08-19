@@ -13,7 +13,7 @@ import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
 
 /**
  * MCP Server 工具暴露验证（迭代 4 I4-2）：全上下文 + 禁用 MCP 客户端，
- * 断言本地 17 个工具全部注册进 MCP Server 的 SyncToolSpecification 列表
+ * 断言本地 18 个工具全部注册进 MCP Server 的 SyncToolSpecification 列表
  * （即经 Streamable HTTP /mcp 暴露给任何 MCP 客户端）。
  */
 @SpringBootTest(properties = {
@@ -30,7 +30,7 @@ class McpServerExposureTest {
     List<SyncToolSpecification> mcpServerTools;
 
     @Test
-    void exposesAllSeventeenLocalTools() {
+    void exposesAllEighteenLocalTools() {
         List<String> names = mcpServerTools.stream().map(t -> t.tool().name()).sorted().toList();
 
         assertThat(names).containsExactlyInAnyOrder(
@@ -38,7 +38,7 @@ class McpServerExposureTest {
                 "create_word_report", "create_excel_stats",
                 "calendar_query", "calendar_create", "calendar_import",
                 "todo_add", "todo_list", "todo_complete", "todo_remind",
-                "mail_query", "mail_send", "list_workspace_roots");
+                "mail_query", "mail_send", "list_workspace_roots", "search_knowledge_base");
     }
 
     @Test

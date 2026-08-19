@@ -774,6 +774,61 @@ export async function deleteWorkspaceFile(path: string): Promise<void> {
   await deleteJson(`/api/workspace/files?path=${encodeURIComponent(path)}`);
 }
 
+// ═══ 知识库（迭代 19B：PostgreSQL pgvector + 可追溯引用）═══
+
+export type KnowledgeVisibility = "PRIVATE" | "ORG_SHARED";
+export type KnowledgeDocumentStatus = "INDEXING" | "READY" | "FAILED";
+
+export interface KnowledgeDocumentView {
+  id: number;
+  sourceName: string;
+  sourcePath: string;
+  visibility: KnowledgeVisibility;
+  contentHash: string;
+  version: number;
+  status: KnowledgeDocumentStatus;
+  chunkCount: number;
+  errorMessage: string | null;
+  updatedAt: string;
+}
+
+export interface KnowledgeCitation {
+  citationId: string;
+  documentId: number;
+  documentName: string;
+  sourcePath: string;
+  chunkId: number;
+  heading: string | null;
+  startOffset: number;
+  endOffset: number;
+  score: number;
+  quote: string;
+}
+
+export interface KnowledgeSearchResult {
+  query: string;
+  citations: KnowledgeCitation[];
+}
+
+export async function fetchKnowledgeDocuments(): Promise<KnowledgeDocumentView[]> {
+  return (await getJson("/api/knowledge/documents")).json();
+}
+
+export async function importKnowledgeDocument(
+  path: string,
+  visibility: KnowledgeVisibility,
+): Promise<KnowledgeDocumentView> {
+  return (await post("/api/knowledge/documents", { path, visibility })).json();
+}
+
+export async function deleteKnowledgeDocument(id: number): Promise<void> {
+  await deleteJson(`/api/knowledge/documents/${id}`);
+}
+
+export async function searchKnowledgeBase(query: string, topK = 5): Promise<KnowledgeSearchResult> {
+  return (await post("/api/knowledge/search", { query, topK })).json();
+}
+
 export interface TodoView {
   id: string;
   title: string;

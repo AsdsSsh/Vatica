@@ -55,10 +55,11 @@ class AgentRegistryTest {
     @Test
     void researchRoleAcceptsAmapMcpToolsButRejectsPimTools() {
         ToolCallback weather = callback("maps_weather");
+        ToolCallback knowledge = callback("search_knowledge_base");
         ToolCallback mail = callback("mail_send");
 
-        assertThat(registry.allowedCallbacks("research", new ToolCallback[] { weather, mail }))
-                .containsExactly(weather);
+        assertThat(registry.allowedCallbacks("research", new ToolCallback[] { weather, knowledge, mail }))
+                .containsExactly(weather, knowledge);
     }
 
     private static ToolCallback callback(String name) {

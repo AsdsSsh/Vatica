@@ -96,7 +96,9 @@ class PlannerAgentTest {
 
         ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
         verify(spec, org.mockito.Mockito.atLeastOnce()).system(captor.capture());
-        assertThat(captor.getValue()).contains("当前可用工具：").contains("read_file");
+        assertThat(captor.getValue()).contains("当前可用工具：")
+                .contains("read_file")
+                .contains("基于知识库生成文档");
     }
 
     /** 非法输出 → 降级单步计划（不阻断任务创建） */

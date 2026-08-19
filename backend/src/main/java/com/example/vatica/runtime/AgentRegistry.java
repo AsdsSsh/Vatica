@@ -38,8 +38,9 @@ public class AgentRegistry {
                 ModelSlot.CAP_CHAT_REASON,
                 Set.of("read_file", "write_file", "list_files", "list_workspace_roots"), Set.of(), false));
         roles.put("research", new AgentDefinition("research", "研究分析 Agent",
-                "只负责高德地图 MCP 查询、计算与文本统计，不得编造工具未返回的数据。",
-                ModelSlot.CAP_CHAT_REASON, Set.of("calculator", "text_stats"),
+                "只负责知识库、高德地图 MCP 查询、计算与文本统计，不得编造工具未返回的数据；"
+                        + "使用知识库时必须保留 C1/C2 引用编号。",
+                ModelSlot.CAP_CHAT_REASON, Set.of("calculator", "text_stats", "search_knowledge_base"),
                 Set.of("maps_", "amap_"), false));
         roles.put(GENERAL, new AgentDefinition(GENERAL, "通用 Agent",
                 "负责无法归入专门角色的步骤；仍须遵守全部身份、权限、审批和工具规则。",

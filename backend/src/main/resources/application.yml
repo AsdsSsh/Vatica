@@ -35,7 +35,7 @@ spring:
         # 必须显式声明：STREAMABLE 自动配置条件是显式匹配（matchIfMissing=false），
         # 不写会退回 SSE 传输、POST /mcp 收 JSON-RPC 返回 404（迭代 4 实测）
         protocol: STREAMABLE
-        instructions: Vatica 个人助理工具集：文件读写、文档生成（Word/Excel）、日历、待办、邮件。
+        instructions: Vatica 个人助理工具集：文件读写、文档生成（Word/Excel）、日历、待办、邮件、知识库检索。
       # 客户端：高德地图官方 MCP（迭代 4.5，替代已删除的模拟天气服务）
       # 实测要点（2026-08-15 curl 握手核实）：
       #   1) 参数名是 ?key=（官方文档写 api_key，但网关只认 key，api_key 会返回 INVALID_USER_KEY）
@@ -122,6 +122,16 @@ vatica:
     min-pass-rate: 0.8
     min-average-score: 70
     max-failed-tool-rate: 0.1
+  # ===== RAG-as-a-Tool 知识库（迭代 19B）=====
+  knowledge:
+    enabled: ${VATICA_KNOWLEDGE_ENABLED:true}
+    # local-hash 用于学习/离线闭环；生产语义召回改为 openai，并配置 spring.ai.openai.embedding.*。
+    embedding-provider: ${VATICA_KNOWLEDGE_EMBEDDING_PROVIDER:local-hash}
+    vector-dimensions: ${VATICA_KNOWLEDGE_VECTOR_DIMENSIONS:1536}
+    max-document-bytes: 5242880
+    chunk-size: 800
+    chunk-overlap: 120
+    max-search-chars: 6000
   # ===== 模型选择器（迭代 7 I7-5）=====
   # 主模型 DeepSeek 走 spring.ai.openai.*；备用模型通义千问（OpenAI 兼容）：
   #   setx QWEN_API_KEY <你的通义Key> 后重启，前端模型选择器即可切换

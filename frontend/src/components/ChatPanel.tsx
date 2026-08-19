@@ -17,6 +17,7 @@ import {
 } from "antd";
 import {
   ApiOutlined,
+  BookOutlined,
   CheckCircleOutlined,
   CloudOutlined,
   CopyOutlined,
@@ -67,6 +68,7 @@ import AuthPanel from "./AuthPanel";
 import UserModelsPanel from "./UserModelsPanel";
 import IntegrationSettingsPanel from "./IntegrationSettingsPanel";
 import PersonalWorkspacePanel from "./PersonalWorkspacePanel";
+import KnowledgePanel from "./KnowledgePanel";
 
 /**
  * 中栏：对话区（迭代 6 I6-4/I6-5；迭代 12 I12-2/I12-3 体验升级）——
@@ -140,6 +142,7 @@ export default function ChatPanel({
   const [userModelsOpen, setUserModelsOpen] = useState(false);
   const [integrationOpen, setIntegrationOpen] = useState(false);
   const [personalWorkspaceOpen, setPersonalWorkspaceOpen] = useState(false);
+  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
   const [permissionRequests, setPermissionRequests] = useState<FilePermissionRequest[]>([]);
   const [permissionDeciding, setPermissionDeciding] = useState(false);
   const [permissionRemember, setPermissionRemember] = useState(true);
@@ -167,6 +170,7 @@ export default function ChatPanel({
         { key: "auth", icon: <UserOutlined />, label: "账号" },
         { key: "user-models", icon: <RobotOutlined />, label: "我的模型" },
         { key: "workspace", icon: <CloudOutlined />, label: "个人工作台" },
+        { key: "knowledge", icon: <BookOutlined />, label: "知识库" },
       ],
     },
     {
@@ -185,6 +189,7 @@ export default function ChatPanel({
     if (key === "auth") setAuthOpen(true);
     if (key === "user-models") setUserModelsOpen(true);
     if (key === "workspace") setPersonalWorkspaceOpen(true);
+    if (key === "knowledge") setKnowledgeOpen(true);
     if (key === "models") setSettingsOpen(true);
     if (key === "permissions") setPermissionSettingsOpen(true);
     if (key === "integrations") setIntegrationOpen(true);
@@ -556,6 +561,10 @@ export default function ChatPanel({
       <PersonalWorkspacePanel
         open={personalWorkspaceOpen}
         onClose={() => setPersonalWorkspaceOpen(false)}
+      />
+      <KnowledgePanel
+        open={knowledgeOpen}
+        onClose={() => setKnowledgeOpen(false)}
       />
       <FilePermissionSettings
         open={permissionSettingsOpen}

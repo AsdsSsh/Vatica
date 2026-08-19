@@ -55,7 +55,9 @@ public class PlannerAgent {
             5. 每个步骤必须从"当前可用角色"中选择 agent；一个步骤需要跨角色工具时拆成有依赖关系的多个步骤；
             6. 不要发明不存在的工具，只使用"当前可用工具"清单里的工具；
             7. 涉及用户指定的具体文件路径时，步骤描述里直接使用该路径（先 list_files 确认存在性也是可以的）；
-               未授权目录会在执行时自动触发用户授权弹窗，因此**永远不要要求用户手动添加授权目录或修改权限设置**。""";
+               未授权目录会在执行时自动触发用户授权弹窗，因此**永远不要要求用户手动添加授权目录或修改权限设置**；
+            8. 基于知识库生成文档时，先安排 research 调用 search_knowledge_base 并保留引用，
+               再安排依赖该步骤的 document 生成文档。""";
 
     private static final String REVISE_SYSTEM_PROMPT = """
             你是任务规划 Agent。上一轮计划执行后质量评测不合格，请根据反馈修订计划，只输出一个 JSON 对象
@@ -205,7 +207,7 @@ public class PlannerAgent {
         if (tools.isEmpty()) {
             tools = List.of("read_file", "write_file", "list_files", "calculator", "text_stats",
                     "create_word_report", "create_excel_stats", "calendar_*", "todo_*", "mail_*",
-                    "list_workspace_roots");
+                    "list_workspace_roots", "search_knowledge_base");
         }
         return "\n当前可用工具：" + String.join(" / ", tools) + "。";
     }
