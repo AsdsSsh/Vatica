@@ -46,21 +46,29 @@ public class SkillCatalogService {
     }
 
     public record SkillVersionView(String version, boolean active, boolean latest, List<String> tools,
-            List<String> permissions, String releasedAt, String checksum) {
+            List<String> permissions, SkillResourceLimits limits, String releasedAt, String checksum) {
     }
 
     public record SkillView(String id, String displayName, String description, String agentRole,
             String activeVersion, String latestVersion, String previousVersion, boolean enabled,
             boolean manageable, boolean canRollback, long revision, String updatedAt,
-            List<String> tools, List<String> permissions, List<SkillVersionView> versions) {
+            List<String> tools, List<String> permissions, SkillResourceLimits limits,
+            List<SkillVersionView> versions) {
     }
 
     /** 20B 交给运行时的不可变快照；不包含身份、审批或业务状态。 */
     public record ExecutionProfile(String id, String version, String displayName, String agentRole,
-            List<String> tools, List<String> permissions, String entryPrompt) {
+            List<String> tools, List<String> permissions, String entryPrompt, SkillResourceLimits limits) {
         public ExecutionProfile {
             tools = List.copyOf(tools);
             permissions = List.copyOf(permissions);
+            limits = limits == null ? SkillResourceLimits.forTools(tools) : limits;
+        }
+
+        public ExecutionProfile(String id, String version, String displayName, String agentRole,
+                List<String> tools, List<String> permissions, String entryPrompt) {
+            this(id, version, displayName, agentRole, tools, permissions, entryPrompt,
+                    SkillResourceLimits.forTools(tools));
         }
     }
 
@@ -213,6 +221,7 @@ public class SkillCatalogService {
     }
 
     private void validate(SkillManifest manifest, Set<String> availableTools) {
+        SkillCapabilityPolicy.validate(manifest);
         if (!agentRegistry.normalizeId(manifest.agentRole()).equals(manifest.agentRole())) {
             throw new IllegalStateException("操作失败：Skill " + manifest.id() + " 声明了未知 Agent 角色 "
                     + manifest.agentRole() + "。");
@@ -248,14 +257,15 @@ public class SkillCatalogService {
         List<SkillVersionView> releaseViews = releases.stream().map(value -> new SkillVersionView(
                 value.getVersion(), value.getVersion().equals(active.getVersion()),
                 value.getVersion().equals(latest.getVersion()),
-                sorted(value.getTools()), sorted(value.getPermissions()), value.getReleasedAt().toString(),
+                sorted(value.getTools()), sorted(value.getPermissions()),
+                SkillResourceLimits.forTools(value.getTools()), value.getReleasedAt().toString(),
                 value.getChecksum())).toList();
         return new SkillView(installation.getSkillId(), active.getDisplayName(), active.getDescription(),
                 active.getAgentRole(), active.getVersion(), latest.getVersion(), installation.getPreviousVersion(),
                 installation.isEnabled(), manageable(RequestIdentityContext.require()),
                 installation.getPreviousVersion() != null, installation.getRevision(),
                 installation.getUpdatedAt().toString(), sorted(active.getTools()), sorted(active.getPermissions()),
-                releaseViews);
+                SkillResourceLimits.forTools(active.getTools()), releaseViews);
     }
 
     private static Map<String, List<SkillVersionRecord>> group(List<SkillVersionRecord> releases) {
@@ -305,7 +315,7 @@ public class SkillCatalogService {
     private static ExecutionProfile profile(SkillVersionRecord release) {
         return new ExecutionProfile(release.getSkillId(), release.getVersion(), release.getDisplayName(),
                 release.getAgentRole(), sorted(release.getTools()), sorted(release.getPermissions()),
-                release.getEntryPrompt());
+                release.getEntryPrompt(), SkillResourceLimits.forTools(release.getTools()));
     }
 
     private static void requireIdentity(RequestIdentity identity) {

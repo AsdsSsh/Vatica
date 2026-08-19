@@ -12,6 +12,7 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from "antd";
 import {
@@ -814,7 +815,7 @@ export default function StepPanel() {
         open={traceOpen}
         onCancel={() => setTraceOpen(false)}
         footer={<Button onClick={() => setTraceOpen(false)}>关闭</Button>}
-        width={860}
+        width={1040}
       >
         <Table<AgentTraceView>
           size="small"
@@ -838,6 +839,16 @@ export default function StepPanel() {
             {
               title: "工具", dataIndex: "toolName", width: 130,
               render: (v: string) => <Typography.Text className="vatica-mono" style={{ fontSize: 12 }}>{v}</Typography.Text>,
+            },
+            {
+              title: "Skill", dataIndex: "skillId", width: 160,
+              render: (v: string | null, r: AgentTraceView) => v ? (
+                <Tooltip title={r.skillPermissions.join(" · ") || undefined}>
+                  <Typography.Text className="vatica-mono" style={{ fontSize: 11 }}>
+                    {v}@{r.skillVersion}
+                  </Typography.Text>
+                </Tooltip>
+              ) : "-",
             },
             {
               title: "状态", dataIndex: "status", width: 80,

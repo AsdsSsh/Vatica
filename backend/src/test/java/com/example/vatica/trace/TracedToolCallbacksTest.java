@@ -27,7 +27,9 @@ class TracedToolCallbacksTest {
     }
 
     private static TraceContext.Snapshot taskTrace() {
-        return new TraceContext.Snapshot("trace-2", "task:1:1:t1", "t1", 3, 1L, 1L, true);
+        return new TraceContext.Snapshot("trace-2", "task:1:1:t1", "t1", 3, 1L, 1L, true,
+                "research", "研究分析 Agent", "knowledge-research", "1.1.0",
+                java.util.List.of("knowledge:read", "citation:read"));
     }
 
     private static ToolCallback delegate(String name, String result) {
@@ -68,12 +70,33 @@ class TracedToolCallbacksTest {
         assertThat(saved.getTaskId()).isEqualTo("t1");
         assertThat(saved.getStepId()).isEqualTo(3);
         assertThat(saved.getTraceId()).isEqualTo("trace-2");
+        assertThat(saved.getUserId()).isEqualTo(1L);
+        assertThat(saved.getOrgId()).isEqualTo(1L);
+        assertThat(saved.getAgentId()).isEqualTo("research");
+        assertThat(saved.getSkillId()).isEqualTo("knowledge-research");
+        assertThat(saved.getSkillVersion()).isEqualTo("1.1.0");
+        assertThat(saved.getSkillPermissions()).containsExactly("citation:read", "knowledge:read");
         assertThat(saved.getToolName()).isEqualTo("mail_query");
         assertThat(saved.getStatus()).isEqualTo(AgentTraceRecord.STATUS_SUCCESS);
         assertThat(saved.getInputSummary()).doesNotContain("p-secret").contains("\"password\":\"***\"");
         assertThat(saved.getOutputSummary()).isEqualTo("收件箱 3 封未读");
         assertThat(saved.getOutputLength()).isGreaterThan(0);
         assertThat(saved.getDurationMs()).isGreaterThanOrEqualTo(0);
+    }
+
+    @Test
+    void skillOutputLimitKeepsOriginalLengthInAudit() {
+        ToolCallback delegate = delegate("search_knowledge_base", "x".repeat(7_000));
+        AgentTraceRecordRepository repository = mock(AgentTraceRecordRepository.class);
+        ToolCallback wrapped = new TracedToolCallbacks(mapper, repository)
+                .wrap(new ToolCallback[] { delegate }, taskTrace(), 6_000)[0];
+
+        String modelVisible = wrapped.call("{}");
+
+        assertThat(modelVisible).hasSize(6_000).contains("Skill 工具输出已按 6000 字符上限截断");
+        ArgumentCaptor<AgentTraceRecord> captor = ArgumentCaptor.forClass(AgentTraceRecord.class);
+        verify(repository).save(captor.capture());
+        assertThat(captor.getValue().getOutputLength()).isEqualTo(7_000);
     }
 
     @Test

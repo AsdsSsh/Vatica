@@ -20,7 +20,7 @@ const roleNames: Record<string, string> = {
   general: "通用",
 };
 
-/** 迭代 20A：内置 Skill 目录、组织级启停与版本生命周期。 */
+/** 迭代 20A/20D：内置 Skill 生命周期、权限能力和资源额度。 */
 export default function SkillManagementPanel({ open, onClose }: Props) {
   const { message } = App.useApp();
   const [skills, setSkills] = useState<SkillView[]>([]);
@@ -111,6 +111,12 @@ export default function SkillManagementPanel({ open, onClose }: Props) {
               <Flex gap={6} wrap>
                 <Typography.Text type="secondary">权限</Typography.Text>
                 {skill.permissions.map((permission) => <Tag color="gold" key={permission}>{permission}</Tag>)}
+              </Flex>
+              <Flex gap={6} wrap>
+                <Typography.Text type="secondary">资源额度</Typography.Text>
+                <Tag>推理 {skill.limits.maxIterations} 轮</Tag>
+                <Tag>工具 {skill.limits.maxToolCalls} 次</Tag>
+                <Tag>输出 {skill.limits.maxOutputChars} 字符</Tag>
               </Flex>
             </Space>
           ),

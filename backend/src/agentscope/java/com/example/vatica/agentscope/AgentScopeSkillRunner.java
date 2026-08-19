@@ -72,7 +72,7 @@ final class AgentScopeSkillRunner {
                 .sysPrompt(systemPrompt(role, skill))
                 .model(modelFactory.apply(request.modelSlot()))
                 .toolkit(toolkit)
-                .maxIters(8)
+                .maxIters(skill.limits().maxIterations())
                 .defaultSessionId(request.sessionId())
                 .generateOptions(GenerateOptions.builder().reasoningEffort("none")
                         .toolChoice(new ToolChoice.Auto()).build())
@@ -118,9 +118,12 @@ final class AgentScopeSkillRunner {
                 当前 Skill：%s@%s（%s），角色：%s。
                 Skill 入口约束：%s
                 声明权限标签：%s。权限标签只用于治理和审计，不代表授予；实际授权以 Vatica 工具回调为准。
+                资源上限：推理轮次 %d，工具调用 %d 次，单次工具输出 %d 字符。
                 完成后优先输出 JSON：{"result":"结果","notes":[],"needHelp":null,"discoveries":[]}。
                 needHelp 只用于确实无法继续的求助，discoveries 最多提出 2 个必要补充步骤。
                 """.formatted(skill.id(), skill.version(), skill.displayName(), role.displayName(),
-                        skill.entryPrompt(), String.join(", ", skill.permissions())) + role.systemPrompt();
+                        skill.entryPrompt(), String.join(", ", skill.permissions()),
+                        skill.limits().maxIterations(), skill.limits().maxToolCalls(),
+                        skill.limits().maxOutputChars()) + role.systemPrompt();
     }
 }

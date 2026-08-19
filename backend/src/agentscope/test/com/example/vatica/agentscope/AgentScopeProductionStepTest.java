@@ -125,6 +125,7 @@ class AgentScopeProductionStepTest {
         assertThat(seenTools.get()).extracting(ToolSchema::getName)
                 .containsExactly("create_word_report");
         assertThat(seenConversation.get()).contains("document-delivery@1.0.0", "只生成已确认的 Word 内容",
+                "资源上限：推理轮次 3，工具调用 2 次，单次工具输出 6000 字符",
                 "生成周报", "数据已核验", "补齐来源", "生成 Word 报告");
     }
 

@@ -63,14 +63,19 @@ public final class TracedToolCallbacks {
     }
 
     public ToolCallback[] wrap(ToolCallback[] callbacks, TraceContext.Snapshot trace) {
+        return wrap(callbacks, trace, com.example.vatica.tool.ToolResultPolicy.MAX_OUTPUT_CHARS);
+    }
+
+    /** 迭代 20D：在保留原始 outputLength 的同时，按 Skill 额度收窄模型可见输出。 */
+    public ToolCallback[] wrap(ToolCallback[] callbacks, TraceContext.Snapshot trace, int maxOutputChars) {
         ToolCallback[] wrapped = new ToolCallback[callbacks.length];
         for (int i = 0; i < callbacks.length; i++) {
-            wrapped[i] = wrapOne(callbacks[i], trace);
+            wrapped[i] = wrapOne(callbacks[i], trace, maxOutputChars);
         }
         return wrapped;
     }
 
-    private ToolCallback wrapOne(ToolCallback delegate, TraceContext.Snapshot trace) {
+    private ToolCallback wrapOne(ToolCallback delegate, TraceContext.Snapshot trace, int maxOutputChars) {
         return new ToolCallback() {
             @Override
             public ToolDefinition getToolDefinition() {
@@ -86,7 +91,7 @@ public final class TracedToolCallbacks {
                 try {
                     String out = delegate.call(toolInput);
                     // 迭代 15 I15-10：超限输出先按预算截断再交给模型；trace 记录原始长度
-                    String modelVisible = com.example.vatica.tool.ToolResultPolicy.limit(out);
+                    String modelVisible = com.example.vatica.tool.ToolResultPolicy.limit(out, maxOutputChars);
                     long durationMs = (System.nanoTime() - start) / 1_000_000;
                     String outputSummary = TraceSanitizer.outputSummary(modelVisible, null);
                     int outputLength = out.length();
@@ -117,7 +122,8 @@ public final class TracedToolCallbacks {
         try {
             traceRepository.save(new AgentTraceRecord(UUID.randomUUID().toString(),
                     trace.userId(), trace.orgId(), trace.taskId(), trace.stepId(), trace.traceId(),
-                    trace.agentId(), trace.role(), tool, inputSummary, outputSummary, outputLength, durationMs, status,
+                    trace.agentId(), trace.role(), tool, inputSummary, outputSummary,
+                    trace.skillId(), trace.skillVersion(), trace.skillPermissions(), outputLength, durationMs, status,
                     error));
         } catch (Exception e) {
             // 观测数据可丢，业务不因 trace 写失败而失败（迭代 15 既定：观测不阻塞业务）
@@ -174,6 +180,11 @@ public final class TracedToolCallbacks {
         }
         if (trace.role() != null) {
             payload.put("role", trace.role());
+        }
+        if (trace.skillId() != null) {
+            payload.put("skillId", trace.skillId());
+            payload.put("skillVersion", trace.skillVersion());
+            payload.put("skillPermissions", trace.skillPermissions());
         }
         return payload;
     }

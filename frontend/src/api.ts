@@ -990,12 +990,19 @@ export async function saveAgentBinding(request: {
 }
 
 /** 迭代 20A：后端 SkillCatalogService.SkillVersionView。 */
+export interface SkillResourceLimits {
+  maxIterations: number;
+  maxToolCalls: number;
+  maxOutputChars: number;
+}
+
 export interface SkillVersionView {
   version: string;
   active: boolean;
   latest: boolean;
   tools: string[];
   permissions: string[];
+  limits: SkillResourceLimits;
   releasedAt: string;
   checksum: string;
 }
@@ -1016,6 +1023,7 @@ export interface SkillView {
   updatedAt: string;
   tools: string[];
   permissions: string[];
+  limits: SkillResourceLimits;
   versions: SkillVersionView[];
 }
 
@@ -1267,6 +1275,9 @@ export interface AgentTraceView {
   traceId: string;
   agentId: string | null;
   role: string | null;
+  skillId: string | null;
+  skillVersion: string | null;
+  skillPermissions: string[];
   toolName: string;
   inputSummary: string;
   outputSummary: string;

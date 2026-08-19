@@ -1,6 +1,8 @@
 package com.example.vatica.trace;
 
 import java.time.Instant;
+import java.util.Arrays;
+import java.util.List;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -50,6 +52,16 @@ public class AgentTraceRecord {
     @Column(length = 64)
     private String role;
 
+    /** 迭代 20D：执行时固定的 Skill 发布版本与能力声明。旧 trace 允许为空。 */
+    @Column(name = "skill_id", length = 64)
+    private String skillId;
+
+    @Column(name = "skill_version", length = 32)
+    private String skillVersion;
+
+    @Column(name = "skill_permissions", length = 1000)
+    private String skillPermissions;
+
     @Column(nullable = false, length = 128)
     private String toolName;
 
@@ -83,12 +95,20 @@ public class AgentTraceRecord {
             String traceId, String toolName, String inputSummary, String outputSummary,
             int outputLength, long durationMs, String status, String error) {
         this(id, userId, orgId, taskId, stepId, traceId, null, null, toolName, inputSummary, outputSummary,
-                outputLength, durationMs, status, error);
+                null, null, List.of(), outputLength, durationMs, status, error);
     }
 
     public AgentTraceRecord(String id, Long userId, Long orgId, String taskId, Integer stepId,
             String traceId, String agentId, String role, String toolName, String inputSummary,
             String outputSummary, int outputLength, long durationMs, String status, String error) {
+        this(id, userId, orgId, taskId, stepId, traceId, agentId, role, toolName, inputSummary,
+                outputSummary, null, null, List.of(), outputLength, durationMs, status, error);
+    }
+
+    public AgentTraceRecord(String id, Long userId, Long orgId, String taskId, Integer stepId,
+            String traceId, String agentId, String role, String toolName, String inputSummary,
+            String outputSummary, String skillId, String skillVersion, List<String> skillPermissions,
+            int outputLength, long durationMs, String status, String error) {
         this.id = id;
         this.userId = userId;
         this.orgId = orgId;
@@ -97,6 +117,11 @@ public class AgentTraceRecord {
         this.traceId = traceId;
         this.agentId = agentId;
         this.role = role;
+        this.skillId = skillId;
+        this.skillVersion = skillVersion;
+        this.skillPermissions = skillPermissions == null || skillPermissions.isEmpty() ? null
+                : skillPermissions.stream().sorted().distinct()
+                        .reduce((left, right) -> left + "," + right).orElse(null);
         this.toolName = toolName;
         this.inputSummary = inputSummary;
         this.outputSummary = outputSummary;
@@ -143,6 +168,19 @@ public class AgentTraceRecord {
 
     public String getRole() {
         return role;
+    }
+
+    public String getSkillId() {
+        return skillId;
+    }
+
+    public String getSkillVersion() {
+        return skillVersion;
+    }
+
+    public List<String> getSkillPermissions() {
+        return skillPermissions == null || skillPermissions.isBlank() ? List.of()
+                : Arrays.stream(skillPermissions.split(",")).toList();
     }
 
     public String getToolName() {

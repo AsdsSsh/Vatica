@@ -55,6 +55,9 @@ class SkillCatalogServiceTest {
         assertThat(knowledge.latestVersion()).isEqualTo("1.1.0");
         assertThat(knowledge.versions()).extracting(SkillCatalogService.SkillVersionView::version)
                 .containsExactly("1.1.0", "1.0.0");
+        assertThat(knowledge.limits()).isEqualTo(SkillResourceLimits.forTools(knowledge.tools()));
+        assertThat(knowledge.versions()).allSatisfy(version ->
+                assertThat(version.limits()).isEqualTo(SkillResourceLimits.forTools(version.tools())));
     }
 
     @Test
@@ -106,6 +109,32 @@ class SkillCatalogServiceTest {
         service.disable("knowledge-research");
         assertThatThrownBy(() -> service.resolveForExecution(identity, "research", pinned.id(), pinned.version()))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("已停用");
+    }
+
+    @Test
+    void failedActivationLeavesLifecycleStateUntouched() {
+        service.catalog();
+
+        assertThatThrownBy(() -> service.activate("knowledge-research", "9.9.9"))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("不存在版本");
+
+        var current = skill(service.catalog(), "knowledge-research");
+        assertThat(current.activeVersion()).isEqualTo("1.1.0");
+        assertThat(current.previousVersion()).isNull();
+    }
+
+    @Test
+    void rollbackChangesNewDefaultButKeepsPinnedReleaseExecutable() {
+        RequestIdentity identity = identity(7L, 9L, "ORG_ADMIN");
+        service.catalog();
+        service.activate("knowledge-research", "1.0.0");
+        var pinned = service.resolveForExecution(identity, "research", null, null).orElseThrow();
+
+        assertThat(service.rollback("knowledge-research").activeVersion()).isEqualTo("1.1.0");
+        assertThat(service.resolveForExecution(identity, "research", null, null).orElseThrow().version())
+                .isEqualTo("1.1.0");
+        assertThat(service.resolveForExecution(identity, "research", pinned.id(), pinned.version())
+                .orElseThrow().version()).isEqualTo("1.0.0");
     }
 
     private static SkillCatalogService.SkillView skill(

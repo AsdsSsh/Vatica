@@ -1,5 +1,7 @@
 package com.example.vatica.trace;
 
+import java.util.List;
+
 /**
  * 工具调用 trace 上下文（迭代 15 I15-1）：
  * 控制器/任务执行在构建请求前写入，包装器在构建 ToolCallback 时捕获为不可变快照，
@@ -24,11 +26,24 @@ public final class TraceContext {
      * @param persist  true=落 agent_trace 表（任务）；false=仅 SSE 可见（聊天）
      */
     public record Snapshot(String traceId, String channel, String taskId, Integer stepId,
-            Long userId, Long orgId, boolean persist, String agentId, String role) {
+            Long userId, Long orgId, boolean persist, String agentId, String role,
+            String skillId, String skillVersion, List<String> skillPermissions) {
+        public Snapshot {
+            skillPermissions = skillPermissions == null ? List.of() : List.copyOf(skillPermissions);
+        }
+
         /** 旧聊天/测试构造器兼容：无任务角色时保持 null。 */
         public Snapshot(String traceId, String channel, String taskId, Integer stepId,
                 Long userId, Long orgId, boolean persist) {
-            this(traceId, channel, taskId, stepId, userId, orgId, persist, null, null);
+            this(traceId, channel, taskId, stepId, userId, orgId, persist,
+                    null, null, null, null, List.of());
+        }
+
+        /** 迭代 17C 构造器兼容：没有 Skill 时审计字段为空。 */
+        public Snapshot(String traceId, String channel, String taskId, Integer stepId,
+                Long userId, Long orgId, boolean persist, String agentId, String role) {
+            this(traceId, channel, taskId, stepId, userId, orgId, persist,
+                    agentId, role, null, null, List.of());
         }
     }
 

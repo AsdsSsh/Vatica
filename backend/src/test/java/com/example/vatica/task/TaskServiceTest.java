@@ -80,6 +80,9 @@ class TaskServiceTest {
     @BeforeEach
     void setUp() {
         RequestIdentityContext.set(TEST_IDENTITY);
+        TaskService target = AopTestUtils.getUltimateTargetObject(taskService);
+        ReflectionTestUtils.setField(target, "reliability",
+                new TaskReliabilityProperties(TaskReliabilityProperties.DEFAULT_STEP_TIMEOUT));
         repository.deleteAll();
         when(plannerAgent.plan("目标")).thenReturn(twoStepPlan());
         // 迭代 15 I15-2：默认重规划回退旧计划（非法/未 mock 时不改变任务目标）

@@ -175,6 +175,7 @@ curl localhost:8080/api/task
 - **知识库**（迭代 19B）：桌面端“设置 → 知识库”可导入已授权工作区内的 `.txt/.md/.docx`，按“仅自己/组织共享”检索并返回 `C1/C2` 引用和原文偏移。默认 `local-hash` Embedding 用于离线学习；生产语义检索设置 `VATICA_KNOWLEDGE_EMBEDDING_PROVIDER=openai`，并配置 `SPRING_AI_OPENAI_EMBEDDING_API_KEY`、`SPRING_AI_OPENAI_EMBEDDING_BASE_URL`、`SPRING_AI_OPENAI_EMBEDDING_OPTIONS_MODEL`。模型向量维度必须与 `VATICA_KNOWLEDGE_VECTOR_DIMENSIONS` 一致。
 - **Skills**（迭代 20A/20B）：桌面端“设置 → Skills”展示内置 Skill 目录；组织管理员可启停、切换发布版本和一键回滚。发布清单来自 `backend/src/main/resources/vatica-skills/`，注册时校验 Agent 角色、工具是否存在及角色工具白名单。任务计划会固定 `skillId@version`；AgentScope SkillRunner 只注册“既有授权工具 ∩ manifest 工具”，升级影响新任务，已创建任务继续使用固定版本，停用会阻断后续执行。
 - **Planner/Judge AgentScope 建议层**（迭代 20C）：AgentScope 负责生成计划、协作重规划和评分卡原始 JSON，不注册工具；Vatica 继续负责 schema、角色/依赖、Skill 固定、评分阈值、返工预算和状态转换。`VATICA_AGENT_RUNTIME=legacy` 可即时回退既有 Spring AI 链路。回归：后端 416 项通过、2 项按条件跳过，前端 `npm run build` 通过。
+- **Skill 权限与审计收口**（迭代 20D）：Vatica 以能力词表机械校验 manifest，并在运行时执行“用户授权 ∩ Agent 白名单 ∩ Skill 工具声明”、固定版本资源上限（推理轮次/工具次数/单次输出）和文件沙箱；AgentScope 与 Legacy 均不能绕过。工具 trace 补齐租户、用户、Agent、Skill 版本和权限声明，Skill 页面可查看资源额度。生命周期失败不改状态，回滚只切换新任务默认版本，已固定发布仍可复现。回归：后端 427 项通过、2 项按条件跳过，前端 `npm run build` 通过。
 - 会话记忆已持久化：多轮对话重启后仍可引用前文（内存滑窗热缓存 + PostgreSQL 落库）
 
 ### 迭代 5.5：质量闭环（LLM-as-Judge 评分 + 自动/人工返工）

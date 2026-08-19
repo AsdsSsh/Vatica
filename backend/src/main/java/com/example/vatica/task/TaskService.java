@@ -58,6 +58,7 @@ import com.example.vatica.runtime.AgentRuntimeProperties;
 import com.example.vatica.runtime.AgentToolCatalog;
 import com.example.vatica.skill.SkillCatalogService;
 import com.example.vatica.skill.SkillCatalogService.ExecutionProfile;
+import com.example.vatica.skill.SkillExecutionPolicy;
 import com.example.vatica.task.TaskPlan.TaskStep;
 import com.example.vatica.trace.AgentTraceRecord;
 import com.example.vatica.trace.AgentTraceRecordRepository;
@@ -814,8 +815,6 @@ public class TaskService {
             ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
                     agentTools::callbacks, policy, TenantChannels.task(identity, record.getId()), identity,
                     ephemeralMailCredentials.get(record.getId()));
-            // 迭代 15 I15-3：retryable 工具错误重试 1 次（权限最内层，重试也重新校验身份/权限）
-            callbacks = new RetryableToolCallbacks().wrap(callbacks);
             // 迭代 17A：角色工具白名单是机械门禁，位于 prompt 之外，模型无法请求未注册工具。
             var agent = agentRegistry.resolve(step.getAgent());
             step.setAgent(agent.id());
@@ -826,15 +825,24 @@ public class TaskService {
             if (skill != null) {
                 step.setSkillId(skill.id());
                 step.setSkillVersion(skill.version());
+                // 迭代 20D：Vatica 执行 manifest 工具交集、能力声明和资源额度。
+                callbacks = SkillExecutionPolicy.constrain(skill, callbacks);
             }
+            // 迭代 15 I15-3：retryable 工具错误重试 1 次；重试同样消耗 Skill/全局调用额度。
+            callbacks = new RetryableToolCallbacks().wrap(callbacks);
             // 迭代 17C：绑定链同时决定执行模型和观测维度；临时凭据只在本任务内优先。
             AgentModelBindingService.Resolution model = agentModelBindings.resolve(identity, agent.id(),
                     agent.modelCapability(), ephemeralCredentials.get(record.getId()));
             // 迭代 15 I15-1：权限包装在内层，trace 在最外层看到真实耗时与最终结果
             TraceContext.Snapshot trace = new TraceContext.Snapshot(UUID.randomUUID().toString(),
                     TenantChannels.task(identity, record.getId()), record.getId(), step.getId(),
-                    identity.userId(), identity.orgId(), true, agent.id(), agent.displayName());
-            callbacks = new TracedToolCallbacks(mapper, traceRepository).wrap(callbacks, trace);
+                    identity.userId(), identity.orgId(), true, agent.id(), agent.displayName(),
+                    skill == null ? null : skill.id(), skill == null ? null : skill.version(),
+                    skill == null ? List.of() : skill.permissions());
+            int maxOutputChars = skill == null ? com.example.vatica.tool.ToolResultPolicy.MAX_OUTPUT_CHARS
+                    : skill.limits().maxOutputChars();
+            callbacks = new TracedToolCallbacks(mapper, traceRepository)
+                    .wrap(callbacks, trace, maxOutputChars);
             boolean platformQuota = !"EPHEMERAL".equals(record.getModelSource());
             UsageContext.set(usageSnapshot(record, "EXECUTOR", step.getId(), "LOW",
                     contextBudget.executorTokens(), platformQuota, agent.id(), agent.displayName(), model.slot().id()));
@@ -1103,7 +1111,7 @@ public class TaskService {
             traceRepository.save(new AgentTraceRecord(UUID.randomUUID().toString(),
                     identity.userId(), identity.orgId(), record.getId(), step.getId(), trace.traceId(),
                     trace.agentId(), trace.role(), "executor.thinking", "执行步骤 " + step.getId(), summary,
-                    reasoning.length(), 0,
+                    trace.skillId(), trace.skillVersion(), trace.skillPermissions(), reasoning.length(), 0,
                     AgentTraceRecord.STATUS_SUCCESS, null));
         } catch (Exception e) {
             log.warn("思考摘要写入 agent_trace 失败：task={} step={}", record.getId(), step.getId(), e);

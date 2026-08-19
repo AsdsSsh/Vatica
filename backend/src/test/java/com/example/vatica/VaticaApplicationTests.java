@@ -62,4 +62,14 @@ class VaticaApplicationTests {
 				.andExpect(content().string(containsString("EvaluationReport")));
 	}
 
+	/** 迭代 20D：Skill 资源额度与执行审计字段进入前后端唯一契约。 */
+	@Test
+	void openApiContainsSkillGovernanceContract() throws Exception {
+		mvc.perform(get("/v3/api-docs"))
+				.andExpect(status().isOk())
+				.andExpect(content().string(containsString("SkillResourceLimits")))
+				.andExpect(content().string(containsString("maxToolCalls")))
+				.andExpect(content().string(containsString("skillPermissions")));
+	}
+
 }

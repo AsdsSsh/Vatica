@@ -30,8 +30,9 @@ public class TaskController {
 
     /** 迭代 15 I15-1：agent_trace 查询契约。 */
     public record AgentTraceView(String id, Integer stepId, String traceId, String agentId, String role,
-            String toolName, String inputSummary, String outputSummary, int outputLength, long durationMs,
-            String status, String error, String createdAt) {
+            String skillId, String skillVersion, List<String> skillPermissions, String toolName,
+            String inputSummary, String outputSummary, int outputLength, long durationMs, String status,
+            String error, String createdAt) {
     }
 
     /** 迭代 17B：HumanAgent 写入黑板的请求契约。 */
@@ -113,7 +114,8 @@ public class TaskController {
     }
 
     private static AgentTraceView traceView(AgentTraceRecord r) {
-        return new AgentTraceView(r.getId(), r.getStepId(), r.getTraceId(), r.getAgentId(), r.getRole(), r.getToolName(),
+        return new AgentTraceView(r.getId(), r.getStepId(), r.getTraceId(), r.getAgentId(), r.getRole(),
+                r.getSkillId(), r.getSkillVersion(), r.getSkillPermissions(), r.getToolName(),
                 r.getInputSummary(), r.getOutputSummary(), r.getOutputLength(), r.getDurationMs(),
                 r.getStatus(), r.getError(), r.getCreatedAt() == null ? null : r.getCreatedAt().toString());
     }

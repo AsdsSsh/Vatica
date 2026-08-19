@@ -30,4 +30,12 @@ class ToolResultPolicyTest {
     void nullBecomesEmpty() {
         assertThat(ToolResultPolicy.limit(null)).isEmpty();
     }
+
+    @Test
+    void skillSpecificLimitNeverExceedsDeclaredBudget() {
+        String limited = ToolResultPolicy.limit("x".repeat(7_000), 6_000);
+
+        assertThat(limited).hasSize(6_000)
+                .contains("Skill 工具输出已按 6000 字符上限截断", "原始 7000 字符");
+    }
 }
