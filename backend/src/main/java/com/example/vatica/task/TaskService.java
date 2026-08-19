@@ -259,7 +259,8 @@ public class TaskService {
                     "planner", "Planner"));
             try {
                 TaskPlan plan = plannerAgent.plan(goal.trim(),
-                        registry.ephemeralClient(credential, false, com.example.vatica.config.ReasoningMode.HIGH));
+                        registry.ephemeralClient(credential, false, com.example.vatica.config.ReasoningMode.HIGH),
+                        credential.toSlot());
                 bindSkills(plan, identity);
                 record.setPlanJson(toJson(plan));
             } finally {
@@ -746,8 +747,15 @@ public class TaskService {
         try {
             int remainingDiscoveries = Math.max(0,
                     TaskBlackboard.MAX_DISCOVERY_STEPS - plan.getDiscoveryStepCount());
-            decision = plannerAgent.resolveCollaboration(record.getGoal(), plan, signals,
-                    remainingDiscoveries, plannerClientFor(record));
+            decision = RequestIdentityContext.callWith(identityOf(record), () -> {
+                ChatClient client = plannerClientFor(record);
+                if ("EPHEMERAL".equals(record.getModelSource())) {
+                    return plannerAgent.resolveCollaboration(record.getGoal(), plan, signals,
+                            remainingDiscoveries, client, ephemeralCredentialFor(record).toSlot());
+                }
+                return plannerAgent.resolveCollaboration(record.getGoal(), plan, signals,
+                        remainingDiscoveries, client);
+            });
         } catch (RuntimeException e) {
             log.warn("任务 {} 协作 Planner 裁决失败，升级人工：{}", record.getId(), e.getMessage());
             decision = CollaborationDecision.unresolved("Planner 裁决失败：" + e.getMessage());
@@ -902,10 +910,7 @@ public class TaskService {
 
     private ChatClient clientFor(TaskRecord record, boolean withTools, ModelSlot selectedSlot) {
         if ("EPHEMERAL".equals(record.getModelSource())) {
-            EphemeralCredential credential = ephemeralCredentials.get(record.getId());
-            if (credential == null) {
-                throw new IllegalStateException("操作失败：本任务的临时模型凭据已失效（服务重启），请重新提交任务。");
-            }
+            EphemeralCredential credential = ephemeralCredentialFor(record);
             return registry.ephemeralClient(credential, false,
                     withTools ? com.example.vatica.config.ReasoningMode.LOW
                             : com.example.vatica.config.ReasoningMode.HIGH);
@@ -918,14 +923,19 @@ public class TaskService {
 
     private ChatClient plannerClientFor(TaskRecord record) {
         if ("EPHEMERAL".equals(record.getModelSource())) {
-            EphemeralCredential credential = ephemeralCredentials.get(record.getId());
-            if (credential == null) {
-                throw new IllegalStateException("操作失败：本任务的临时模型凭据已失效（服务重启），请重新提交任务。");
-            }
+            EphemeralCredential credential = ephemeralCredentialFor(record);
             return registry.ephemeralClient(credential, false,
                     com.example.vatica.config.ReasoningMode.HIGH);
         }
         return registry.plannerClient();
+    }
+
+    private EphemeralCredential ephemeralCredentialFor(TaskRecord record) {
+        EphemeralCredential credential = ephemeralCredentials.get(record.getId());
+        if (credential == null) {
+            throw new IllegalStateException("操作失败：本任务的临时模型凭据已失效（服务重启），请重新提交任务。");
+        }
+        return credential;
     }
 
     /** REVIEW 段：Judge 评分 → PASS 交付 DONE；FAIL 自动返工（限次）或超限 NEEDS_REVISION；评测异常 FAILED。 */
@@ -938,7 +948,15 @@ public class TaskService {
             UsageContext.set(usageSnapshot(record, "JUDGE", null, "HIGH", contextBudget.judgeTokens(),
                     !"EPHEMERAL".equals(record.getModelSource()), "judge", "Judge"));
             try {
-                eval = judgeAgent.evaluate(evaluationGoal(record), plan, clientFor(record, false));
+                TaskPlan evaluationPlan = plan;
+                eval = RequestIdentityContext.callWith(identityOf(record), () -> {
+                    ChatClient client = clientFor(record, false);
+                    if ("EPHEMERAL".equals(record.getModelSource())) {
+                        return judgeAgent.evaluate(evaluationGoal(record), evaluationPlan, client,
+                                ephemeralCredentialFor(record).toSlot());
+                    }
+                    return judgeAgent.evaluate(evaluationGoal(record), evaluationPlan, client);
+                });
             } finally {
                 UsageContext.clear();
             }
@@ -989,9 +1007,17 @@ public class TaskService {
             record.setLastFeedbackJson(toJsonObject(feedback));
             if (record.getPlanRevisionCount() < 1) {
                 // 第 1 次返工：让 Planner 针对失败步骤重规划（限 1 次）；解析失败回退旧计划
-                TaskPlan revised = plannerAgent.revise(record.getGoal(), plan, feedback);
+                TaskPlan previousPlan = plan;
+                TaskPlan revised = RequestIdentityContext.callWith(identityOf(record), () -> {
+                    if ("EPHEMERAL".equals(record.getModelSource())) {
+                        return plannerAgent.revise(record.getGoal(), previousPlan, feedback,
+                                plannerClientFor(record), ephemeralCredentialFor(record).toSlot());
+                    }
+                    return plannerAgent.revise(record.getGoal(), previousPlan, feedback);
+                });
                 record.setPlanRevisionCount(record.getPlanRevisionCount() + 1);
                 if (revised != plan) {
+                    bindSkills(revised, identityOf(record));
                     revised.setCollaborationRevisionCount(plan.getCollaborationRevisionCount());
                     revised.setDiscoveryStepCount(plan.getDiscoveryStepCount());
                     plan = revised;

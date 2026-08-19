@@ -3,6 +3,7 @@ package com.example.vatica.agentscope;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
@@ -16,6 +17,8 @@ import com.example.vatica.permission.FilePermissionPolicy;
 import com.example.vatica.permission.PermissionBoundToolCallbacks;
 import com.example.vatica.runtime.AgentRegistry;
 import com.example.vatica.runtime.AgentRuntime;
+import com.example.vatica.runtime.AgentRuntime.AdvisoryRequest;
+import com.example.vatica.runtime.AgentRuntime.AdvisoryResult;
 import com.example.vatica.trace.TraceSanitizer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -78,6 +81,44 @@ public class AgentScopeRuntime implements AgentRuntime {
     @Override
     public String name() {
         return "agentscope";
+    }
+
+    /** 迭代 20C：Planner/Judge 无工具建议；原始 JSON 必须回到 Vatica 做机械校验。 */
+    @Override
+    public Optional<AdvisoryResult> advise(AdvisoryRequest request) {
+        long start = System.nanoTime();
+        return RequestIdentityContext.callWith(request.identity(), () -> {
+            ModelSlot slot = request.modelSlot() == null
+                    ? registry.activeSlotFor(request.kind() == AdvisoryKind.JUDGE
+                            ? ModelSlot.CAP_JUDGE : ModelSlot.CAP_PLANNER)
+                    : request.modelSlot();
+            Toolkit toolkit = new Toolkit();
+            String agentName = "vatica-advisory-"
+                    + request.kind().name().toLowerCase(java.util.Locale.ROOT).replace('_', '-');
+            ReActAgent agent = ReActAgent.builder()
+                    .name(agentName)
+                    .sysPrompt(request.systemPrompt())
+                    .model(modelFactory.apply(slot))
+                    .toolkit(toolkit)
+                    .maxIters(1)
+                    .defaultSessionId(request.sessionId())
+                    .generateOptions(GenerateOptions.builder().reasoningEffort("high")
+                            .toolChoice(new ToolChoice.Auto()).build())
+                    .build();
+            try {
+                AgentReply reply = callAgent(agent, request.userPrompt(), request.identity(), request.sessionId());
+                ChatUsage usage = reply.usage();
+                StepUsage stepUsage = usage == null ? null : new StepUsage(
+                        usage.getInputTokens(), usage.getOutputTokens(), usage.getTotalTokens(),
+                        usage.getCachedTokens());
+                log.info("AgentScope advisory kind={} model={} tools={}",
+                        request.kind(), slot.id(), toolkit.getToolSchemas().size());
+                return Optional.of(new AdvisoryResult(reply.answer(),
+                        (System.nanoTime() - start) / 1_000_000, stepUsage));
+            } finally {
+                agent.close();
+            }
+        });
     }
 
     /** 迭代 17A：生产任务步骤入口。工具已由 Vatica 完成权限、重试、Trace 与角色裁剪。 */

@@ -2,6 +2,7 @@ package com.example.vatica.agent;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -17,7 +18,13 @@ import com.example.vatica.task.BlackboardEntry;
 import com.example.vatica.task.CollaborationDecision;
 import com.example.vatica.task.TaskPlan;
 import com.example.vatica.task.TaskPlan.TaskStep;
+import com.example.vatica.auth.RequestIdentity;
+import com.example.vatica.auth.RequestIdentityContext;
+import com.example.vatica.config.ModelSlot;
 import com.example.vatica.runtime.AgentRegistry;
+import com.example.vatica.runtime.AgentRuntime.AdvisoryKind;
+import com.example.vatica.runtime.AgentRuntime.AdvisoryRequest;
+import com.example.vatica.runtime.AgentRuntimeFactory;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -74,6 +81,7 @@ public class PlannerAgent {
     private final ObjectMapper mapper;
     private final ToolCallbackProvider toolProvider;
     private final AgentRegistry agentRegistry;
+    private final AgentRuntimeFactory runtimeFactory;
 
     public PlannerAgent(ChatClient plannerClient, ObjectMapper mapper) {
         this(plannerClient, mapper, null, new AgentRegistry());
@@ -87,31 +95,52 @@ public class PlannerAgent {
     /** 迭代 17A：角色清单来自 AgentRegistry，模型输出统一做合法化回退。 */
     public PlannerAgent(ChatClient plannerClient, ObjectMapper mapper, ToolCallbackProvider toolProvider,
             AgentRegistry agentRegistry) {
+        this(plannerClient, mapper, toolProvider, agentRegistry, null);
+    }
+
+    /** 迭代 20C：AgentScope 只提供原始建议，Planner 仍拥有全部结构与角色门禁。 */
+    public PlannerAgent(ChatClient plannerClient, ObjectMapper mapper, ToolCallbackProvider toolProvider,
+            AgentRegistry agentRegistry, AgentRuntimeFactory runtimeFactory) {
         this.plannerClient = plannerClient;
         this.mapper = mapper;
         this.toolProvider = toolProvider;
         this.agentRegistry = agentRegistry;
+        this.runtimeFactory = runtimeFactory;
     }
 
     /**
      * 规划：返回步骤计划（解析失败降级为单步计划）。
      */
     public TaskPlan plan(String goal) {
-        return plan(goal, plannerClient);
+        return plan(goal, plannerClient, null);
     }
 
     /** 迭代 13 I13-5：任务级临时/指定客户端规划（平台默认仍走注入客户端）。 */
     public TaskPlan plan(String goal, ChatClient client) {
+        return plan(goal, client, null);
+    }
+
+    /** 迭代 20C：临时凭据显式携带槽位；Legacy 路径仍使用传入的 ChatClient。 */
+    public TaskPlan plan(String goal, ChatClient client, ModelSlot modelSlot) {
         // 迭代 15 I15-6：结构化输出 schema 优先；供应商不支持/解析失败时回退正则降级
         String system = systemPrompt();
+        String raw = advisoryRaw(AdvisoryKind.PLAN, system, goal, modelSlot);
+        if (raw != null) {
+            TaskPlan advised = parse(raw);
+            if (advised == null) {
+                log.warn("AgentScope 规划建议无法解析，降级为单步计划。原始输出片段：{}", snippet(raw));
+                advised = fallbackPlan(goal);
+            }
+            return normalize(advised);
+        }
         TaskPlan structured = structuredPlan(client, system, goal);
         if (structured != null && !structured.getSteps().isEmpty()) {
             return normalize(structured);
         }
-        String raw = client.prompt().system(system).user(goal).call().content();
-        TaskPlan plan = parse(raw);
+        String legacyRaw = client.prompt().system(system).user(goal).call().content();
+        TaskPlan plan = parse(legacyRaw);
         if (plan == null) {
-            log.warn("规划输出无法解析，降级为单步计划。原始输出片段：{}", snippet(raw));
+            log.warn("规划输出无法解析，降级为单步计划。原始输出片段：{}", snippet(legacyRaw));
             plan = fallbackPlan(goal);
         }
         return normalize(plan);
@@ -123,18 +152,33 @@ public class PlannerAgent {
      * 解析失败返回上一轮计划本身（回退旧计划，不改变目标/不扩大范围）。
      */
     public TaskPlan revise(String goal, TaskPlan previous, ReflectionFeedback feedback) {
+        return revise(goal, previous, feedback, plannerClient, null);
+    }
+
+    /** 迭代 20C：重规划同样只接受 AgentScope 建议，不允许运行时直接替换业务计划。 */
+    public TaskPlan revise(String goal, TaskPlan previous, ReflectionFeedback feedback,
+            ChatClient client, ModelSlot modelSlot) {
         String revisePrompt = REVISE_SYSTEM_PROMPT + roleListSuffix() + toolListSuffix();
-        TaskPlan structured = structuredPlan(plannerClient, revisePrompt,
-                reviseUserPrompt(goal, previous, feedback));
+        String user = reviseUserPrompt(goal, previous, feedback);
+        String raw = advisoryRaw(AdvisoryKind.PLAN_REVISION, revisePrompt, user, modelSlot);
+        if (raw != null) {
+            TaskPlan advised = parse(raw);
+            if (advised == null) {
+                log.warn("AgentScope 重规划建议无法解析，回退旧计划。原始输出片段：{}", snippet(raw));
+                return previous;
+            }
+            return normalize(advised);
+        }
+        TaskPlan structured = structuredPlan(client, revisePrompt, user);
         if (structured != null && !structured.getSteps().isEmpty()) {
             return normalize(structured);
         }
-        String raw = plannerClient.prompt().system(revisePrompt)
-                .user(reviseUserPrompt(goal, previous, feedback))
+        String legacyRaw = client.prompt().system(revisePrompt)
+                .user(user)
                 .call().content();
-        TaskPlan revised = parse(raw);
+        TaskPlan revised = parse(legacyRaw);
         if (revised == null) {
-            log.warn("重规划输出无法解析，回退旧计划。原始输出片段：{}", snippet(raw));
+            log.warn("重规划输出无法解析，回退旧计划。原始输出片段：{}", snippet(legacyRaw));
             return previous;
         }
         return normalize(revised);
@@ -152,6 +196,12 @@ public class PlannerAgent {
     /** 请求级模型凭据版本，EPHEMERAL 任务不会在协作重规划时意外切回平台模型。 */
     public CollaborationDecision resolveCollaboration(String goal, TaskPlan plan,
             List<BlackboardEntry> signals, int maxDiscoveries, ChatClient client) {
+        return resolveCollaboration(goal, plan, signals, maxDiscoveries, client, null);
+    }
+
+    /** 迭代 20C：协作裁决仍由 TaskBlackboard 做可修改范围、依赖和预算校验。 */
+    public CollaborationDecision resolveCollaboration(String goal, TaskPlan plan,
+            List<BlackboardEntry> signals, int maxDiscoveries, ChatClient client, ModelSlot modelSlot) {
         String system = """
                 你是 Vatica 协作 Planner。任务已经开始执行，收到 Worker 的 need-help 或 conflict 信号。
                 只在未完成步骤范围内做最小调整，不得改变原始目标，不得删除已完成步骤，不得引入自由对话。
@@ -163,6 +213,15 @@ public class PlannerAgent {
                 "discoveries":[]}
                 """.formatted(Math.max(0, maxDiscoveries)) + roleListSuffix() + toolListSuffix();
         String user = collaborationUserPrompt(goal, plan, signals);
+        String advisedRaw = advisoryRaw(AdvisoryKind.COLLABORATION, system, user, modelSlot);
+        if (advisedRaw != null) {
+            CollaborationDecision advised = parseCollaboration(advisedRaw);
+            if (advised != null) {
+                return advised;
+            }
+            log.warn("AgentScope 协作建议无法解析，升级人工。原始输出片段：{}", snippet(advisedRaw));
+            return CollaborationDecision.unresolved("Planner 无法可靠裁决，请人工仲裁。");
+        }
         try {
             CollaborationDecision structured = client.prompt().system(system).user(user)
                     .call().entity(CollaborationDecision.class);
@@ -174,9 +233,9 @@ public class PlannerAgent {
         }
         try {
             String raw = client.prompt().system(system).user(user).call().content();
-            Matcher matcher = JSON_BLOCK.matcher(raw == null ? "" : raw);
-            if (matcher.find()) {
-                return mapper.readValue(matcher.group(), CollaborationDecision.class);
+            CollaborationDecision parsed = parseCollaboration(raw);
+            if (parsed != null) {
+                return parsed;
             }
         } catch (Exception e) {
             log.warn("协作裁决输出无法解析，升级人工：{}", e.getMessage());
@@ -212,10 +271,31 @@ public class PlannerAgent {
         return "\n当前可用工具：" + String.join(" / ", tools) + "。";
     }
 
+    private String advisoryRaw(AdvisoryKind kind, String system, String user, ModelSlot modelSlot) {
+        RequestIdentity identity = RequestIdentityContext.current();
+        if (runtimeFactory == null || identity == null) {
+            return null;
+        }
+        return runtimeFactory.advise(new AdvisoryRequest(kind, system, user, identity, modelSlot,
+                "planner-" + kind.name().toLowerCase(java.util.Locale.ROOT) + "-" + UUID.randomUUID()))
+                .map(result -> result.content())
+                .orElse(null);
+    }
+
+    private CollaborationDecision parseCollaboration(String raw) {
+        try {
+            Matcher matcher = JSON_BLOCK.matcher(raw == null ? "" : raw);
+            return matcher.find() ? mapper.readValue(matcher.group(), CollaborationDecision.class) : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     /** Spring AI 结构化输出（JSON schema 优先）；任何异常/空结果都返回 null，由调用方正则降级。 */
-    private TaskPlan structuredPlan(ChatClient client, String system, String user) {        try {
+    private TaskPlan structuredPlan(ChatClient client, String system, String user) {
+        try {
             TaskPlan plan = client.prompt().system(system).user(user).call().entity(TaskPlan.class);
-            return plan == null || plan.getSteps() == null ? null : plan;
+            return validPlan(plan) ? plan : null;
         } catch (Exception e) {
             log.info("结构化输出不可用，回退正则解析：{}", e.getMessage());
             return null;
@@ -233,7 +313,7 @@ public class PlannerAgent {
         }
         try {
             TaskPlan plan = mapper.readValue(m.group(), TaskPlan.class);
-            return plan.getSteps() == null || plan.getSteps().isEmpty() ? null : plan;
+            return validPlan(plan) ? plan : null;
         } catch (JsonProcessingException e) {
             return null;
         }
@@ -243,6 +323,12 @@ public class PlannerAgent {
         TaskPlan plan = new TaskPlan();
         plan.setSteps(List.of(new TaskStep(1, "执行目标：" + goal, false)));
         return plan;
+    }
+
+    private static boolean validPlan(TaskPlan plan) {
+        return plan != null && plan.getSteps() != null && !plan.getSteps().isEmpty()
+                && plan.getSteps().stream().allMatch(step -> step != null
+                        && step.getDescription() != null && !step.getDescription().isBlank());
     }
 
     /** 归一化：重编号、截断超长计划、清空结果字段、解析依赖（迭代 6）。 */

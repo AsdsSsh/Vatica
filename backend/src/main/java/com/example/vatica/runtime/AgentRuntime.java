@@ -1,6 +1,8 @@
 package com.example.vatica.runtime;
 
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.tool.ToolCallback;
@@ -20,6 +22,39 @@ import com.example.vatica.task.TaskPlan.TaskStep;
 public interface AgentRuntime {
 
     String name();
+
+    /** 迭代 20C：AgentScope 只生成建议，调用方继续负责结构校验与业务决策。 */
+    enum AdvisoryKind {
+        PLAN,
+        PLAN_REVISION,
+        COLLABORATION,
+        JUDGE
+    }
+
+    /** 无工具建议请求；modelSlot 为空时由运行时按 Planner/Judge 能力选择平台槽位。 */
+    record AdvisoryRequest(AdvisoryKind kind, String systemPrompt, String userPrompt,
+            RequestIdentity identity, ModelSlot modelSlot, String sessionId) {
+        public AdvisoryRequest {
+            kind = Objects.requireNonNull(kind, "kind");
+            systemPrompt = Objects.requireNonNull(systemPrompt, "systemPrompt");
+            userPrompt = Objects.requireNonNull(userPrompt, "userPrompt");
+            identity = Objects.requireNonNull(identity, "identity");
+            sessionId = sessionId == null || sessionId.isBlank()
+                    ? "advisory-" + java.util.UUID.randomUUID() : sessionId;
+        }
+    }
+
+    /** 原始建议必须回到 Planner/Judge 解析，运行时不得直接产出业务状态。 */
+    record AdvisoryResult(String content, long durationMs, StepUsage usage) {
+        public AdvisoryResult {
+            content = content == null ? "" : content;
+        }
+    }
+
+    /** LegacyRuntime 返回 empty，由既有 Spring AI 结构化输出链路接管。 */
+    default Optional<AdvisoryResult> advise(AdvisoryRequest request) {
+        return Optional.empty();
+    }
 
     record PovResult(String answer, List<String> toolTraces, long durationMs) {
     }

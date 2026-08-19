@@ -4,9 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,6 +20,14 @@ import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.definition.ToolDefinition;
 
 import com.example.vatica.task.TaskPlan;
+import com.example.vatica.auth.RequestIdentity;
+import com.example.vatica.auth.RequestIdentityContext;
+import com.example.vatica.config.ModelSlot;
+import com.example.vatica.runtime.AgentRegistry;
+import com.example.vatica.runtime.AgentRuntime.AdvisoryKind;
+import com.example.vatica.runtime.AgentRuntime.AdvisoryRequest;
+import com.example.vatica.runtime.AgentRuntime.AdvisoryResult;
+import com.example.vatica.runtime.AgentRuntimeFactory;
 import com.example.vatica.task.BlackboardEntry;
 import com.example.vatica.task.CollaborationDecision;
 import com.example.vatica.task.TaskPlan.TaskStep;
@@ -28,6 +38,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * 降级策略（非法 JSON → 单步计划）、归一化（重编号/截断）。
  */
 class PlannerAgentTest {
+
+    private static final RequestIdentity TEST_IDENTITY =
+            new RequestIdentity(7L, 9L, "MEMBER", "alice");
 
     private ChatClient chatClient;
     private ChatClient.ChatClientRequestSpec spec;
@@ -65,6 +78,51 @@ class PlannerAgentTest {
         assertThat(plan.getSteps().get(0).getSkillVersion()).isNull();
         assertThat(plan.getSteps().get(1).isNeedsApproval()).isTrue();
         assertThat(plan.getSteps().get(1).getAgent()).isEqualTo("pim");
+    }
+
+    /** 20C：AgentScope 只给不可信建议；角色、编号与 Skill 字段仍由 Vatica 机械归一化。 */
+    @Test
+    void agentScopeSuggestionStillPassesVaticaPlanGuards() {
+        AgentRuntimeFactory factory = mock(AgentRuntimeFactory.class);
+        when(factory.advise(org.mockito.ArgumentMatchers.any(AdvisoryRequest.class))).thenReturn(Optional.of(
+                new AdvisoryResult("""
+                        {"steps":[{"id":99,"description":"读取数据","agent":"invented-role",
+                        "skillId":"forged","skillVersion":"9.9.9","needsApproval":false}]}
+                        """, 5, null)));
+        ModelSlot slot = new ModelSlot("planner-test", "Planner Test", ModelSlot.PROTOCOL_OPENAI,
+                "http://localhost", "", "test", 0.0, true);
+        planner = new PlannerAgent(chatClient, new ObjectMapper(), null, new AgentRegistry(), factory);
+
+        TaskPlan plan = RequestIdentityContext.callWith(TEST_IDENTITY,
+                () -> planner.plan("读取数据", chatClient, slot));
+
+        assertThat(plan.getSteps()).singleElement().satisfies(step -> {
+            assertThat(step.getId()).isEqualTo(1);
+            assertThat(step.getAgent()).isEqualTo("general");
+            assertThat(step.getSkillId()).isNull();
+            assertThat(step.getSkillVersion()).isNull();
+        });
+        ArgumentCaptor<AdvisoryRequest> captor = ArgumentCaptor.forClass(AdvisoryRequest.class);
+        verify(factory).advise(captor.capture());
+        assertThat(captor.getValue().kind()).isEqualTo(AdvisoryKind.PLAN);
+        assertThat(captor.getValue().modelSlot()).isSameAs(slot);
+        verifyNoInteractions(chatClient);
+    }
+
+    /** 20C：JSON 能解析但不满足步骤 schema 时由 Vatica 降级，不再调用另一套模型。 */
+    @Test
+    void invalidAgentScopePlanSchemaFallsBackDeterministically() {
+        AgentRuntimeFactory factory = mock(AgentRuntimeFactory.class);
+        when(factory.advise(org.mockito.ArgumentMatchers.any(AdvisoryRequest.class))).thenReturn(Optional.of(
+                new AdvisoryResult("{\"steps\":[null]}", 3, null)));
+        planner = new PlannerAgent(chatClient, new ObjectMapper(), null, new AgentRegistry(), factory);
+
+        TaskPlan plan = RequestIdentityContext.callWith(TEST_IDENTITY,
+                () -> planner.plan("整理资料", chatClient, null));
+
+        assertThat(plan.getSteps()).singleElement().satisfies(step ->
+                assertThat(step.getDescription()).isEqualTo("执行目标：整理资料"));
+        verifyNoInteractions(chatClient);
     }
 
     /** markdown 代码围栏包裹的 JSON → 剥除后正常解析 */

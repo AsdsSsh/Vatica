@@ -96,8 +96,9 @@ public class ChatConfig {
     @Bean
     PlannerAgent plannerAgent(ChatClient plannerChatClient, ObjectMapper objectMapper,
             com.example.vatica.runtime.AgentToolCatalog agentTools,
-            com.example.vatica.runtime.AgentRegistry agentRegistry) {
-        return new PlannerAgent(plannerChatClient, objectMapper, agentTools::callbacks, agentRegistry);
+            com.example.vatica.runtime.AgentRegistry agentRegistry,
+            com.example.vatica.runtime.AgentRuntimeFactory runtimeFactory) {
+        return new PlannerAgent(plannerChatClient, objectMapper, agentTools::callbacks, agentRegistry, runtimeFactory);
     }
 
     /** 迭代 5：Executor Agent（复用主客户端全部工具）。 */
@@ -108,7 +109,8 @@ public class ChatConfig {
 
     /** 迭代 5.5 I5.5-1：Judge Agent（评分卡 + 规则校验先行 + 解析降级）。 */
     @Bean
-    JudgeAgent judgeAgent(ChatClient judgeChatClient, ObjectMapper objectMapper, JudgeProperties judgeProperties) {
-        return new JudgeAgent(judgeChatClient, objectMapper, judgeProperties.passThreshold());
+    JudgeAgent judgeAgent(ChatClient judgeChatClient, ObjectMapper objectMapper, JudgeProperties judgeProperties,
+            com.example.vatica.runtime.AgentRuntimeFactory runtimeFactory) {
+        return new JudgeAgent(judgeChatClient, objectMapper, judgeProperties.passThreshold(), runtimeFactory);
     }
 }

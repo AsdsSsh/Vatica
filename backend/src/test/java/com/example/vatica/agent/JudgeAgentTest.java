@@ -7,12 +7,19 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.ai.chat.client.ChatClient;
 
+import com.example.vatica.auth.RequestIdentity;
+import com.example.vatica.auth.RequestIdentityContext;
+import com.example.vatica.config.ModelSlot;
+import com.example.vatica.runtime.AgentRuntime.AdvisoryRequest;
+import com.example.vatica.runtime.AgentRuntime.AdvisoryResult;
+import com.example.vatica.runtime.AgentRuntimeFactory;
 import com.example.vatica.task.TaskPlan;
 import com.example.vatica.task.TaskPlan.TaskStep;
 import com.example.vatica.task.TaskVerdict;
@@ -78,6 +85,27 @@ class JudgeAgentTest {
         assertThat(eval.score()).isEqualTo(85);
         assertThat(eval.verdict()).isEqualTo(TaskVerdict.PASS);
         assertThat(eval.summary()).isEqualTo("数据准确、交付完整");
+    }
+
+    /** 20C：模型自报 PASS 无效，最终 verdict 只由 Vatica 本地阈值生成。 */
+    @Test
+    void agentScopeCannotOverrideVaticaPassThreshold() {
+        AgentRuntimeFactory factory = mock(AgentRuntimeFactory.class);
+        when(factory.advise(org.mockito.ArgumentMatchers.any(AdvisoryRequest.class))).thenReturn(Optional.of(
+                new AdvisoryResult("{\"score\":95,\"completeness\":10,\"correctness\":10,"
+                        + "\"format\":10,\"summary\":\"模型声称通过\",\"verdict\":\"PASS\"}",
+                        4, null)));
+        ModelSlot slot = new ModelSlot("judge-test", "Judge Test", ModelSlot.PROTOCOL_OPENAI,
+                "http://localhost", "", "test", 0.0, true);
+        judge = new JudgeAgent(chatClient, new ObjectMapper(), THRESHOLD, factory);
+
+        JudgeAgent.Evaluation eval = RequestIdentityContext.callWith(
+                new RequestIdentity(7L, 9L, "MEMBER", "alice"),
+                () -> judge.evaluate("目标", completePlan(), chatClient, slot));
+
+        assertThat(eval.score()).isEqualTo(30);
+        assertThat(eval.verdict()).isEqualTo(TaskVerdict.FAIL);
+        verifyNoInteractions(chatClient);
     }
 
     /** 分数低于阈值 → FAIL（阈值判定在代码，不信任模型自报结论）。 */

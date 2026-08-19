@@ -3,6 +3,7 @@ package com.example.vatica.agentscope;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -19,6 +20,8 @@ import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.config.ModelSlot;
 import com.example.vatica.runtime.AgentRegistry;
 import com.example.vatica.runtime.AgentRuntime;
+import com.example.vatica.runtime.AgentRuntime.AdvisoryKind;
+import com.example.vatica.runtime.AgentRuntime.AdvisoryRequest;
 import com.example.vatica.skill.SkillCatalogService.ExecutionProfile;
 import com.example.vatica.task.TaskPlan.TaskStep;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -34,6 +37,46 @@ import reactor.core.publisher.Flux;
 
 /** 迭代 17A：不访问外网，真实穿过 AgentScope ReActAgent 的生产步骤契约。 */
 class AgentScopeProductionStepTest {
+
+    @Test
+    void plannerAndJudgeAdvisoriesRunWithoutToolsAndReturnRawUsage() {
+        AtomicReference<List<ToolSchema>> seenTools = new AtomicReference<>();
+        AtomicReference<String> seenConversation = new AtomicReference<>();
+        Model deterministicModel = new Model() {
+            @Override
+            public Flux<ChatResponse> stream(List<io.agentscope.core.message.Msg> messages,
+                    List<ToolSchema> tools, GenerateOptions options) {
+                seenTools.set(tools);
+                seenConversation.set(messages.stream().map(io.agentscope.core.message.Msg::getTextContent)
+                        .collect(java.util.stream.Collectors.joining("\n")));
+                return Flux.just(ChatResponse.builder().id("advisory-response")
+                        .content(List.of(TextBlock.builder().text("{\"score\":40,\"verdict\":\"PASS\"}").build()))
+                        .usage(new ChatUsage(9, 4, 0, 0.01)).metadata(Map.of()).finishReason("stop").build());
+            }
+
+            @Override
+            public String getModelName() {
+                return "deterministic-advisory-model";
+            }
+        };
+        RequestIdentity identity = new RequestIdentity(7L, 9L, "MEMBER", "alice");
+        ModelSlot slot = new ModelSlot("judge-test", "Judge Test", ModelSlot.PROTOCOL_OPENAI,
+                "http://localhost", "", "test", 0.0, true);
+        ModelRegistry registry = mock(ModelRegistry.class);
+        when(registry.activeSlotFor(ModelSlot.CAP_JUDGE)).thenReturn(slot);
+        AgentScopeRuntime runtime = new AgentScopeRuntime(registry, () -> new ToolCallback[0],
+                new ObjectMapper(), new AgentRegistry(), selected -> deterministicModel);
+
+        var result = runtime.advise(new AdvisoryRequest(AdvisoryKind.JUDGE,
+                "只输出评分 JSON，不得调用工具。", "评测任务结果", identity, null, "task-1:judge"))
+                .orElseThrow();
+
+        assertThat(result.content()).contains("\"score\":40", "\"verdict\":\"PASS\"");
+        assertThat(result.usage().totalTokens()).isEqualTo(13);
+        assertThat(seenTools.get()).isEmpty();
+        assertThat(seenConversation.get()).contains("只输出评分 JSON", "评测任务结果");
+        verify(registry).activeSlotFor(ModelSlot.CAP_JUDGE);
+    }
 
     @Test
     void executesProductionStepWithRoleScopedToolkitAndContext() {

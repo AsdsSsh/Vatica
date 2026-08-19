@@ -2,6 +2,7 @@ package com.example.vatica.agent;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -10,6 +11,12 @@ import org.slf4j.LoggerFactory;
 
 import org.springframework.ai.chat.client.ChatClient;
 
+import com.example.vatica.auth.RequestIdentity;
+import com.example.vatica.auth.RequestIdentityContext;
+import com.example.vatica.config.ModelSlot;
+import com.example.vatica.runtime.AgentRuntime.AdvisoryKind;
+import com.example.vatica.runtime.AgentRuntime.AdvisoryRequest;
+import com.example.vatica.runtime.AgentRuntimeFactory;
 import com.example.vatica.task.TaskPlan;
 import com.example.vatica.task.TaskPlan.TaskStep;
 import com.example.vatica.task.TaskVerdict;
@@ -89,25 +96,49 @@ public class JudgeAgent {
     private final ChatClient judgeClient;
     private final ObjectMapper mapper;
     private final int passThreshold;
+    private final AgentRuntimeFactory runtimeFactory;
 
     public JudgeAgent(ChatClient judgeClient, ObjectMapper mapper, int passThreshold) {
+        this(judgeClient, mapper, passThreshold, null);
+    }
+
+    /** 迭代 20C：AgentScope 只给评分建议，阈值与 verdict 始终由本类决定。 */
+    public JudgeAgent(ChatClient judgeClient, ObjectMapper mapper, int passThreshold,
+            AgentRuntimeFactory runtimeFactory) {
         this.judgeClient = judgeClient;
         this.mapper = mapper;
         this.passThreshold = passThreshold;
+        this.runtimeFactory = runtimeFactory;
     }
 
     /**
      * 评测：规则校验先行（硬失败不烧 token）→ LLM 评分卡 → 解析降级。
      */
     public Evaluation evaluate(String goal, TaskPlan plan) {
-        return evaluate(goal, plan, judgeClient);
+        return evaluate(goal, plan, judgeClient, null);
     }
 
     /** 迭代 13 I13-5：任务级临时/指定客户端评测。 */
     public Evaluation evaluate(String goal, TaskPlan plan, ChatClient client) {
+        return evaluate(goal, plan, client, null);
+    }
+
+    /** 迭代 20C：临时凭据显式传槽位；Legacy 仍使用传入的 Spring AI 客户端。 */
+    public Evaluation evaluate(String goal, TaskPlan plan, ChatClient client, ModelSlot modelSlot) {
         Evaluation ruleFail = ruleCheck(plan);
         if (ruleFail != null) {
             return ruleFail;
+        }
+        String advisedRaw = advisoryRaw(goal, plan, modelSlot);
+        if (advisedRaw != null) {
+            Evaluation advised = parse(advisedRaw);
+            if (advised != null) {
+                return advised;
+            }
+            log.warn("AgentScope 评测建议无法解析，降级为规则结果（PASS、无分数）。原始输出片段：{}",
+                    snippet(advisedRaw));
+            return new Evaluation(null, TaskVerdict.PASS,
+                    "评测解析降级：规则校验通过，AgentScope 分数不可用", List.of());
         }
         // 迭代 15 I15-6：结构化输出 schema 优先；供应商不支持时回退正则解析
         Evaluation structured = evaluateStructured(goal, plan, client);
@@ -123,14 +154,29 @@ public class JudgeAgent {
         return new Evaluation(null, TaskVerdict.PASS, "评测解析降级：规则校验通过，LLM 评分不可用", List.of());
     }
 
+    private String advisoryRaw(String goal, TaskPlan plan, ModelSlot modelSlot) {
+        RequestIdentity identity = RequestIdentityContext.current();
+        if (runtimeFactory == null || identity == null) {
+            return null;
+        }
+        return runtimeFactory.advise(new AdvisoryRequest(AdvisoryKind.JUDGE, SYSTEM_PROMPT,
+                userPrompt(goal, plan), identity, modelSlot, "judge-" + UUID.randomUUID()))
+                .map(result -> result.content())
+                .orElse(null);
+    }
+
     private Evaluation evaluateStructured(String goal, TaskPlan plan, ChatClient client) {
         try {
             JudgeScoreCard card = client.prompt().system(SYSTEM_PROMPT).user(userPrompt(goal, plan))
                     .call().entity(JudgeScoreCard.class);
-            if (card == null || card.getScore() == null) {
+            if (card == null) {
                 return null;
             }
-            int score = Math.max(0, Math.min(MAX_SCORE, card.getScore()));
+            Integer score = normalizedScore(card.getScore(), card.getCompleteness(),
+                    card.getCorrectness(), card.getFormat());
+            if (score == null) {
+                return null;
+            }
             String summary = card.getSummary() == null || card.getSummary().isBlank()
                     ? "（无评语）" : card.getSummary();
             return new Evaluation(score, score >= passThreshold ? TaskVerdict.PASS : TaskVerdict.FAIL,
@@ -183,18 +229,12 @@ public class JudgeAgent {
         }
         try {
             JsonNode node = mapper.readTree(m.group());
-            Integer score = intOrNull(node.get("score"));
-            if (score == null) {
-                int dims = intOrZero(node.get("completeness")) + intOrZero(node.get("correctness"))
-                        + intOrZero(node.get("format"));
-                score = (dims > 0 || node.has("completeness") || node.has("correctness") || node.has("format"))
-                        ? dims
-                        : null;
-            }
+            Integer score = normalizedScore(intOrNull(node.get("score")),
+                    intOrNull(node.get("completeness")), intOrNull(node.get("correctness")),
+                    intOrNull(node.get("format")));
             if (score == null) {
                 return null;
             }
-            score = Math.max(0, Math.min(MAX_SCORE, score));
             String summary = node.hasNonNull("summary") ? node.get("summary").asText() : "（无评语）";
             List<Integer> failStepIds = parseFailStepIds(node.get("failStepIds"));
             return new Evaluation(score, score >= passThreshold ? TaskVerdict.PASS : TaskVerdict.FAIL,
@@ -221,9 +261,17 @@ public class JudgeAgent {
         return node != null && node.canConvertToInt() ? node.intValue() : null;
     }
 
-    private static int intOrZero(JsonNode node) {
-        Integer v = intOrNull(node);
-        return v == null ? 0 : v;
+    /** 任一维度存在时按本地满分边界重算总分，拒绝模型提交互相矛盾的 score。 */
+    private static Integer normalizedScore(Integer score, Integer completeness,
+            Integer correctness, Integer format) {
+        if (completeness != null || correctness != null || format != null) {
+            return clamp(completeness, 30) + clamp(correctness, 50) + clamp(format, 20);
+        }
+        return score == null ? null : Math.max(0, Math.min(MAX_SCORE, score));
+    }
+
+    private static int clamp(Integer value, int max) {
+        return value == null ? 0 : Math.max(0, Math.min(max, value));
     }
 
     private static String snippet(String raw) {
