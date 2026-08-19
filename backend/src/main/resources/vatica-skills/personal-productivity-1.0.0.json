@@ -1,0 +1,11 @@
+{
+  "id": "personal-productivity",
+  "version": "1.0.0",
+  "displayName": "个人事务",
+  "description": "管理日历、待办和个人邮箱查询或发送流程。",
+  "agentRole": "pim",
+  "tools": ["calendar_query", "calendar_create", "calendar_import", "todo_add", "todo_list", "todo_complete", "todo_remind", "mail_query", "mail_send"],
+  "permissions": ["pim:read", "pim:write", "mail:read", "mail:send"],
+  "entryPrompt": "处理日历、待办和邮件；所有有副作用的动作必须遵循 Vatica 的确认与审批结果。",
+  "releasedAt": "2026-08-19T00:00:00Z"
+}

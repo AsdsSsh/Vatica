@@ -445,6 +445,8 @@ class TaskServiceTest {
     /** 最近任务按创建时间倒序（两次创建间隔 >1ms，避免 createdAt 同刻导致排序不稳定）。 */
     @Test
     void recentListsNewestFirst() throws InterruptedException {
+        when(plannerAgent.plan("目标1")).thenReturn(oneStepPlan());
+        when(plannerAgent.plan("目标2")).thenReturn(oneStepPlan());
         TaskRecord first = taskService.create("目标1");
         Thread.sleep(5);
         TaskRecord second = taskService.create("目标2");

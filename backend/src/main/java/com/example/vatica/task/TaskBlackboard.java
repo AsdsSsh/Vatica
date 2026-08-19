@@ -229,6 +229,8 @@ public class TaskBlackboard {
             }
             if (patch.agent() != null) {
                 step.setAgent(agentRegistry.normalizeId(patch.agent()));
+                step.setSkillId(null);
+                step.setSkillVersion(null);
             }
             if (patch.needsApproval() != null) {
                 step.setNeedsApproval(step.isNeedsApproval() || patch.needsApproval());
@@ -539,6 +541,7 @@ public class TaskBlackboard {
 
     private static String stepFingerprint(TaskStep step) {
         return step.getDescription() + "|" + step.getAgent() + "|" + step.isNeedsApproval() + "|"
+                + step.getSkillId() + "@" + step.getSkillVersion() + "|"
                 + step.getDependsOn() + "|" + step.getWriteResources();
     }
 
@@ -547,6 +550,8 @@ public class TaskBlackboard {
         for (TaskStep step : steps) {
             TaskStep copy = new TaskStep(step.getId(), step.getDescription(), step.isNeedsApproval());
             copy.setAgent(step.getAgent());
+            copy.setSkillId(step.getSkillId());
+            copy.setSkillVersion(step.getSkillVersion());
             copy.setApproved(step.isApproved());
             copy.setResult(step.getResult());
             copy.setResultDigest(step.getResultDigest());

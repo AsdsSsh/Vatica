@@ -17,6 +17,7 @@ import {
 } from "antd";
 import {
   ApiOutlined,
+  AppstoreOutlined,
   BookOutlined,
   CheckCircleOutlined,
   CloudOutlined,
@@ -69,6 +70,7 @@ import UserModelsPanel from "./UserModelsPanel";
 import IntegrationSettingsPanel from "./IntegrationSettingsPanel";
 import PersonalWorkspacePanel from "./PersonalWorkspacePanel";
 import KnowledgePanel from "./KnowledgePanel";
+import SkillManagementPanel from "./SkillManagementPanel";
 
 /**
  * 中栏：对话区（迭代 6 I6-4/I6-5；迭代 12 I12-2/I12-3 体验升级）——
@@ -143,6 +145,7 @@ export default function ChatPanel({
   const [integrationOpen, setIntegrationOpen] = useState(false);
   const [personalWorkspaceOpen, setPersonalWorkspaceOpen] = useState(false);
   const [knowledgeOpen, setKnowledgeOpen] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const [permissionRequests, setPermissionRequests] = useState<FilePermissionRequest[]>([]);
   const [permissionDeciding, setPermissionDeciding] = useState(false);
   const [permissionRemember, setPermissionRemember] = useState(true);
@@ -178,6 +181,7 @@ export default function ChatPanel({
       label: "系统设置",
       children: [
         { key: "models", icon: <SettingOutlined />, label: "模型设置" },
+        { key: "skills", icon: <AppstoreOutlined />, label: "Skills" },
         { key: "permissions", icon: <SafetyCertificateOutlined />, label: "文件权限与工作区" },
         { key: "integrations", icon: <GlobalOutlined />, label: "外部服务" },
         { key: "server", icon: <ApiOutlined />, label: "服务地址" },
@@ -191,6 +195,7 @@ export default function ChatPanel({
     if (key === "workspace") setPersonalWorkspaceOpen(true);
     if (key === "knowledge") setKnowledgeOpen(true);
     if (key === "models") setSettingsOpen(true);
+    if (key === "skills") setSkillsOpen(true);
     if (key === "permissions") setPermissionSettingsOpen(true);
     if (key === "integrations") setIntegrationOpen(true);
     if (key === "server") setServerSettingsOpen(true);
@@ -565,6 +570,10 @@ export default function ChatPanel({
       <KnowledgePanel
         open={knowledgeOpen}
         onClose={() => setKnowledgeOpen(false)}
+      />
+      <SkillManagementPanel
+        open={skillsOpen}
+        onClose={() => setSkillsOpen(false)}
       />
       <FilePermissionSettings
         open={permissionSettingsOpen}

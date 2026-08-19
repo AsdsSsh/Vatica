@@ -114,9 +114,12 @@ class TaskServiceAgentScopeE2eTest {
         TaskPlan persisted = mapper.readValue(
                 repository.findById(created.getId()).orElseThrow().getPlanJson(), TaskPlan.class);
         assertThat(persisted.getSteps().getFirst().getAgent()).isEqualTo("research");
+        assertThat(persisted.getSteps().getFirst().getSkillId()).isEqualTo("knowledge-research");
+        assertThat(persisted.getSteps().getFirst().getSkillVersion()).isEqualTo("1.1.0");
         assertThat(persisted.getSteps().getFirst().getResult()).isEqualTo("AgentScope 端到端完成");
         assertThat(MODEL_CALLS).hasValue(1);
-        assertThat(LAST_REQUEST.get()).contains("汇总已核验的信息", "calculator", "text_stats");
+        assertThat(LAST_REQUEST.get()).contains("汇总已核验的信息", "knowledge-research@1.1.0",
+                "search_knowledge_base").doesNotContain("calculator", "text_stats");
     }
 
     private static HttpServer startModelServer() {

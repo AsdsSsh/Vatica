@@ -1,0 +1,11 @@
+{
+  "id": "document-delivery",
+  "version": "1.0.0",
+  "displayName": "文档交付",
+  "description": "把已经整理好的内容生成 Word 报告或 Excel 统计表。",
+  "agentRole": "document",
+  "tools": ["create_word_report", "create_excel_stats"],
+  "permissions": ["workspace:write"],
+  "entryPrompt": "只负责将已确认的内容生成 Word 或 Excel 文件，不自行补造输入数据。",
+  "releasedAt": "2026-08-19T00:00:00Z"
+}

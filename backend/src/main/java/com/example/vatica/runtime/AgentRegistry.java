@@ -62,6 +62,11 @@ public class AgentRegistry {
         return List.copyOf(definitions.values());
     }
 
+    /** 迭代 20A：Skill manifest 注册时复用角色机械门禁，禁止声明角色不可用的工具。 */
+    public boolean allowsTool(String requestedId, String toolName) {
+        return toolName != null && resolve(requestedId).allows(toolName);
+    }
+
     /** 在运行时注入前按角色裁剪工具；门禁不依赖 prompt，模型无法绕过。 */
     public ToolCallback[] allowedCallbacks(String requestedId, ToolCallback[] callbacks) {
         AgentDefinition role = resolve(requestedId);

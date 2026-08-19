@@ -56,6 +56,8 @@ import com.example.vatica.runtime.AgentRuntime;
 import com.example.vatica.runtime.AgentRuntimeFactory;
 import com.example.vatica.runtime.AgentRuntimeProperties;
 import com.example.vatica.runtime.AgentToolCatalog;
+import com.example.vatica.skill.SkillCatalogService;
+import com.example.vatica.skill.SkillCatalogService.ExecutionProfile;
 import com.example.vatica.task.TaskPlan.TaskStep;
 import com.example.vatica.trace.AgentTraceRecord;
 import com.example.vatica.trace.AgentTraceRecordRepository;
@@ -107,6 +109,7 @@ public class TaskService {
     private final TaskReliabilityProperties reliability;
     private final TaskExecutionFaultInjector faultInjector;
     private final BenchmarkCatalog benchmarkCatalog;
+    private final SkillCatalogService skillCatalog;
 
     /** 终止标志（迭代 7 I7-4）：取消接口与执行线程的协作式协调点（波次粒度生效）。 */
     private final Map<String, AtomicBoolean> cancelFlags = new ConcurrentHashMap<>();
@@ -135,7 +138,7 @@ public class TaskService {
             ContextBudget contextBudget, AgentRuntimeFactory runtimeFactory, AgentRegistry agentRegistry,
             DirectModelUsageRecorder directUsage, HumanAgent humanAgent, AgentModelBindingService agentModelBindings,
             TaskReliabilityProperties reliability, TaskExecutionFaultInjector faultInjector,
-            BenchmarkCatalog benchmarkCatalog) {
+            BenchmarkCatalog benchmarkCatalog, SkillCatalogService skillCatalog) {
         this.plannerAgent = plannerAgent;
         this.judgeAgent = judgeAgent;
         this.judgeProps = judgeProps;
@@ -157,6 +160,7 @@ public class TaskService {
         this.reliability = reliability;
         this.faultInjector = faultInjector;
         this.benchmarkCatalog = benchmarkCatalog;
+        this.skillCatalog = skillCatalog;
     }
 
     /** 创建任务：Planner 拆解 → PENDING 待审批计划。 */
@@ -256,6 +260,7 @@ public class TaskService {
             try {
                 TaskPlan plan = plannerAgent.plan(goal.trim(),
                         registry.ephemeralClient(credential, false, com.example.vatica.config.ReasoningMode.HIGH));
+                bindSkills(plan, identity);
                 record.setPlanJson(toJson(plan));
             } finally {
                 UsageContext.clear();
@@ -267,6 +272,7 @@ public class TaskService {
                     "planner", "Planner"));
             try {
                 TaskPlan plan = plannerAgent.plan(goal.trim());
+                bindSkills(plan, identity);
                 record.setPlanJson(toJson(plan));
             } finally {
                 UsageContext.clear();
@@ -289,6 +295,26 @@ public class TaskService {
                     + "请使用目录中的目标：" + benchmarkCase.goal());
         }
         return benchmarkCase;
+    }
+
+    /** Planner 只选角色；Vatica 在计划落库前固定当前组织的 Skill 版本。 */
+    private void bindSkills(TaskPlan plan, RequestIdentity identity) {
+        java.util.Set<String> roles = plan.getSteps().stream()
+                .map(step -> agentRegistry.normalizeId(step.getAgent()))
+                .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+        Map<String, ExecutionProfile> profiles = skillCatalog.resolveForPlanning(identity, roles);
+        for (TaskStep step : plan.getSteps()) {
+            String role = agentRegistry.normalizeId(step.getAgent());
+            step.setAgent(role);
+            ExecutionProfile profile = profiles.get(role);
+            if (profile == null) {
+                step.setSkillId(null);
+                step.setSkillVersion(null);
+            } else {
+                step.setSkillId(profile.id());
+                step.setSkillVersion(profile.version());
+            }
+        }
     }
 
     private static String normalizeIdempotencyKey(String raw) {
@@ -786,6 +812,13 @@ public class TaskService {
             var agent = agentRegistry.resolve(step.getAgent());
             step.setAgent(agent.id());
             callbacks = agentRegistry.allowedCallbacks(agent.id(), callbacks);
+            // 迭代 20B：按组织复核启用状态，并解析任务固定的不可变 Skill 版本。
+            ExecutionProfile skill = skillCatalog.resolveForExecution(identity, agent.id(),
+                    step.getSkillId(), step.getSkillVersion()).orElse(null);
+            if (skill != null) {
+                step.setSkillId(skill.id());
+                step.setSkillVersion(skill.version());
+            }
             // 迭代 17C：绑定链同时决定执行模型和观测维度；临时凭据只在本任务内优先。
             AgentModelBindingService.Resolution model = agentModelBindings.resolve(identity, agent.id(),
                     agent.modelCapability(), ephemeralCredentials.get(record.getId()));
@@ -806,7 +839,7 @@ public class TaskService {
                 AgentRuntime.StepRequest request = new AgentRuntime.StepRequest(
                         record.getGoal(), step, context, reflection, identity, callbacks,
                         clientFor(record, true, model.slot()), model.slot(), agent,
-                        record.getId() + ":step:" + step.getId());
+                        record.getId() + ":step:" + step.getId(), skill);
                 if (AgentRuntimeProperties.AGENTSCOPE.equals(runtime.name())) {
                     DirectModelUsageRecorder.Reservation reservation = directUsage.begin();
                     try {
@@ -827,7 +860,7 @@ public class TaskService {
                             AgentRuntime.StepRequest retry = new AgentRuntime.StepRequest(
                                     record.getGoal(), step, context, reflection, identity, callbacks,
                                     clientFor(record, true, recovery.slot()), recovery.slot(), agent,
-                                    record.getId() + ":step:" + step.getId() + ":recovery");
+                                    record.getId() + ":step:" + step.getId() + ":recovery", skill);
                             DirectModelUsageRecorder.Reservation retryReservation = directUsage.begin();
                             try {
                                 AgentRuntime.StepResult stepResult = runtime.executeStep(retry);

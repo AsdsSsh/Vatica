@@ -552,10 +552,19 @@ export default function StepPanel() {
                         <Typography.Text style={{ fontSize: 12 }}>
                           {s.id}. {s.description}
                         </Typography.Text>
-                        {s.needsApproval && (
-                          <Tag color="warning" style={{ marginInlineStart: 4, fontSize: 10 }}>
-                            需审批
-                          </Tag>
+                        {(s.needsApproval || (s.skillId && s.skillVersion)) && (
+                          <Flex gap={4} wrap style={{ marginTop: 2 }}>
+                            {s.needsApproval && <Tag color="warning" style={{ fontSize: 10 }}>需审批</Tag>}
+                            {s.skillId && s.skillVersion && (
+                              <Tag
+                                color="blue"
+                                title={`${s.skillId}@${s.skillVersion}`}
+                                style={{ fontSize: 10, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis" }}
+                              >
+                                {s.skillId}@{s.skillVersion}
+                              </Tag>
+                            )}
+                          </Flex>
                         )}
                         {done && (
                           <Typography.Paragraph

@@ -112,6 +112,9 @@ public class TaskPlan {
         private String description;
         /** 迭代 17A：执行角色 id；旧计划缺失或非法值在执行前回退 general。 */
         private String agent;
+        /** 迭代 20B：由 Vatica 固定的受控 Skill；Planner 不直接决定版本。 */
+        private String skillId;
+        private String skillVersion;
         private boolean needsApproval;
         /** 用户已审批通过（执行流据此跳过审批点；返工需重新审批，迭代 5.5 语义）。 */
         private boolean approved;
@@ -155,6 +158,22 @@ public class TaskPlan {
 
         public void setAgent(String agent) {
             this.agent = agent;
+        }
+
+        public String getSkillId() {
+            return skillId;
+        }
+
+        public void setSkillId(String skillId) {
+            this.skillId = skillId;
+        }
+
+        public String getSkillVersion() {
+            return skillVersion;
+        }
+
+        public void setSkillVersion(String skillVersion) {
+            this.skillVersion = skillVersion;
         }
 
         public boolean isNeedsApproval() {

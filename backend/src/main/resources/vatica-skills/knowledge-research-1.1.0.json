@@ -1,0 +1,11 @@
+{
+  "id": "knowledge-research",
+  "version": "1.1.0",
+  "displayName": "知识研究",
+  "description": "检索组织或个人知识库，基于命中文档回答并强制保留可追溯引用。",
+  "agentRole": "research",
+  "tools": ["search_knowledge_base"],
+  "permissions": ["knowledge:read", "citation:read"],
+  "entryPrompt": "优先检索知识库，只基于命中的文档片段作答；结论必须带 C1/C2 形式的引用编号。",
+  "releasedAt": "2026-08-19T01:00:00Z"
+}

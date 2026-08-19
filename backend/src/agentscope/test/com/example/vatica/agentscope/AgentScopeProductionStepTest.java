@@ -1,6 +1,7 @@
 package com.example.vatica.agentscope;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -18,6 +19,7 @@ import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.config.ModelSlot;
 import com.example.vatica.runtime.AgentRegistry;
 import com.example.vatica.runtime.AgentRuntime;
+import com.example.vatica.skill.SkillCatalogService.ExecutionProfile;
 import com.example.vatica.task.TaskPlan.TaskStep;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -36,13 +38,14 @@ class AgentScopeProductionStepTest {
     @Test
     void executesProductionStepWithRoleScopedToolkitAndContext() {
         AtomicReference<List<ToolSchema>> seenTools = new AtomicReference<>();
-        AtomicReference<String> seenPrompt = new AtomicReference<>();
+        AtomicReference<String> seenConversation = new AtomicReference<>();
         Model deterministicModel = new Model() {
             @Override
             public Flux<ChatResponse> stream(List<io.agentscope.core.message.Msg> messages,
                     List<ToolSchema> tools, GenerateOptions options) {
                 seenTools.set(tools);
-                seenPrompt.set(messages.get(messages.size() - 1).getTextContent());
+                seenConversation.set(messages.stream().map(io.agentscope.core.message.Msg::getTextContent)
+                        .collect(java.util.stream.Collectors.joining("\n")));
                 ContentBlock text = TextBlock.builder().text("AgentScope 步骤完成").build();
                 return Flux.just(ChatResponse.builder().id("test-response")
                         .content(List.of(text)).usage(new ChatUsage(12, 5, 1, 0.01))
@@ -60,12 +63,15 @@ class AgentScopeProductionStepTest {
         TaskStep step = new TaskStep(2, "生成 Word 报告", false);
         step.setAgent("document");
         ToolCallback word = callback("create_word_report");
+        ToolCallback excel = callback("create_excel_stats");
+        ExecutionProfile skill = new ExecutionProfile("document-delivery", "1.0.0", "文档交付", "document",
+                List.of("create_word_report"), List.of("workspace:write"), "只生成已确认的 Word 内容。");
         AgentRuntime.StepRequest request = new AgentRuntime.StepRequest(
                 "生成周报", step, List.of("步骤 1：数据已核验"), "补齐来源",
-                new RequestIdentity(7L, 9L, "MEMBER", "alice"), new ToolCallback[] { word },
+                new RequestIdentity(7L, 9L, "MEMBER", "alice"), new ToolCallback[] { word, excel },
                 mock(ChatClient.class), new ModelSlot("test", "Test", ModelSlot.PROTOCOL_OPENAI,
                         "http://localhost", "", "test", 0.0, true),
-                roles.resolve("document"), "task-1:step:2");
+                roles.resolve("document"), "task-1:step:2", skill);
 
         AgentRuntime.StepResult result = runtime.executeStep(request);
 
@@ -75,7 +81,28 @@ class AgentScopeProductionStepTest {
         assertThat(result.usage().cacheReadTokens()).isEqualTo(1);
         assertThat(seenTools.get()).extracting(ToolSchema::getName)
                 .containsExactly("create_word_report");
-        assertThat(seenPrompt.get()).contains("生成周报", "数据已核验", "补齐来源", "生成 Word 报告");
+        assertThat(seenConversation.get()).contains("document-delivery@1.0.0", "只生成已确认的 Word 内容",
+                "生成周报", "数据已核验", "补齐来源", "生成 Word 报告");
+    }
+
+    @Test
+    void rejectsSkillWhenDeclaredToolIsMissingFromVaticaAuthorizedCallbacks() {
+        AgentRegistry roles = new AgentRegistry();
+        AgentScopeRuntime runtime = new AgentScopeRuntime(mock(ModelRegistry.class), () -> new ToolCallback[0],
+                new ObjectMapper(), roles, slot -> mock(Model.class));
+        TaskStep step = new TaskStep(1, "生成 Word 报告", false);
+        step.setAgent("document");
+        ExecutionProfile skill = new ExecutionProfile("document-delivery", "1.0.0", "文档交付", "document",
+                List.of("create_word_report", "create_excel_stats"), List.of("workspace:write"), "生成文档");
+        AgentRuntime.StepRequest request = new AgentRuntime.StepRequest(
+                "生成周报", step, List.of(), null, new RequestIdentity(7L, 9L, "MEMBER", "alice"),
+                new ToolCallback[] { callback("create_word_report") }, mock(ChatClient.class),
+                new ModelSlot("test", "Test", ModelSlot.PROTOCOL_OPENAI, "http://localhost", "", "test", 0.0, true),
+                roles.resolve("document"), "task-2:step:1", skill);
+
+        assertThatThrownBy(() -> runtime.executeStep(request))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("create_excel_stats");
     }
 
     private static ToolCallback callback(String name) {

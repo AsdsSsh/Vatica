@@ -62,6 +62,13 @@ class AgentRegistryTest {
                 .containsExactly(weather, knowledge);
     }
 
+    @Test
+    void manifestToolCheckReusesRoleWhitelist() {
+        assertThat(registry.allowsTool("workspace", "read_file")).isTrue();
+        assertThat(registry.allowsTool("workspace", "mail_send")).isFalse();
+        assertThat(registry.allowsTool("research", "maps_weather")).isTrue();
+    }
+
     private static ToolCallback callback(String name) {
         ToolCallback callback = mock(ToolCallback.class);
         when(callback.getToolDefinition()).thenReturn(ToolDefinition.builder()

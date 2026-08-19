@@ -54,6 +54,7 @@ public class AgentScopeRuntime implements AgentRuntime {
     private final ObjectMapper mapper;
     private final AgentRegistry agentRegistry;
     private final Function<ModelSlot, Model> modelFactory;
+    private final AgentScopeSkillRunner skillRunner;
 
     public AgentScopeRuntime(ModelRegistry registry, ToolCallbackProvider vaticaTools, ObjectMapper mapper) {
         this(registry, vaticaTools, mapper, new AgentRegistry());
@@ -71,6 +72,7 @@ public class AgentScopeRuntime implements AgentRuntime {
         this.mapper = mapper;
         this.agentRegistry = agentRegistry;
         this.modelFactory = modelFactory;
+        this.skillRunner = new AgentScopeSkillRunner(mapper, modelFactory);
     }
 
     @Override
@@ -86,6 +88,9 @@ public class AgentScopeRuntime implements AgentRuntime {
             List<String> traces = new ArrayList<>();
             var role = request.agent() == null
                     ? agentRegistry.resolve(request.step().getAgent()) : request.agent();
+            if (request.skill() != null) {
+                return skillRunner.execute(request, role);
+            }
             String system = """
                     你是 Vatica 执行 Agent。只执行当前步骤，只使用工具返回的数据，工具未返回的数据不得编造。
                     工具失败时如实说明原因，不得假装成功。身份、权限、审批与任务状态由 Vatica 管理。
@@ -246,7 +251,7 @@ public class AgentScopeRuntime implements AgentRuntime {
                 .build();
     }
 
-    private static String stepPrompt(StepRequest request) {
+    static String stepPrompt(StepRequest request) {
         StringBuilder prompt = new StringBuilder("任务目标：").append(request.goal()).append('\n');
         if (!request.context().isEmpty()) {
             prompt.append("依赖步骤结果与任务笔记（参考，不要重复执行）：\n");

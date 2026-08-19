@@ -9,6 +9,7 @@ import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.config.ModelSlot;
 import com.example.vatica.permission.FilePermissionPolicy;
 import com.example.vatica.runtime.AgentRegistry.AgentDefinition;
+import com.example.vatica.skill.SkillCatalogService.ExecutionProfile;
 import com.example.vatica.task.TaskPlan.TaskStep;
 
 /**
@@ -26,7 +27,7 @@ public interface AgentRuntime {
     /** 迭代 17A：Vatica 编排层交给运行时的单步骤快照。 */
     record StepRequest(String goal, TaskStep step, List<String> context, String reflectionFeedback,
             RequestIdentity identity, ToolCallback[] toolCallbacks, ChatClient legacyClient,
-            ModelSlot modelSlot, AgentDefinition agent, String sessionId) {
+            ModelSlot modelSlot, AgentDefinition agent, String sessionId, ExecutionProfile skill) {
         public StepRequest {
             context = context == null ? List.of() : List.copyOf(context);
             toolCallbacks = toolCallbacks == null ? new ToolCallback[0] : toolCallbacks.clone();
@@ -35,6 +36,14 @@ public interface AgentRuntime {
         @Override
         public ToolCallback[] toolCallbacks() {
             return toolCallbacks.clone();
+        }
+
+        /** 兼容 17A 的运行时单测与 POC；未绑定 Skill 时保留角色级执行。 */
+        public StepRequest(String goal, TaskStep step, List<String> context, String reflectionFeedback,
+                RequestIdentity identity, ToolCallback[] toolCallbacks, ChatClient legacyClient,
+                ModelSlot modelSlot, AgentDefinition agent, String sessionId) {
+            this(goal, step, context, reflectionFeedback, identity, toolCallbacks, legacyClient,
+                    modelSlot, agent, sessionId, null);
         }
     }
 

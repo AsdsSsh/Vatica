@@ -1,0 +1,11 @@
+{
+  "id": "workspace-files",
+  "version": "1.0.0",
+  "displayName": "工作区文件",
+  "description": "在当前用户已授权的工作区内读取、列举和写入文件。",
+  "agentRole": "workspace",
+  "tools": ["read_file", "write_file", "list_files", "list_workspace_roots"],
+  "permissions": ["workspace:read", "workspace:write"],
+  "entryPrompt": "文件操作必须限制在 Vatica 已授权的工作区根目录内，并服从现有审批策略。",
+  "releasedAt": "2026-08-19T00:00:00Z"
+}

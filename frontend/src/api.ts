@@ -931,6 +931,9 @@ export interface TaskStep {
   description: string;
   /** 迭代 17A：document / pim / workspace / research / general。 */
   agent: string;
+  /** 迭代 20B：Vatica 固定的受控 Skill 发布版本；通用角色可能为空。 */
+  skillId?: string | null;
+  skillVersion?: string | null;
   needsApproval: boolean;
   approved: boolean;
   result: string | null;
@@ -984,6 +987,53 @@ export async function saveAgentBinding(request: {
   slotId: string | null;
 }): Promise<AgentBindingView> {
   return (await putJson("/api/models/agent-bindings", request)).json();
+}
+
+/** 迭代 20A：后端 SkillCatalogService.SkillVersionView。 */
+export interface SkillVersionView {
+  version: string;
+  active: boolean;
+  latest: boolean;
+  tools: string[];
+  permissions: string[];
+  releasedAt: string;
+  checksum: string;
+}
+
+/** 迭代 20A：组织级 Skill 安装状态，发布版本本体不可变。 */
+export interface SkillView {
+  id: string;
+  displayName: string;
+  description: string;
+  agentRole: string;
+  activeVersion: string;
+  latestVersion: string;
+  previousVersion: string | null;
+  enabled: boolean;
+  manageable: boolean;
+  canRollback: boolean;
+  revision: number;
+  updatedAt: string;
+  tools: string[];
+  permissions: string[];
+  versions: SkillVersionView[];
+}
+
+export async function fetchSkills(): Promise<SkillView[]> {
+  return (await getJson("/api/skills")).json();
+}
+
+export async function setSkillEnabled(skillId: string, enabled: boolean): Promise<SkillView> {
+  const action = enabled ? "enable" : "disable";
+  return (await post(`/api/skills/${encodeURIComponent(skillId)}/${action}`, {})).json();
+}
+
+export async function activateSkillVersion(skillId: string, version: string): Promise<SkillView> {
+  return (await putJson(`/api/skills/${encodeURIComponent(skillId)}/active-version`, { version })).json();
+}
+
+export async function rollbackSkill(skillId: string): Promise<SkillView> {
+  return (await post(`/api/skills/${encodeURIComponent(skillId)}/rollback`, {})).json();
 }
 
 export interface RoleUsageTotal {

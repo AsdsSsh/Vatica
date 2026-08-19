@@ -173,6 +173,7 @@ curl localhost:8080/api/task
   ```
   `docker-compose.postgres.yml` 首次启动会执行 `CREATE EXTENSION vector`；表结构由 JPA 自动创建（`ddl-auto: update`），测试环境继续用 H2，单测零外部依赖。
 - **知识库**（迭代 19B）：桌面端“设置 → 知识库”可导入已授权工作区内的 `.txt/.md/.docx`，按“仅自己/组织共享”检索并返回 `C1/C2` 引用和原文偏移。默认 `local-hash` Embedding 用于离线学习；生产语义检索设置 `VATICA_KNOWLEDGE_EMBEDDING_PROVIDER=openai`，并配置 `SPRING_AI_OPENAI_EMBEDDING_API_KEY`、`SPRING_AI_OPENAI_EMBEDDING_BASE_URL`、`SPRING_AI_OPENAI_EMBEDDING_OPTIONS_MODEL`。模型向量维度必须与 `VATICA_KNOWLEDGE_VECTOR_DIMENSIONS` 一致。
+- **Skills**（迭代 20A/20B）：桌面端“设置 → Skills”展示内置 Skill 目录；组织管理员可启停、切换发布版本和一键回滚。发布清单来自 `backend/src/main/resources/vatica-skills/`，注册时校验 Agent 角色、工具是否存在及角色工具白名单。任务计划会固定 `skillId@version`；AgentScope SkillRunner 只注册“既有授权工具 ∩ manifest 工具”，升级影响新任务，已创建任务继续使用固定版本，停用会阻断后续执行。回归：后端 411 项通过、2 项按条件跳过，前端 `npm run build` 通过。
 - 会话记忆已持久化：多轮对话重启后仍可引用前文（内存滑窗热缓存 + PostgreSQL 落库）
 
 ### 迭代 5.5：质量闭环（LLM-as-Judge 评分 + 自动/人工返工）

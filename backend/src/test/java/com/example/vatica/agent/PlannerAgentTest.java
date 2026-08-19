@@ -51,7 +51,7 @@ class PlannerAgentTest {
     void parsesValidJsonPlan() {
         when(callSpec.content()).thenReturn("""
                 {"steps":[
-                  {"description":"读取数据文件","agent":"workspace","needsApproval":false},
+                  {"description":"读取数据文件","agent":"workspace","skillId":"untrusted-skill","skillVersion":"9.9.9","needsApproval":false},
                   {"description":"发送邮件通知","agent":"pim","needsApproval":true}
                 ]}""");
 
@@ -61,6 +61,8 @@ class PlannerAgentTest {
         assertThat(plan.getSteps().get(0).getDescription()).contains("读取数据");
         assertThat(plan.getSteps().get(0).isNeedsApproval()).isFalse();
         assertThat(plan.getSteps().get(0).getAgent()).isEqualTo("workspace");
+        assertThat(plan.getSteps().get(0).getSkillId()).isNull();
+        assertThat(plan.getSteps().get(0).getSkillVersion()).isNull();
         assertThat(plan.getSteps().get(1).isNeedsApproval()).isTrue();
         assertThat(plan.getSteps().get(1).getAgent()).isEqualTo("pim");
     }

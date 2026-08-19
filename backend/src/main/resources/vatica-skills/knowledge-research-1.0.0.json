@@ -1,0 +1,11 @@
+{
+  "id": "knowledge-research",
+  "version": "1.0.0",
+  "displayName": "知识研究",
+  "description": "检索组织或个人知识库，并基于命中文档回答问题。",
+  "agentRole": "research",
+  "tools": ["search_knowledge_base"],
+  "permissions": ["knowledge:read"],
+  "entryPrompt": "优先检索知识库，只基于命中的文档片段作答，并保留引用编号。",
+  "releasedAt": "2026-08-19T00:00:00Z"
+}
