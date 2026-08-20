@@ -11,8 +11,8 @@ import java.util.stream.Stream;
 
 import com.example.vatica.permission.FileSandboxPolicy;
 
-import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.ai.tool.annotation.ToolParam;
+import io.agentscope.core.tool.Tool;
+import io.agentscope.core.tool.ToolParam;
 
 /**
  * 文件读写工具（read_file / write_file / list_files）。
@@ -43,7 +43,7 @@ public final class FileTools {
     @Tool(name = "read_file", description = "读取工作区或用户授权目录内文本文件的内容并返回完整文本。"
             + "适用于 .md / .txt / .csv / .json 等 UTF-8 纯文本文件；不适用于图片、Word、Excel 等二进制文件。"
             + "文件较大或不确定路径时，先调用 list_files 查看目录结构。")
-    public String readFile(@ToolParam(description = "文件路径。相对路径以当前工作区根为基准；"
+    public String readFile(@ToolParam(name = "path", description = "文件路径。相对路径以当前工作区根为基准；"
             + "也支持绝对路径，未授权目录会触发用户确认", required = true) String path) {
         Path target = sandboxPolicy.resolveForRead(path);
         try {
@@ -68,8 +68,8 @@ public final class FileTools {
             + "父目录不存在会自动创建。用于保存生成的分析结果、报告草稿等产物。"
             + "写入前若不确定目标是否已存在，先调用 list_files 确认，避免误覆盖。")
     public String writeFile(
-            @ToolParam(description = "目标文件路径，相对路径以当前工作区根为基准；也支持绝对路径，未授权目录会触发用户确认", required = true) String path,
-            @ToolParam(description = "要写入的完整文件内容", required = true) String content) {
+            @ToolParam(name = "path", description = "目标文件路径，相对路径以当前工作区根为基准；也支持绝对路径，未授权目录会触发用户确认", required = true) String path,
+            @ToolParam(name = "content", description = "要写入的完整文件内容", required = true) String content) {
         Path target = sandboxPolicy.resolveForWrite(path);
         try {
             byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
@@ -83,7 +83,7 @@ public final class FileTools {
     @Tool(name = "list_files", description = "列出工作区或用户授权目录内某目录下的文件和子目录（名称、类型、大小、修改时间）。"
             + "用于查看有哪些可用数据文件、确认目标是否已存在、规划下一步操作。"
             + "只列一层，不递归子目录；想看子目录内容需传入子目录路径。")
-    public String listFiles(@ToolParam(description = "目录路径；传入 \".\" 表示当前工作区根；相对路径以工作区根为基准",
+    public String listFiles(@ToolParam(name = "path", description = "目录路径；传入 \".\" 表示当前工作区根；相对路径以工作区根为基准",
             required = false) String path) {
         String dirPath = (path == null || path.isBlank()) ? "." : path;
         Path dir = sandboxPolicy.resolveForRead(dirPath);

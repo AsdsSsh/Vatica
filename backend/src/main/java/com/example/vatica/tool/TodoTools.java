@@ -13,8 +13,8 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
-import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.ai.tool.annotation.ToolParam;
+import io.agentscope.core.tool.Tool;
+import io.agentscope.core.tool.ToolParam;
 
 import com.example.vatica.config.AppStateProperties;
 import com.example.vatica.auth.RequestIdentity;
@@ -61,8 +61,8 @@ public final class TodoTools {
     @Tool(name = "todo_add", description = "添加一条待办到本地清单。截止日期可选（yyyy-MM-dd）。"
             + "返回新待办的 id，后续可用 todo_complete 通过 id 标记完成。")
     public synchronized String add(
-            @ToolParam(description = "待办标题，如\"准备项目周会材料\"", required = true) String title,
-            @ToolParam(description = "截止日期（可选），如 2026-08-17", required = false) String due) {
+            @ToolParam(name = "title", description = "待办标题，如\"准备项目周会材料\"", required = true) String title,
+            @ToolParam(name = "due", description = "截止日期（可选），如 2026-08-17", required = false) String due) {
         if (title == null || title.isBlank()) {
             throw new IllegalArgumentException("操作失败：待办标题不能为空。");
         }
@@ -110,7 +110,7 @@ public final class TodoTools {
 
     @Tool(name = "todo_complete", description = "按 id 把一条待办标记为已完成。id 来自 todo_add 的返回值或 todo_list 的列表。")
     public synchronized String complete(
-            @ToolParam(description = "待办 id（如 todo_add 返回的 id）", required = true) String id) {
+            @ToolParam(name = "id", description = "待办 id（如 todo_add 返回的 id）", required = true) String id) {
         if (id == null || id.isBlank()) {
             throw new IllegalArgumentException("操作失败：待办 id 不能为空。请先从 todo_list 获取 id。");
         }
@@ -133,7 +133,7 @@ public final class TodoTools {
     @Tool(name = "todo_remind", description = "列出需要在 N 天内关注的未完成待办（含已逾期），按截止日期升序。"
             + "用于提醒用户到期事项；返回中已标注\"已逾期 X 天 / 今天到期 / X 天后到期\"，请原样转述。")
     public synchronized String remind(
-            @ToolParam(description = "未来 N 天窗口（可选，默认 7），如 3 表示只关注 3 天内到期（含逾期）的待办",
+            @ToolParam(name = "days", description = "未来 N 天窗口（可选，默认 7），如 3 表示只关注 3 天内到期（含逾期）的待办",
                     required = false) Integer days) {
         int window = days == null || days <= 0 ? 7 : Math.min(days, 90);
         LocalDate today = LocalDate.now();

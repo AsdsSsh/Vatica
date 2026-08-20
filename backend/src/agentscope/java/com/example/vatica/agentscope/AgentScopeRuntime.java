@@ -15,6 +15,7 @@ import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.config.ModelSlot;
 import com.example.vatica.permission.FilePermissionPolicy;
 import com.example.vatica.permission.PermissionBoundToolCallbacks;
+import com.example.vatica.tool.AgentToolProvider;
 import com.example.vatica.runtime.AgentRegistry;
 import com.example.vatica.runtime.AgentRuntime;
 import com.example.vatica.runtime.AgentRuntime.AdvisoryRequest;
@@ -38,7 +39,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.ToolCallbackProvider;
 
 /**
  * 迭代 15 I15-18/I15-20：AgentScope 单/双 Agent POC（仅 -Pagentscope 构建加载）。
@@ -50,22 +50,22 @@ public class AgentScopeRuntime implements AgentRuntime {
     private static final Logger log = LoggerFactory.getLogger(AgentScopeRuntime.class);
 
     private final ModelRegistry registry;
-    private final ToolCallbackProvider vaticaTools;
+    private final AgentToolProvider vaticaTools;
     private final ObjectMapper mapper;
     private final AgentRegistry agentRegistry;
     private final Function<ModelSlot, Model> modelFactory;
     private final AgentScopeSkillRunner skillRunner;
 
-    public AgentScopeRuntime(ModelRegistry registry, ToolCallbackProvider vaticaTools, ObjectMapper mapper) {
+    public AgentScopeRuntime(ModelRegistry registry, AgentToolProvider vaticaTools, ObjectMapper mapper) {
         this(registry, vaticaTools, mapper, new AgentRegistry());
     }
 
-    public AgentScopeRuntime(ModelRegistry registry, ToolCallbackProvider vaticaTools, ObjectMapper mapper,
+    public AgentScopeRuntime(ModelRegistry registry, AgentToolProvider vaticaTools, ObjectMapper mapper,
             AgentRegistry agentRegistry) {
         this(registry, vaticaTools, mapper, agentRegistry, registry::agentScopeModel);
     }
 
-    AgentScopeRuntime(ModelRegistry registry, ToolCallbackProvider vaticaTools, ObjectMapper mapper,
+    AgentScopeRuntime(ModelRegistry registry, AgentToolProvider vaticaTools, ObjectMapper mapper,
             AgentRegistry agentRegistry, Function<ModelSlot, Model> modelFactory) {
         this.registry = registry;
         this.vaticaTools = vaticaTools;
@@ -135,7 +135,7 @@ public class AgentScopeRuntime implements AgentRuntime {
                     完成后优先输出 JSON：{"result":"结果","notes":[],"needHelp":null,"discoveries":[]}。
                     needHelp 只用于确实无法继续的求助，discoveries 最多提出 2 个必要补充步骤。
                     """ + role.systemPrompt();
-            ToolKitContext kit = buildToolkit(request.modelSlot(), request.toolCallbacks(), traces,
+            ToolKitContext kit = buildToolkit(request.modelSlot(), request.tools(), traces,
                     "vatica-" + role.id(), system, Set.of(), request.sessionId());
             try {
                 AgentReply reply = callAgent(kit.agent(), stepPrompt(request), request.identity(), request.sessionId());
@@ -233,12 +233,13 @@ public class AgentScopeRuntime implements AgentRuntime {
             List<String> traces, String agentName, String sysPrompt, Set<String> allowedTools) {
         ModelSlot slot = registry.defaultSlot();
         String channel = TenantChannels.chat(identity, "poc-agentscope");
-        ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
+        io.agentscope.core.tool.AgentTool[] tools = PermissionBoundToolCallbacks.wrap(
                 vaticaTools, permission, channel, identity, null);
-        return buildToolkit(slot, callbacks, traces, agentName, sysPrompt, allowedTools, "poc-session");
+        return buildToolkit(slot, tools, traces,
+                agentName, sysPrompt, allowedTools, "poc-session");
     }
 
-    private ToolKitContext buildToolkit(ModelSlot slot, ToolCallback[] callbacks, List<String> traces,
+    private ToolKitContext buildToolkit(ModelSlot slot, io.agentscope.core.tool.AgentTool[] tools, List<String> traces,
             String agentName, String sysPrompt, Set<String> allowedTools, String sessionId) {
         Model model = modelFactory.apply(slot);
         Toolkit toolkit = new Toolkit();
@@ -248,12 +249,12 @@ public class AgentScopeRuntime implements AgentRuntime {
                     + TraceSanitizer.outputSummary(output, null) + " [" + result.getState() + "]");
         });
         List<String> registered = new ArrayList<>();
-        for (ToolCallback callback : callbacks) {
-            String toolName = callback.getToolDefinition().name();
+        for (io.agentscope.core.tool.AgentTool tool : tools) {
+            String toolName = tool.getName();
             if (!allowedTools.isEmpty() && !allowedTools.contains(toolName)) {
                 continue;
             }
-            toolkit.registerAgentTool(new SpringAiToolAdapter(callback, mapper));
+            toolkit.registerAgentTool(tool);
             registered.add(toolName);
         }
         GenerateOptions.Builder options = GenerateOptions.builder().reasoningEffort("none")

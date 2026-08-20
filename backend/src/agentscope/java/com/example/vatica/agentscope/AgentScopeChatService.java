@@ -5,7 +5,6 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
 
 import com.example.vatica.auth.RequestIdentity;
@@ -30,6 +29,7 @@ import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
 import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.tool.Toolkit;
+import io.agentscope.core.tool.AgentTool;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.SignalType;
 
@@ -89,8 +89,8 @@ public class AgentScopeChatService {
 
     private ReActAgent buildAgent(ChatRequest request) {
         Toolkit toolkit = new Toolkit();
-        for (ToolCallback callback : request.toolCallbacks()) {
-            toolkit.registerAgentTool(new SpringAiToolAdapter(callback, mapper));
+        for (AgentTool tool : request.tools()) {
+            toolkit.registerAgentTool(tool);
         }
         GenerateOptions options = GenerateOptions.builder()
                 .stream(request.streaming())
@@ -167,21 +167,21 @@ public class AgentScopeChatService {
     }
 
     public record ChatRequest(ModelSlot slot, ReasoningMode reasoningMode, String systemPrompt,
-            List<ConversationMessage> history, String userPrompt, ToolCallback[] toolCallbacks,
+            List<ConversationMessage> history, String userPrompt, AgentTool[] tools,
             RequestIdentity identity, String sessionId, boolean streaming) {
         public ChatRequest {
             reasoningMode = reasoningMode == null ? ReasoningMode.DISABLED : reasoningMode;
             systemPrompt = systemPrompt == null ? "" : systemPrompt;
             history = history == null ? List.of() : List.copyOf(history);
             userPrompt = userPrompt == null ? "" : userPrompt;
-            toolCallbacks = toolCallbacks == null ? new ToolCallback[0] : toolCallbacks.clone();
+            tools = tools == null ? new AgentTool[0] : tools.clone();
             sessionId = sessionId == null || sessionId.isBlank()
                     ? "chat-" + UUID.randomUUID() : sessionId;
         }
 
         @Override
-        public ToolCallback[] toolCallbacks() {
-            return toolCallbacks.clone();
+        public AgentTool[] tools() {
+            return tools.clone();
         }
     }
 

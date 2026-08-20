@@ -17,12 +17,12 @@ import reactor.core.publisher.Mono;
  * 权限/身份包装仍由 AgentScopeRuntime 在注入前用 PermissionBoundToolCallbacks 完成，
  * 因此 AgentScope 不绕过 Vatica 的权限事实源。
  */
-final class SpringAiToolAdapter implements AgentTool {
+public final class SpringAiToolAdapter implements AgentTool {
 
     private final ToolCallback delegate;
     private final ObjectMapper mapper;
 
-    SpringAiToolAdapter(ToolCallback delegate, ObjectMapper mapper) {
+    public SpringAiToolAdapter(ToolCallback delegate, ObjectMapper mapper) {
         this.delegate = delegate;
         this.mapper = mapper;
     }

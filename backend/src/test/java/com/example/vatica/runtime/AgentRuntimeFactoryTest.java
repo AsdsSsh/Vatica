@@ -9,12 +9,12 @@ import static org.mockito.Mockito.when;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.example.vatica.agent.ExecutorAgent;
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.config.ModelRegistry;
+import com.example.vatica.tool.AgentToolProvider;
 import com.example.vatica.runtime.AgentRuntime.AdvisoryKind;
 import com.example.vatica.runtime.AgentRuntime.AdvisoryRequest;
 import com.example.vatica.runtime.AgentRuntime.AdvisoryResult;
@@ -28,7 +28,7 @@ class AgentRuntimeFactoryTest {
     @Test
     void defaultsToAgentScopeRuntime() {
         AgentRuntimeFactory factory = new AgentRuntimeFactory(mock(ModelRegistry.class),
-                mock(ToolCallbackProvider.class), new ObjectMapper(),
+                mock(AgentToolProvider.class), new ObjectMapper(),
                 new AgentRuntimeProperties(null), mock(ExecutorAgent.class), new AgentRegistry(),
                 mock(DirectModelUsageRecorder.class));
 
@@ -39,7 +39,7 @@ class AgentRuntimeFactoryTest {
     @Test
     void explicitLegacyRuntimeRemainsAvailableForRollback() {
         AgentRuntimeFactory factory = new AgentRuntimeFactory(mock(ModelRegistry.class),
-                mock(ToolCallbackProvider.class), new ObjectMapper(),
+                mock(AgentToolProvider.class), new ObjectMapper(),
                 new AgentRuntimeProperties("legacy"), mock(ExecutorAgent.class), new AgentRegistry(),
                 mock(DirectModelUsageRecorder.class));
 
@@ -53,7 +53,7 @@ class AgentRuntimeFactoryTest {
                 new DirectModelUsageRecorder.Reservation(null, 0);
         when(usage.begin()).thenReturn(reservation);
         AgentRuntimeFactory factory = new AgentRuntimeFactory(mock(ModelRegistry.class),
-                mock(ToolCallbackProvider.class), new ObjectMapper(),
+                mock(AgentToolProvider.class), new ObjectMapper(),
                 new AgentRuntimeProperties(null), mock(ExecutorAgent.class), new AgentRegistry(), usage);
         AgentRuntime runtime = mock(AgentRuntime.class);
         StepUsage stepUsage = new StepUsage(8, 3, 11, 0);

@@ -20,6 +20,7 @@ import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.config.ModelSlot;
 import com.example.vatica.runtime.AgentRegistry;
 import com.example.vatica.runtime.AgentRuntime;
+import com.example.vatica.tool.AgentToolProvider;
 import com.example.vatica.runtime.AgentRuntime.AdvisoryKind;
 import com.example.vatica.runtime.AgentRuntime.AdvisoryRequest;
 import com.example.vatica.skill.SkillCatalogService.ExecutionProfile;
@@ -33,6 +34,7 @@ import io.agentscope.core.model.ChatUsage;
 import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.ToolSchema;
+import io.agentscope.core.tool.AgentTool;
 import reactor.core.publisher.Flux;
 
 /** 迭代 17A：不访问外网，真实穿过 AgentScope ReActAgent 的生产步骤契约。 */
@@ -64,7 +66,7 @@ class AgentScopeProductionStepTest {
                 "http://localhost", "", "test", 0.0, true);
         ModelRegistry registry = mock(ModelRegistry.class);
         when(registry.activeSlotFor(ModelSlot.CAP_JUDGE)).thenReturn(slot);
-        AgentScopeRuntime runtime = new AgentScopeRuntime(registry, () -> new ToolCallback[0],
+        AgentScopeRuntime runtime = new AgentScopeRuntime(registry, () -> new AgentTool[0],
                 new ObjectMapper(), new AgentRegistry(), selected -> deterministicModel);
 
         var result = runtime.advise(new AdvisoryRequest(AdvisoryKind.JUDGE,
@@ -101,7 +103,7 @@ class AgentScopeProductionStepTest {
             }
         };
         AgentRegistry roles = new AgentRegistry();
-        AgentScopeRuntime runtime = new AgentScopeRuntime(mock(ModelRegistry.class), () -> new ToolCallback[0],
+        AgentScopeRuntime runtime = new AgentScopeRuntime(mock(ModelRegistry.class), () -> new AgentTool[0],
                 new ObjectMapper(), roles, slot -> deterministicModel);
         TaskStep step = new TaskStep(2, "生成 Word 报告", false);
         step.setAgent("document");
@@ -132,7 +134,7 @@ class AgentScopeProductionStepTest {
     @Test
     void rejectsSkillWhenDeclaredToolIsMissingFromVaticaAuthorizedCallbacks() {
         AgentRegistry roles = new AgentRegistry();
-        AgentScopeRuntime runtime = new AgentScopeRuntime(mock(ModelRegistry.class), () -> new ToolCallback[0],
+        AgentScopeRuntime runtime = new AgentScopeRuntime(mock(ModelRegistry.class), () -> new AgentTool[0],
                 new ObjectMapper(), roles, slot -> mock(Model.class));
         TaskStep step = new TaskStep(1, "生成 Word 报告", false);
         step.setAgent("document");

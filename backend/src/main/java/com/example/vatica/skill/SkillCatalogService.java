@@ -11,7 +11,6 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,6 +20,7 @@ import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
 import com.example.vatica.controller.ForbiddenException;
 import com.example.vatica.runtime.AgentRegistry;
+import com.example.vatica.tool.AgentToolProvider;
 
 /**
  * 迭代 20A：内置 Skill 目录与组织级生命周期。
@@ -33,11 +33,11 @@ public class SkillCatalogService {
     private final SkillVersionRepository versions;
     private final SkillInstallationRepository installations;
     private final AgentRegistry agentRegistry;
-    private final ToolCallbackProvider localTools;
+    private final AgentToolProvider localTools;
 
     public SkillCatalogService(SkillManifestLoader loader, SkillVersionRepository versions,
             SkillInstallationRepository installations, AgentRegistry agentRegistry,
-            @Qualifier("vaticaTools") ToolCallbackProvider localTools) {
+            @Qualifier("vaticaTools") AgentToolProvider localTools) {
         this.loader = loader;
         this.versions = versions;
         this.installations = installations;
@@ -195,8 +195,8 @@ public class SkillCatalogService {
     /** 同步 classpath 发布物，并为首次访问的组织安装每个 Skill 的最新版本。 */
     private Catalog synchronize(RequestIdentity identity) {
         requireIdentity(identity);
-        Set<String> availableTools = java.util.Arrays.stream(localTools.getToolCallbacks())
-                .map(callback -> callback.getToolDefinition().name()).collect(Collectors.toUnmodifiableSet());
+        Set<String> availableTools = java.util.Arrays.stream(localTools.getAgentTools())
+                .map(tool -> tool.getName()).collect(Collectors.toUnmodifiableSet());
         for (SkillManifestLoader.LoadedManifest loaded : loader.load()) {
             validate(loaded.manifest(), availableTools);
             versions.findBySkillIdAndVersion(loaded.manifest().id(), loaded.manifest().version())

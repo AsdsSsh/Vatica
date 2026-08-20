@@ -13,8 +13,8 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
-import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.ai.tool.annotation.ToolParam;
+import io.agentscope.core.tool.Tool;
+import io.agentscope.core.tool.ToolParam;
 
 import com.example.vatica.config.AppStateProperties;
 import com.example.vatica.auth.RequestIdentity;
@@ -64,8 +64,8 @@ public final class CalendarTools {
             + "日期格式：yyyy-MM-dd（如 2026-08-17）或带时间 yyyy-MM-ddTHH:mm（如 2026-08-17T09:00）。"
             + "返回结构化\"键=值\"文本，必须原样引用其中的时间与标题回答用户，不得自行推测日程内容。")
     public synchronized String query(
-            @ToolParam(description = "查询范围开始（含当天），如 2026-08-17", required = true) String start,
-            @ToolParam(description = "查询范围结束（含当天），如 2026-08-21；可带时间 2026-08-21T23:59", required = true) String end) {
+            @ToolParam(name = "start", description = "查询范围开始（含当天），如 2026-08-17", required = true) String start,
+            @ToolParam(name = "end", description = "查询范围结束（含当天），如 2026-08-21；可带时间 2026-08-21T23:59", required = true) String end) {
         LocalDateTime rangeStart = parseFlexible(start, false, "开始");
         LocalDateTime rangeEnd = parseFlexible(end, true, "结束");
         if (!rangeEnd.isAfter(rangeStart)) {
@@ -109,10 +109,10 @@ public final class CalendarTools {
             + "重复规则可选：FREQ=DAILY 或 FREQ=WEEKLY，且必须带 COUNT=n（次数）或 UNTIL=yyyyMMdd（截止），"
             + "如 \"FREQ=WEEKLY;COUNT=4\"。创建前若用户未明确要求重复，不要加重复规则。")
     public synchronized String create(
-            @ToolParam(description = "日程标题，如\"项目周会\"", required = true) String summary,
-            @ToolParam(description = "开始时间，如 2026-08-17 或 2026-08-17T10:00", required = true) String start,
-            @ToolParam(description = "结束时间，同开始格式；省略时默认开始后 1 小时", required = false) String end,
-            @ToolParam(description = "重复规则（可选），如 \"FREQ=WEEKLY;COUNT=4\"；不带则创建单次日程", required = false) String rrule) {
+            @ToolParam(name = "summary", description = "日程标题，如\"项目周会\"", required = true) String summary,
+            @ToolParam(name = "start", description = "开始时间，如 2026-08-17 或 2026-08-17T10:00", required = true) String start,
+            @ToolParam(name = "end", description = "结束时间，同开始格式；省略时默认开始后 1 小时", required = false) String end,
+            @ToolParam(name = "rrule", description = "重复规则（可选），如 \"FREQ=WEEKLY;COUNT=4\"；不带则创建单次日程", required = false) String rrule) {
         if (summary == null || summary.isBlank()) {
             throw new IllegalArgumentException("操作失败：日程标题不能为空。");
         }
@@ -143,7 +143,7 @@ public final class CalendarTools {
             + "支持 RFC5545 基础子集：SUMMARY/DTSTART/DTEND + FREQ=DAILY|WEEKLY 重复规则；"
             + "复杂重复规则（INTERVAL/BYDAY 等）会降级为单次日程并在返回中说明。")
     public synchronized String importFrom(
-            @ToolParam(description = "待导入的 .ics 文件路径，如 \"日程备份.ics\"；必须位于已授权工作目录内", required = true) String sourcePath) {
+            @ToolParam(name = "sourcePath", description = "待导入的 .ics 文件路径，如 \"日程备份.ics\"；必须位于已授权工作目录内", required = true) String sourcePath) {
         Path source = sandboxPolicy.resolveForRead(sourcePath);
         if (!Files.exists(source)) {
             throw new IllegalArgumentException("操作失败：文件不存在。请先调用 list_files 确认路径。");

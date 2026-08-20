@@ -2,11 +2,11 @@ package com.example.vatica.runtime;
 
 import java.util.Optional;
 
-import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.stereotype.Component;
 
 import com.example.vatica.agent.ExecutorAgent;
 import com.example.vatica.config.ModelRegistry;
+import com.example.vatica.tool.AgentToolProvider;
 import com.example.vatica.runtime.AgentRuntime.AdvisoryRequest;
 import com.example.vatica.runtime.AgentRuntime.AdvisoryResult;
 import com.example.vatica.usage.DirectModelUsageRecorder;
@@ -19,7 +19,7 @@ public class AgentRuntimeFactory {
     private static final String AGENTSCOPE_CLASS = "com.example.vatica.agentscope.AgentScopeRuntime";
 
     private final ModelRegistry registry;
-    private final ToolCallbackProvider vaticaTools;
+    private final AgentToolProvider vaticaTools;
     private final ObjectMapper mapper;
     private final AgentRuntimeProperties props;
     private final ExecutorAgent executorAgent;
@@ -27,7 +27,7 @@ public class AgentRuntimeFactory {
     private final DirectModelUsageRecorder directUsage;
     private volatile AgentRuntime runtime;
 
-    public AgentRuntimeFactory(ModelRegistry registry, ToolCallbackProvider vaticaTools,
+    public AgentRuntimeFactory(ModelRegistry registry, AgentToolProvider vaticaTools,
             ObjectMapper mapper, AgentRuntimeProperties props, ExecutorAgent executorAgent,
             AgentRegistry agentRegistry, DirectModelUsageRecorder directUsage) {
         this.registry = registry;
@@ -78,7 +78,7 @@ public class AgentRuntimeFactory {
         if (AgentRuntimeProperties.AGENTSCOPE.equals(props.runtime())) {
             try {
                 Class<?> type = Class.forName(AGENTSCOPE_CLASS);
-                return (AgentRuntime) type.getConstructor(ModelRegistry.class, ToolCallbackProvider.class,
+                return (AgentRuntime) type.getConstructor(ModelRegistry.class, AgentToolProvider.class,
                         ObjectMapper.class, AgentRegistry.class)
                         .newInstance(registry, vaticaTools, mapper, agentRegistry);
             } catch (ClassNotFoundException e) {

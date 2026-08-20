@@ -14,6 +14,7 @@ import com.example.vatica.controller.InMemorySessionMemory;
 import com.example.vatica.controller.JpaSessionMemory;
 import com.example.vatica.controller.SessionMemory;
 import com.example.vatica.controller.SessionSummaryService;
+import com.example.vatica.agentscope.AgentToolAdapters;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
@@ -98,7 +99,8 @@ public class ChatConfig {
             com.example.vatica.runtime.AgentToolCatalog agentTools,
             com.example.vatica.runtime.AgentRegistry agentRegistry,
             com.example.vatica.runtime.AgentRuntimeFactory runtimeFactory) {
-        return new PlannerAgent(plannerChatClient, objectMapper, agentTools::callbacks, agentRegistry, runtimeFactory);
+        return new PlannerAgent(plannerChatClient, objectMapper,
+                () -> AgentToolAdapters.toCallbacks(agentTools.tools(), objectMapper), agentRegistry, runtimeFactory);
     }
 
     /** 迭代 5：Executor Agent（复用主客户端全部工具）。 */

@@ -868,13 +868,13 @@ public class TaskService {
             // 迭代 11：把任务创建时的权限快照绑定到本次步骤的全部工具调用
             FilePermissionPolicy policy = parsePermission(record.getPermissionJson());
             RequestIdentity identity = identityOf(record);
-            ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
-                    agentTools::callbacks, policy, TenantChannels.task(identity, record.getId()), identity,
+            io.agentscope.core.tool.AgentTool[] tools = PermissionBoundToolCallbacks.wrap(
+                    agentTools::tools, policy, TenantChannels.task(identity, record.getId()), identity,
                     ephemeralMailCredentials.get(record.getId()));
             // 迭代 17A：角色工具白名单是机械门禁，位于 prompt 之外，模型无法请求未注册工具。
             var agent = agentRegistry.resolve(step.getAgent());
             step.setAgent(agent.id());
-            callbacks = agentRegistry.allowedCallbacks(agent.id(), callbacks);
+            tools = agentRegistry.allowedTools(agent.id(), tools);
             // 迭代 20B：按组织复核启用状态，并解析任务固定的不可变 Skill 版本。
             ExecutionProfile skill = skillCatalog.resolveForExecution(identity, agent.id(),
                     step.getSkillId(), step.getSkillVersion()).orElse(null);
@@ -882,10 +882,10 @@ public class TaskService {
                 step.setSkillId(skill.id());
                 step.setSkillVersion(skill.version());
                 // 迭代 20D：Vatica 执行 manifest 工具交集、能力声明和资源额度。
-                callbacks = SkillExecutionPolicy.constrain(skill, callbacks);
+                tools = SkillExecutionPolicy.constrain(skill, tools);
             }
             // 迭代 15 I15-3：retryable 工具错误重试 1 次；重试同样消耗 Skill/全局调用额度。
-            callbacks = new RetryableToolCallbacks().wrap(callbacks);
+            tools = new RetryableToolCallbacks().wrap(tools);
             // 迭代 17C：绑定链同时决定执行模型和观测维度；临时凭据只在本任务内优先。
             AgentModelBindingService.Resolution model = agentModelBindings.resolve(identity, agent.id(),
                     agent.modelCapability(), ephemeralCredentials.get(record.getId()));
@@ -911,8 +911,8 @@ public class TaskService {
                     runtime.name(), model.slot().id(), record.getExecutionAttempt());
             int maxOutputChars = skill == null ? com.example.vatica.tool.ToolResultPolicy.MAX_OUTPUT_CHARS
                     : skill.limits().maxOutputChars();
-            callbacks = new TracedToolCallbacks(mapper, traceRepository, observability)
-                    .wrap(callbacks, trace, maxOutputChars);
+            tools = new TracedToolCallbacks(mapper, traceRepository, observability)
+                    .wrap(tools, trace, maxOutputChars);
             boolean platformQuota = !"EPHEMERAL".equals(record.getModelSource());
             UsageContext.set(usageSnapshot(record, "EXECUTOR", step.getId(), "LOW",
                     contextBudget.executorTokens(), platformQuota, agent.id(), agent.displayName(), model.slot().id()));
@@ -923,7 +923,7 @@ public class TaskService {
             AgentRuntime.StepUsage observedUsage = null;
             try {
                 AgentRuntime.StepRequest request = new AgentRuntime.StepRequest(
-                        record.getGoal(), step, context, reflection, identity, callbacks,
+                        record.getGoal(), step, context, reflection, identity, tools,
                         clientFor(record, true, model.slot()), model.slot(), agent,
                         record.getId() + ":step:" + step.getId(), skill);
                 if (AgentRuntimeProperties.AGENTSCOPE.equals(runtime.name())) {
@@ -945,7 +945,7 @@ public class TaskService {
                                     contextBudget.executorTokens(), platformQuota, agent.id(), agent.displayName(),
                                     recovery.slot().id()));
                             AgentRuntime.StepRequest retry = new AgentRuntime.StepRequest(
-                                    record.getGoal(), step, context, reflection, identity, callbacks,
+                                    record.getGoal(), step, context, reflection, identity, tools,
                                     clientFor(record, true, recovery.slot()), recovery.slot(), agent,
                                     record.getId() + ":step:" + step.getId() + ":recovery", skill);
                             DirectModelUsageRecorder.Reservation retryReservation = directUsage.begin();

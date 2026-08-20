@@ -4,7 +4,7 @@ import com.example.vatica.permission.FilePermissionPolicy;
 import com.example.vatica.permission.FileSandboxPolicy;
 import com.example.vatica.permission.WorkspaceRoot;
 
-import org.springframework.ai.tool.annotation.Tool;
+import io.agentscope.core.tool.Tool;
 
 /**
  * 工作区查询工具（list_workspace_roots，迭代 11）：让 Planner/Executor 知道

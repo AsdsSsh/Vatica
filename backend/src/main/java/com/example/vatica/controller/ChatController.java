@@ -12,6 +12,7 @@ import com.example.vatica.config.ModelSlot;
 import com.example.vatica.config.ReasoningMode;
 import com.example.vatica.agentscope.AgentScopeChatService;
 import com.example.vatica.agentscope.AgentScopeChatService.ChatEvent;
+import com.example.vatica.agentscope.AgentToolAdapters;
 import com.example.vatica.context.ContextAssembler;
 import com.example.vatica.context.ContextBudget;
 import com.example.vatica.event.SseEventGateway;
@@ -24,15 +25,15 @@ import com.example.vatica.permission.PermissionEventPublisher;
 import com.example.vatica.trace.TraceContext;
 import com.example.vatica.trace.TracedToolCallbacks;
 import com.example.vatica.tool.RetryableToolCallbacks;
+import com.example.vatica.tool.AgentToolProvider;
 import com.example.vatica.usage.UsageContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -80,7 +81,7 @@ public class ChatController {
     private final AgentScopeChatService chatService;
     private final ChatProperties chatProperties;
     private final SessionMemory sessionMemory;
-    private final ToolCallbackProvider vaticaTools;
+    private final AgentToolProvider vaticaTools;
     private final PermissionEventPublisher permissionEvents;
     private final FilePermissionRequestService permissionRequests;
     private final ObjectMapper mapper;
@@ -92,7 +93,7 @@ public class ChatController {
 
     @Autowired
     public ChatController(ModelRegistry registry, ChatProperties chatProperties, SessionMemory sessionMemory,
-            ToolCallbackProvider vaticaTools, PermissionEventPublisher permissionEvents,
+            AgentToolProvider vaticaTools, PermissionEventPublisher permissionEvents,
             FilePermissionRequestService permissionRequests, ObjectMapper mapper, ContextBudget contextBudget,
             SseEventGateway eventGateway, AgentScopeChatService chatService) {
         this.registry = registry;
@@ -109,7 +110,7 @@ public class ChatController {
 
     /** 测试/兼容构造器；生产装配使用统一网关 Bean。 */
     public ChatController(ModelRegistry registry, ChatProperties chatProperties, SessionMemory sessionMemory,
-            ToolCallbackProvider vaticaTools, PermissionEventPublisher permissionEvents,
+            AgentToolProvider vaticaTools, PermissionEventPublisher permissionEvents,
             FilePermissionRequestService permissionRequests, ObjectMapper mapper, ContextBudget contextBudget) {
         this(registry, chatProperties, sessionMemory, vaticaTools, permissionEvents, permissionRequests,
                 mapper, contextBudget, new SseEventGateway(mapper), null);
@@ -117,10 +118,20 @@ public class ChatController {
 
     /** 迭代 22A 测试构造器：显式注入 AgentScope 聊天服务。 */
     public ChatController(ModelRegistry registry, ChatProperties chatProperties, SessionMemory sessionMemory,
-            ToolCallbackProvider vaticaTools, PermissionEventPublisher permissionEvents,
+            AgentToolProvider vaticaTools, PermissionEventPublisher permissionEvents,
             FilePermissionRequestService permissionRequests, ObjectMapper mapper, ContextBudget contextBudget,
             AgentScopeChatService chatService) {
         this(registry, chatProperties, sessionMemory, vaticaTools, permissionEvents, permissionRequests,
+                mapper, contextBudget, new SseEventGateway(mapper), chatService);
+    }
+
+    /** 迭代 22B 测试兼容：旧测试桩仍可提供 Spring AI callbacks，生产不注入该类型。 */
+    public ChatController(ModelRegistry registry, ChatProperties chatProperties, SessionMemory sessionMemory,
+            ToolCallbackProvider vaticaTools, PermissionEventPublisher permissionEvents,
+            FilePermissionRequestService permissionRequests, ObjectMapper mapper, ContextBudget contextBudget,
+            AgentScopeChatService chatService) {
+        this(registry, chatProperties, sessionMemory,
+                () -> AgentToolAdapters.fromProvider(vaticaTools, mapper), permissionEvents, permissionRequests,
                 mapper, contextBudget, new SseEventGateway(mapper), chatService);
     }
 
@@ -164,18 +175,21 @@ public class ChatController {
     public String chat(@RequestBody ChatRequest request) {
         RequestIdentity identity = RequestIdentityContext.require();
         ModelSlot slot = resolveSlot(request);
-        ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
+        io.agentscope.core.tool.AgentTool[] tools = PermissionBoundToolCallbacks.wrap(
                 vaticaTools, request.permission(), null, identity, request.mailCredential());
         // 迭代 15 I15-3：retryable 工具错误带上下文重试 1 次（权限包装在内层，每次真实执行都过权限）
-        callbacks = new RetryableToolCallbacks().wrap(callbacks);
+        tools = new RetryableToolCallbacks().wrap(tools);
         // 迭代 15 I15-1：显式 ReAct trace（非流式仅脱敏与计时，不推送 SSE）
-        callbacks = new TracedToolCallbacks(mapper, (SseEmitter) null).wrap(callbacks, chatTrace(identity, request.sessionId()));
+        tools = new TracedToolCallbacks(mapper, (SseEmitter) null)
+                .wrap(tools, chatTrace(identity, request.sessionId()),
+                        com.example.vatica.tool.ToolResultPolicy.MAX_OUTPUT_CHARS);
         UsageContext.set(usageSnapshot(request, identity));
         try {
             String reply = requireChatService().call(new AgentScopeChatService.ChatRequest(slot,
                     reasoningMode(request), SYSTEM_PROMPT,
                     ContextAssembler.chatHistory(sessionMemory, request.sessionId(), contextBudget),
-                    request.message(), callbacks, identity, request.sessionId(), false)).content();
+                    request.message(), tools,
+                    identity, request.sessionId(), false)).content();
             sessionMemory.append(request.sessionId(), request.message(), reply);
             return reply;
         } finally {
@@ -195,14 +209,15 @@ public class ChatController {
         // 迭代 15 I15-13：本次流式请求的用量上下文（advisor 读取，收尾发 usage 事件）
         UsageContext.set(usageSnapshot(request, identity));
 
-        ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
+        io.agentscope.core.tool.AgentTool[] tools = PermissionBoundToolCallbacks.wrap(
                 vaticaTools, request.permission(), channel, identity, request.mailCredential());
         // 迭代 15 I15-3：Self-Refine 重试（权限最内层，重试也重新过权限与身份快照）
-        callbacks = new RetryableToolCallbacks().wrap(callbacks);
+        tools = new RetryableToolCallbacks().wrap(tools);
         // 迭代 15 I15-1：升级迭代 12 的 tool_activity——补 traceId 与脱敏输入/输出摘要
-        callbacks = new TracedToolCallbacks(mapper,
+        tools = new TracedToolCallbacks(mapper,
                 (type, payload) -> eventGateway.publish(channel, type, payload))
-                .wrap(callbacks, chatTrace(identity, request.sessionId()));
+                .wrap(tools, chatTrace(identity, request.sessionId()),
+                        com.example.vatica.tool.ToolResultPolicy.MAX_OUTPUT_CHARS);
 
         StringBuilder reply = new StringBuilder();
         Disposable[] subscription = new Disposable[1];
@@ -225,7 +240,8 @@ public class ChatController {
         subscription[0] = requireChatService().stream(new AgentScopeChatService.ChatRequest(slot,
                 reasoningMode(request), SYSTEM_PROMPT,
                 ContextAssembler.chatHistory(sessionMemory, request.sessionId(), contextBudget),
-                request.message(), callbacks, identity, request.sessionId(), true))
+                request.message(), tools,
+                identity, request.sessionId(), true))
                 .subscribe(
                         event -> {
                             if (event.type() == ChatEvent.Type.REASONING

@@ -9,7 +9,6 @@ import java.util.function.Function;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.tool.ToolCallback;
 
 import com.example.vatica.config.ModelSlot;
 import com.example.vatica.runtime.AgentRegistry.AgentDefinition;
@@ -28,6 +27,7 @@ import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.ToolChoice;
 import io.agentscope.core.tool.Toolkit;
+import io.agentscope.core.tool.AgentTool;
 
 /**
  * 迭代 20B：版本化 Skill 的 AgentScope 执行器。
@@ -55,7 +55,7 @@ final class AgentScopeSkillRunner {
             throw new IllegalStateException("操作失败：Skill " + skill.id() + "@" + skill.version()
                     + " 与 Agent 角色 " + role.id() + " 不匹配。");
         }
-        ToolCallback[] callbacks = allowedCallbacks(request.toolCallbacks(), skill);
+        AgentTool[] tools = allowedTools(request.tools(), skill);
         List<String> traces = new ArrayList<>();
         Toolkit toolkit = new Toolkit();
         String agentName = "vatica-skill-" + skill.id() + "-" + skill.version().replace('.', '-');
@@ -64,8 +64,8 @@ final class AgentScopeSkillRunner {
             traces.add(skill.id() + "@" + skill.version() + ":" + use.getName() + " -> "
                     + TraceSanitizer.outputSummary(output, null) + " [" + result.getState() + "]");
         });
-        for (ToolCallback callback : callbacks) {
-            toolkit.registerAgentTool(new SpringAiToolAdapter(callback, mapper));
+        for (AgentTool tool : tools) {
+            toolkit.registerAgentTool(tool);
         }
         ReActAgent agent = ReActAgent.builder()
                 .name(agentName)
@@ -95,12 +95,12 @@ final class AgentScopeSkillRunner {
         }
     }
 
-    private static ToolCallback[] allowedCallbacks(ToolCallback[] callbacks, ExecutionProfile skill) {
+    private static AgentTool[] allowedTools(AgentTool[] tools, ExecutionProfile skill) {
         Set<String> declared = Set.copyOf(skill.tools());
-        ToolCallback[] selected = Arrays.stream(callbacks)
-                .filter(callback -> declared.contains(callback.getToolDefinition().name()))
-                .toArray(ToolCallback[]::new);
-        Set<String> available = Arrays.stream(selected).map(callback -> callback.getToolDefinition().name())
+        AgentTool[] selected = Arrays.stream(tools)
+                .filter(tool -> declared.contains(tool.getName()))
+                .toArray(AgentTool[]::new);
+        Set<String> available = Arrays.stream(selected).map(AgentTool::getName)
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         Set<String> missing = new LinkedHashSet<>(declared);
         missing.removeAll(available);

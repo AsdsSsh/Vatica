@@ -6,6 +6,8 @@ import java.util.Optional;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.tool.ToolCallback;
+import io.agentscope.core.tool.AgentTool;
+import com.example.vatica.agentscope.AgentToolAdapters;
 
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.config.ModelSlot;
@@ -61,24 +63,34 @@ public interface AgentRuntime {
 
     /** 迭代 17A：Vatica 编排层交给运行时的单步骤快照。 */
     record StepRequest(String goal, TaskStep step, List<String> context, String reflectionFeedback,
-            RequestIdentity identity, ToolCallback[] toolCallbacks, ChatClient legacyClient,
+            RequestIdentity identity, AgentTool[] tools, ChatClient legacyClient,
             ModelSlot modelSlot, AgentDefinition agent, String sessionId, ExecutionProfile skill) {
         public StepRequest {
             context = context == null ? List.of() : List.copyOf(context);
-            toolCallbacks = toolCallbacks == null ? new ToolCallback[0] : toolCallbacks.clone();
+            tools = tools == null ? new AgentTool[0] : tools.clone();
         }
 
         @Override
-        public ToolCallback[] toolCallbacks() {
-            return toolCallbacks.clone();
+        public AgentTool[] tools() {
+            return tools.clone();
         }
 
         /** 兼容 17A 的运行时单测与 POC；未绑定 Skill 时保留角色级执行。 */
         public StepRequest(String goal, TaskStep step, List<String> context, String reflectionFeedback,
                 RequestIdentity identity, ToolCallback[] toolCallbacks, ChatClient legacyClient,
                 ModelSlot modelSlot, AgentDefinition agent, String sessionId) {
-            this(goal, step, context, reflectionFeedback, identity, toolCallbacks, legacyClient,
+            this(goal, step, context, reflectionFeedback, identity,
+                    AgentToolAdapters.fromCallbacks(toolCallbacks, new com.fasterxml.jackson.databind.ObjectMapper()), legacyClient,
                     modelSlot, agent, sessionId, null);
+        }
+
+        /** 迁移期兼容：带 Skill 的旧 ToolCallback 构造器。 */
+        public StepRequest(String goal, TaskStep step, List<String> context, String reflectionFeedback,
+                RequestIdentity identity, ToolCallback[] toolCallbacks, ChatClient legacyClient,
+                ModelSlot modelSlot, AgentDefinition agent, String sessionId, ExecutionProfile skill) {
+            this(goal, step, context, reflectionFeedback, identity,
+                    AgentToolAdapters.fromCallbacks(toolCallbacks, new com.fasterxml.jackson.databind.ObjectMapper()),
+                    legacyClient, modelSlot, agent, sessionId, skill);
         }
     }
 

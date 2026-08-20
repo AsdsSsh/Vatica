@@ -4,8 +4,8 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Properties;
 
-import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.ai.tool.annotation.ToolParam;
+import io.agentscope.core.tool.Tool;
+import io.agentscope.core.tool.ToolParam;
 
 import jakarta.mail.Address;
 import jakarta.mail.Folder;
@@ -54,8 +54,8 @@ public final class MailTools {
     @Tool(name = "mail_query", description = "查询邮箱收件箱最近的邮件（默认 10 封，最多 50），可按主题关键词过滤。"
             + "返回发件人/主题/时间/大小；回答用户时请原样引用返回中的发件人与主题，不要自行编造邮件内容。")
     public String query(
-            @ToolParam(description = "返回邮件封数（可选，默认 10，最多 50）", required = false) Integer limit,
-            @ToolParam(description = "主题关键词（可选），只返回主题包含该词的邮件", required = false) String keyword) {
+            @ToolParam(name = "limit", description = "返回邮件封数（可选，默认 10，最多 50）", required = false) Integer limit,
+            @ToolParam(name = "keyword", description = "主题关键词（可选），只返回主题包含该词的邮件", required = false) String keyword) {
         MailProperties props = properties();
         ensureConfigured(props);
         int n = Math.min(Math.max(limit == null ? 10 : limit, 1), 50);
@@ -101,10 +101,10 @@ public final class MailTools {
     @Tool(name = "mail_send", description = "发送一封纯文本邮件。发送是副作用操作：必须先向用户确认"
             + "（收件人、主题、正文），用户同意后才能调用，且 confirm 参数必须传 \"yes\"，否则会被拒绝。")
     public String send(
-            @ToolParam(description = "收件人邮箱地址（单个或多个，逗号分隔）", required = true) String to,
-            @ToolParam(description = "邮件主题", required = true) String subject,
-            @ToolParam(description = "邮件正文（纯文本）", required = true) String body,
-            @ToolParam(description = "用户确认标记：必须先征得用户同意，用户同意后传 \"yes\"（大小写不敏感），否则拒绝发送",
+            @ToolParam(name = "to", description = "收件人邮箱地址（单个或多个，逗号分隔）", required = true) String to,
+            @ToolParam(name = "subject", description = "邮件主题", required = true) String subject,
+            @ToolParam(name = "body", description = "邮件正文（纯文本）", required = true) String body,
+            @ToolParam(name = "confirm", description = "用户确认标记：必须先征得用户同意，用户同意后传 \"yes\"（大小写不敏感），否则拒绝发送",
                     required = true) String confirm) {
         if (!"yes".equalsIgnoreCase(confirm == null ? "" : confirm.trim())) {
             throw new IllegalArgumentException("操作失败：发送邮件是副作用操作，需要用户确认。"

@@ -12,16 +12,17 @@ import com.example.vatica.permission.FilePermissionMode;
 import com.example.vatica.permission.FilePermissionPolicy;
 import com.example.vatica.runtime.AgentRuntime;
 import com.example.vatica.tool.TextTools;
+import com.example.vatica.tool.AgentToolProvider;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.definition.ToolDefinition;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import io.agentscope.core.tool.AgentTool;
 
 /**
  * 迭代 15 I15-18：AgentScope 单 Agent POC 实测（仅 -Pagentscope profile 且显式提供
@@ -41,7 +42,7 @@ class AgentScopeSingleAgentPocTest {
                         ModelSlot.CAP_JUDGE, ModelSlot.CAP_SUMMARIZER), ""));
 
         ToolCallback calculator = calculatorCallback();
-        ToolCallbackProvider tools = () -> new ToolCallback[] { calculator };
+        AgentToolProvider tools = provider(calculator);
         AgentScopeRuntime runtime = new AgentScopeRuntime(registry, tools, new ObjectMapper());
         RequestIdentity identity = new RequestIdentity(1L, 1L, "LOCAL", "poc");
         FilePermissionPolicy permission = new FilePermissionPolicy(FilePermissionMode.READ_ONLY, List.of());
@@ -87,7 +88,7 @@ class AgentScopeSingleAgentPocTest {
                 }
             }
         };
-        ToolCallbackProvider tools = () -> new ToolCallback[] { calculator, textStats };
+        AgentToolProvider tools = provider(calculator, textStats);
         AgentScopeRuntime runtime = new AgentScopeRuntime(registry, tools, new ObjectMapper());
         RequestIdentity identity = new RequestIdentity(1L, 1L, "LOCAL", "poc");
         FilePermissionPolicy permission = new FilePermissionPolicy(FilePermissionMode.READ_ONLY, List.of());
@@ -126,6 +127,10 @@ class AgentScopeSingleAgentPocTest {
         };
     }
 
+    private static AgentToolProvider provider(ToolCallback... callbacks) {
+        return () -> AgentToolAdapters.fromCallbacks(callbacks, new ObjectMapper());
+    }
+
     /** 迭代 15 I15-21：AgentScope 工具执行不绕过 Vatica 身份快照与权限上下文。 */
     @Test
     void agentscopeToolExecutionKeepsVaticaIdentityAndPermissionContext() {
@@ -149,7 +154,7 @@ class AgentScopeSingleAgentPocTest {
                 return "ok";
             }
         };
-        AgentScopeRuntime runtime = new AgentScopeRuntime(registry, () -> new ToolCallback[] { boundaryProbe },
+        AgentScopeRuntime runtime = new AgentScopeRuntime(registry, provider(boundaryProbe),
                 new ObjectMapper());
         RequestIdentity identity = new RequestIdentity(7L, 9L, "MEMBER", "alice");
         FilePermissionPolicy permission = new FilePermissionPolicy(FilePermissionMode.READ_ONLY, List.of());

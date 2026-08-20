@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.ToolCallbackProvider;
 
 import com.example.vatica.agent.ExecutorAgent;
 import com.example.vatica.auth.RequestIdentity;
@@ -14,6 +13,7 @@ import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.permission.FilePermissionPolicy;
 import com.example.vatica.permission.PermissionBoundToolCallbacks;
 import com.example.vatica.trace.TraceSanitizer;
+import com.example.vatica.tool.AgentToolProvider;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
@@ -23,15 +23,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 public class LegacyRuntime implements AgentRuntime {
 
     private final ModelRegistry registry;
-    private final ToolCallbackProvider vaticaTools;
+    private final AgentToolProvider vaticaTools;
     private final ObjectMapper mapper;
     private final ExecutorAgent executorAgent;
 
-    public LegacyRuntime(ModelRegistry registry, ToolCallbackProvider vaticaTools, ObjectMapper mapper) {
+    public LegacyRuntime(ModelRegistry registry, AgentToolProvider vaticaTools, ObjectMapper mapper) {
         this(registry, vaticaTools, mapper, new ExecutorAgent(registry.defaultClient()));
     }
 
-    public LegacyRuntime(ModelRegistry registry, ToolCallbackProvider vaticaTools, ObjectMapper mapper,
+    public LegacyRuntime(ModelRegistry registry, AgentToolProvider vaticaTools, ObjectMapper mapper,
             ExecutorAgent executorAgent) {
         this.registry = registry;
         this.vaticaTools = vaticaTools;
@@ -48,7 +48,8 @@ public class LegacyRuntime implements AgentRuntime {
     public StepResult executeStep(StepRequest request) {
         long start = System.nanoTime();
         String answer = RequestIdentityContext.callWith(request.identity(), () -> executorAgent.executeStep(
-                request.goal(), request.step(), request.context(), request.toolCallbacks(),
+                request.goal(), request.step(), request.context(),
+                com.example.vatica.agentscope.AgentToolAdapters.toCallbacks(request.tools(), mapper),
                 request.legacyClient(), request.reflectionFeedback()));
         return new StepResult(answer, List.of(), (System.nanoTime() - start) / 1_000_000);
     }
@@ -58,8 +59,9 @@ public class LegacyRuntime implements AgentRuntime {
         long start = System.nanoTime();
         return RequestIdentityContext.callWith(identity, () -> {
             String channel = TenantChannels.chat(identity, "poc-legacy");
-            ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
+            io.agentscope.core.tool.AgentTool[] tools = PermissionBoundToolCallbacks.wrap(
                     vaticaTools, permission, channel, identity, null);
+            ToolCallback[] callbacks = com.example.vatica.agentscope.AgentToolAdapters.toCallbacks(tools, mapper);
             List<String> traces = new ArrayList<>();
             callbacks = CollectingToolCallbacks.wrap(callbacks, mapper, traces);
             String answer = registry.defaultClient().prompt()

@@ -7,6 +7,11 @@ import java.util.function.LongConsumer;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
 
+import io.agentscope.core.message.ToolResultBlock;
+import io.agentscope.core.tool.AgentTool;
+import io.agentscope.core.tool.ToolCallParam;
+import reactor.core.publisher.Mono;
+
 /**
  * Self-Refine 工具重试装饰器（迭代 15 I15-3）：
  * 捕获 RuntimeException 并交给 {@link ErrorClassifier}——retryable 错误在 300-600ms 抖动退避后
@@ -29,6 +34,32 @@ public final class RetryableToolCallbacks {
 
     public ToolCallback[] wrap(ToolCallback[] callbacks) {
         return Arrays.stream(callbacks).map(this::wrapOne).toArray(ToolCallback[]::new);
+    }
+
+    /** 迭代 22B：AgentScope 原生异步工具重试一次，沿用原错误分类和抖动退避。 */
+    public AgentTool[] wrap(AgentTool[] tools) {
+        return Arrays.stream(tools == null ? new AgentTool[0] : tools)
+                .map(this::wrapOne).toArray(AgentTool[]::new);
+    }
+
+    private AgentTool wrapOne(AgentTool delegate) {
+        return new AgentTool() {
+            @Override public String getName() { return delegate.getName(); }
+            @Override public String getDescription() { return delegate.getDescription(); }
+            @Override public java.util.Map<String, Object> getParameters() { return delegate.getParameters(); }
+            @Override public Boolean getStrict() { return delegate.getStrict(); }
+            @Override public java.util.Map<String, Object> getOutputSchema() { return delegate.getOutputSchema(); }
+            @Override public boolean isReadOnly() { return delegate.isReadOnly(); }
+            @Override public Mono<ToolResultBlock> callAsync(ToolCallParam param) {
+                return delegate.callAsync(param).onErrorResume(error -> {
+                    if (!(error instanceof RuntimeException runtime) || !ErrorClassifier.isRetryable(runtime)) {
+                        return Mono.error(error);
+                    }
+                    sleeper.accept(jitterMs());
+                    return delegate.callAsync(param);
+                });
+            }
+        };
     }
 
     private ToolCallback wrapOne(ToolCallback delegate) {

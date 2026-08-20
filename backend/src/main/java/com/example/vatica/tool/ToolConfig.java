@@ -10,15 +10,16 @@ import com.example.vatica.mail.UserMailService;
 import com.example.vatica.knowledge.KnowledgeBaseService;
 import com.example.vatica.knowledge.KnowledgeTools;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.example.vatica.agentscope.AgentToolAdapters;
+import com.example.vatica.agentscope.AgentScopeToolProvider;
 
-import org.springframework.ai.tool.ToolCallbackProvider;
-import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.ai.tool.ToolCallbackProvider;
 
 /**
- * 工具层装配：显式注册 {@link ToolCallbackProvider} Bean（迭代 2.5 加工具调用次数护栏）。
+ * 工具层装配：AgentScope Toolkit 反射本地 @Tool 方法并生成原生工具目录。
  *
  * <p>两层机制（面试可讲）：
  * <ol>
@@ -86,15 +87,18 @@ public class ToolConfig {
         return new KnowledgeTools(service, mapper);
     }
 
-    /** 把 @Tool 注解方法自动生成为 ToolCallback（任务清单 I2-2 的"ToolCallback Bean 显式注册"）。 */
+    /** 迭代 22B：本地工具以 AgentScope 注解为唯一事实源。 */
     @Bean
-    ToolCallbackProvider vaticaTools(FileTools fileTools, TextTools textTools, DocumentTools documentTools,
+    AgentToolProvider vaticaTools(FileTools fileTools, TextTools textTools, DocumentTools documentTools,
             CalendarTools calendarTools, TodoTools todoTools, MailTools mailTools, WorkspaceTools workspaceTools,
-            KnowledgeTools knowledgeTools, ToolProperties props) {
-        ToolCallbackProvider provider = MethodToolCallbackProvider.builder()
-                .toolObjects(fileTools, textTools, documentTools, calendarTools, todoTools, mailTools,
-                        workspaceTools, knowledgeTools)
-                .build();
-        return new ToolCallLimitProvider(provider, props.maxCallsPerRequest());
+            KnowledgeTools knowledgeTools, ToolProperties props, ObjectMapper mapper) {
+        return new AgentScopeToolProvider(props.maxCallsPerRequest(), mapper, fileTools, textTools, documentTools,
+                calendarTools, todoTools, mailTools, workspaceTools, knowledgeTools);
+    }
+
+    /** 迭代 22B 迁移桥：22C 切换 AgentScope MCP Server 后删除。 */
+    @Bean
+    ToolCallbackProvider springMcpLocalToolBridge(AgentToolProvider vaticaTools, ObjectMapper mapper) {
+        return () -> AgentToolAdapters.toCallbacks(vaticaTools.getAgentTools(), mapper);
     }
 }

@@ -20,8 +20,8 @@ import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.apache.poi.xwpf.usermodel.XWPFRun;
 import com.example.vatica.permission.FileSandboxPolicy;
 
-import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.ai.tool.annotation.ToolParam;
+import io.agentscope.core.tool.Tool;
+import io.agentscope.core.tool.ToolParam;
 
 /**
  * 文档生成工具（create_word_report / create_excel_stats）——迭代 3：Apache POI 交付文档成品。
@@ -70,10 +70,10 @@ public final class DocumentTools {
             + "其余非空行是正文段落。适用于把 read_file 收集到的资料整理成交付文档。"
             + "文件名省略扩展名时自动补 .docx。生成后返回文件路径、大小与章节数。")
     public String createWordReport(
-            @ToolParam(description = "文档标题（显示在文档最顶部，如\"2026 年第 33 周工作周报\"）", required = true) String title,
-            @ToolParam(description = "文档内容，行式排版：\"# \"开头=一级标题，\"## \"开头=二级标题，其余行=正文段落；"
+            @ToolParam(name = "title", description = "文档标题（显示在文档最顶部，如\"2026 年第 33 周工作周报\"）", required = true) String title,
+            @ToolParam(name = "sections", description = "文档内容，行式排版：\"# \"开头=一级标题，\"## \"开头=二级标题，其余行=正文段落；"
                     + "空行分隔段落。正文请用规范中文", required = true) String sections,
-            @ToolParam(description = "保存的文件名，如\"本周周报.docx\"或\"周报\"；必须以 .docx 结尾或省略扩展名", required = true) String filename) {
+            @ToolParam(name = "filename", description = "保存的文件名，如\"本周周报.docx\"或\"周报\"；必须以 .docx 结尾或省略扩展名", required = true) String filename) {
         if (title == null || title.isBlank()) {
             throw new IllegalArgumentException("操作失败：title（文档标题）不能为空。");
         }
@@ -134,11 +134,11 @@ public final class DocumentTools {
             + "纯数字（无前导零、无科学计数法）会写为数值单元格，其余一律写为文本单元格。"
             + "适用于把 list_files / read_file 收集到的统计结果整理成可交付表格。文件名省略扩展名时自动补 .xlsx。")
     public String createExcelStats(
-            @ToolParam(description = "工作表名（显示为底部 sheet 标签），如\"周报统计\"；限 31 个字符，不能含 \\ / [ ] * ? : 字符",
+            @ToolParam(name = "sheetName", description = "工作表名（显示为底部 sheet 标签），如\"周报统计\"；限 31 个字符，不能含 \\ / [ ] * ? : 字符",
                     required = true) String sheetName,
-            @ToolParam(description = "逗号分隔的列名，如\"日期,事项,状态\"，列数 1-30", required = true) String headers,
-            @ToolParam(description = "数据行文本，每行一条记录、列值用逗号分隔；多行之间用换行分隔", required = true) String rows,
-            @ToolParam(description = "保存的文件名，如\"统计表.xlsx\"或\"统计表\"；必须以 .xlsx 结尾或省略扩展名", required = true) String filename) {
+            @ToolParam(name = "headers", description = "逗号分隔的列名，如\"日期,事项,状态\"，列数 1-30", required = true) String headers,
+            @ToolParam(name = "rows", description = "数据行文本，每行一条记录、列值用逗号分隔；多行之间用换行分隔", required = true) String rows,
+            @ToolParam(name = "filename", description = "保存的文件名，如\"统计表.xlsx\"或\"统计表\"；必须以 .xlsx 结尾或省略扩展名", required = true) String filename) {
         if (sheetName == null || sheetName.isBlank()) {
             throw new IllegalArgumentException("操作失败：sheetName（工作表名）不能为空。");
         }

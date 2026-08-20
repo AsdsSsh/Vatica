@@ -16,6 +16,10 @@ import com.example.vatica.event.SseEventSink;
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.observability.AgentObservabilityRecorder;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.agentscope.core.message.ToolResultBlock;
+import io.agentscope.core.tool.AgentTool;
+import io.agentscope.core.tool.ToolCallParam;
+import reactor.core.publisher.Mono;
 
 /**
  * 显式 ReAct trace 装饰器（迭代 15 I15-1）：
@@ -137,6 +141,61 @@ public final class TracedToolCallbacks {
                 }
             }
         };
+    }
+
+    /** 迭代 22B：AgentScope 原生工具 Trace，保留既有 SSE/持久化 Span 契约。 */
+    public AgentTool[] wrap(AgentTool[] tools, TraceContext.Snapshot trace, int maxOutputChars) {
+        AgentTool[] wrapped = new AgentTool[tools == null ? 0 : tools.length];
+        for (int i = 0; i < wrapped.length; i++) {
+            wrapped[i] = wrapOne(tools[i], trace, maxOutputChars);
+        }
+        return wrapped;
+    }
+
+    private AgentTool wrapOne(AgentTool delegate, TraceContext.Snapshot trace, int maxOutputChars) {
+        return new AgentTool() {
+            @Override public String getName() { return delegate.getName(); }
+            @Override public String getDescription() { return delegate.getDescription(); }
+            @Override public java.util.Map<String, Object> getParameters() { return delegate.getParameters(); }
+            @Override public Boolean getStrict() { return delegate.getStrict(); }
+            @Override public java.util.Map<String, Object> getOutputSchema() { return delegate.getOutputSchema(); }
+            @Override public boolean isReadOnly() { return delegate.isReadOnly(); }
+
+            @Override
+            public Mono<ToolResultBlock> callAsync(ToolCallParam param) {
+                String tool = delegate.getName();
+                String input = writeInput(param.getInput());
+                String inputSummary = TraceSanitizer.inputSummary(mapper, input);
+                long started = System.nanoTime();
+                AgentObservabilityRecorder.SpanHandle span = startSpan(tool, trace, inputSummary);
+                send(startPayload(tool, trace, inputSummary));
+                return delegate.callAsync(param).map(result -> {
+                    String raw = result == null || result.getOutput().isEmpty() ? "" : result.getOutput().getFirst().toString();
+                    String visible = com.example.vatica.tool.ToolResultPolicy.limit(raw, maxOutputChars);
+                    long duration = (System.nanoTime() - started) / 1_000_000;
+                    String outputSummary = TraceSanitizer.outputSummary(TraceSanitizer.sanitize(mapper, visible), null);
+                    send(endPayload(tool, trace, duration, inputSummary, outputSummary, raw.length(), null));
+                    persist(trace, tool, inputSummary, outputSummary, raw.length(), duration,
+                            AgentTraceRecord.STATUS_SUCCESS, null);
+                    finishSpan(span, AgentObservabilityRecorder.SpanFinish.success(visible), started);
+                    return ToolResultBlock.text(visible);
+                }).doOnError(error -> {
+                    long duration = (System.nanoTime() - started) / 1_000_000;
+                    String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+                    send(endPayload(tool, trace, duration, inputSummary, "", 0, message));
+                    persist(trace, tool, inputSummary, "", 0, duration, AgentTraceRecord.STATUS_FAILED, message);
+                    finishSpan(span, AgentObservabilityRecorder.SpanFinish.failed("TOOL_ERROR", message), started);
+                });
+            }
+        };
+    }
+
+    private String writeInput(Map<String, Object> input) {
+        try {
+            return mapper.writeValueAsString(input == null ? Map.of() : input);
+        } catch (Exception e) {
+            return "{}";
+        }
     }
 
     private AgentObservabilityRecorder.SpanHandle startSpan(String tool, TraceContext.Snapshot trace,

@@ -10,6 +10,7 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
 
 import com.example.vatica.config.ModelSlot;
+import io.agentscope.core.tool.AgentTool;
 
 /**
  * 迭代 17A：生产角色注册表。角色只描述执行职责、模型能力标签与工具白名单，
@@ -79,6 +80,19 @@ public class AgentRegistry {
         return java.util.Arrays.stream(callbacks)
                 .filter(callback -> role.allows(callback.getToolDefinition().name()))
                 .toArray(ToolCallback[]::new);
+    }
+
+    /** 迭代 22B：角色白名单在 AgentScope 原生工具注入前机械裁剪。 */
+    public AgentTool[] allowedTools(String requestedId, AgentTool[] tools) {
+        AgentDefinition role = resolve(requestedId);
+        if (tools == null || tools.length == 0) {
+            return new AgentTool[0];
+        }
+        if (role.allowAllTools()) {
+            return tools.clone();
+        }
+        return java.util.Arrays.stream(tools).filter(tool -> role.allows(tool.getName()))
+                .toArray(AgentTool[]::new);
     }
 
     /** Planner 可直接消费的稳定角色清单，避免提示词和注册表漂移。 */
