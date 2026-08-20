@@ -61,6 +61,15 @@ class CorsConfigTest {
     }
 
     @Test
+    void loopbackViteOriginAllowed() throws Exception {
+        mockMvc.perform(options("/api/chat/models")
+                        .header(HttpHeaders.ORIGIN, "http://127.0.0.1:5173")
+                        .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "GET"))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "http://127.0.0.1:5173"));
+    }
+
+    @Test
     void macTauriProtocolOriginAllowed() throws Exception {
         mockMvc.perform(options("/api/chat/models")
                         .header(HttpHeaders.ORIGIN, "tauri://localhost")

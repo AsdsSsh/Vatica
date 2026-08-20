@@ -53,8 +53,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       );
     } catch (e) {
       if (generation !== generationRef.current) return;
-      if (isAuthExpiredError(e) || !getAuthToken()) {
-        // 401 已在 api.ts 统一清理 Token；无 Token 且网络失败时同样落到未登录态
+      if (isAuthExpiredError(e) || (online && !getAuthToken())) {
+        // 401 或在线状态下无 Token 才是匿名；后端离线期间保持 loading，避免伪装成登录问题
         setAuth({ status: "anonymous", user: null });
       }
       // 其余情况（后端离线/5xx）保持原状态，后端恢复在线后自动重试

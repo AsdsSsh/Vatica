@@ -38,6 +38,7 @@ import {
   fetchBenchmarkCases,
   fetchTaskDetail,
   fetchTaskTraces,
+  AUTH_OPEN_EVENT,
   isAuthExpiredError,
   subscribeTaskEvents,
   taskAction,
@@ -268,6 +269,15 @@ export default function StepPanel() {
   async function handleCreate() {
     const goal = goalInput.trim();
     if (!goal || busy) return;
+    if (authStatus === "anonymous") {
+      message.info("请先登录，再创建云端任务。");
+      window.dispatchEvent(new Event(AUTH_OPEN_EVENT));
+      return;
+    }
+    if (!online) {
+      message.warning("后端尚未连接，请稍后重试。");
+      return;
+    }
     setBusy(true);
     try {
       const policy = loadPermissionPolicy();
@@ -279,7 +289,11 @@ export default function StepPanel() {
       prevStatus.current = null; // 让审批弹窗对新任务触发一次
       refreshTasks();
     } catch (e) {
-      if (!isAuthExpiredError(e)) message.error((e as Error).message);
+      if (isAuthExpiredError(e)) {
+        window.dispatchEvent(new Event(AUTH_OPEN_EVENT));
+      } else {
+        message.error((e as Error).message);
+      }
     } finally {
       setBusy(false);
     }
@@ -418,6 +432,7 @@ export default function StepPanel() {
               className="task-create-goal"
               placeholder="一句话任务，如：整理下周日程"
               value={goalInput}
+              disabled={!online || authStatus === "loading"}
               onChange={(e) => {
                 const next = e.target.value;
                 setGoalInput(next);
@@ -435,12 +450,18 @@ export default function StepPanel() {
               type="primary"
               icon={<PlusOutlined />}
               loading={busy}
+              disabled={!online || authStatus === "loading"}
               onClick={handleCreate}
             >
               创建
             </Button>
           </Flex>
         </div>
+        {online && authStatus === "anonymous" && (
+          <Typography.Text type="warning" style={{ display: "block", marginTop: 6, fontSize: 11 }}>
+            后端在线，请先点击顶部账号登录后创建任务。
+          </Typography.Text>
+        )}
         <Typography.Text type="secondary" style={{ display: "block", marginTop: 6, fontSize: 11 }}>
           <CloudOutlined /> 任务产物写入当前账号的个人云工作区
         </Typography.Text>

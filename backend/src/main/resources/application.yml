@@ -25,6 +25,9 @@ vatica:
   # 迭代 21D：Agent Span 明细默认保留 30 天；启动时 best-effort 清理过期记录。
   observability:
     retention: ${VATICA_OBSERVABILITY_RETENTION:30d}
+  # 迭代 23B：额外开发 origin 用逗号分隔；桌面壳和默认 Vite 来源始终保留。
+  cors:
+    allowed-origins: ${VATICA_CORS_ALLOWED_ORIGINS:}
   # 迭代 22C：AgentScope MCP Client + 官方 MCP Java SDK Server。
   # 高德凭据由外部服务设置页解密注入；未配置 key 时跳过连接，不影响启动和本地工具。
   mcp:

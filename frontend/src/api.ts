@@ -52,6 +52,8 @@ export function setApiBase(base: string): void {
 const AUTH_TOKEN_KEY = "vatica.authToken";
 /** 无效/过期 Token 被统一清理后广播的事件（只对同一 token 广播一次，避免重复弹错）。 */
 export const AUTH_EXPIRED_EVENT = "vatica-auth-expired";
+/** 需要登录的业务入口请求打开账号面板。 */
+export const AUTH_OPEN_EVENT = "vatica-open-auth";
 
 export class AuthExpiredError extends Error {
   constructor(message: string) {
@@ -157,6 +159,7 @@ async function toRequestError(res: Response, fallback: string, handleAuthExpiry 
       setAuthToken(null);
       window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, { detail: { message: text } }));
     }
+    // 没有旧 Token 的匿名请求也归入同一认证错误类型，由业务入口给出登录引导。
     return new AuthExpiredError(text);
   }
   return new Error(text);

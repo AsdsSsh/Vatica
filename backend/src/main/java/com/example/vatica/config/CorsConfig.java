@@ -1,7 +1,6 @@
 package com.example.vatica.config;
 
-import java.util.List;
-
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
@@ -17,18 +16,19 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  * 迭代 10 I10-3：补 PUT——模型设置"保存全部"是 PUT /api/models + JSON 请求，同样触发预检。
  */
 @Configuration
+@EnableConfigurationProperties(CorsProperties.class)
 public class CorsConfig implements WebMvcConfigurer {
 
-    private static final List<String> ALLOWED_ORIGINS = List.of(
-            "http://tauri.localhost",   // Tauri WebView（Windows 打包版，实测形态）
-            "tauri://localhost",        // Tauri WebView（macOS/Linux）
-            "http://localhost:1420",    // Tauri dev（Vite 默认端口）
-            "http://localhost:5173");   // 独立 Vite dev
+    private final CorsProperties properties;
+
+    public CorsConfig(CorsProperties properties) {
+        this.properties = properties;
+    }
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/**")
-                .allowedOrigins(ALLOWED_ORIGINS.toArray(String[]::new))
+                .allowedOrigins(properties.origins().toArray(String[]::new))
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
                 .maxAge(3600);

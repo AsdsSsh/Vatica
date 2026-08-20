@@ -46,6 +46,7 @@ import {
   getEphemeralUserModelKey,
   streamChat,
   AUTH_EXPIRED_EVENT,
+  AUTH_OPEN_EVENT,
   isAuthExpiredError,
   type EphemeralCredential,
   type FilePermissionRequest,
@@ -270,6 +271,12 @@ export default function ChatPanel({
     return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
   }, [message]);
 
+  useEffect(() => {
+    const openAuth = () => setAuthOpen(true);
+    window.addEventListener(AUTH_OPEN_EVENT, openAuth);
+    return () => window.removeEventListener(AUTH_OPEN_EVENT, openAuth);
+  }, []);
+
   /** 展示权限弹窗并等待用户决定（streamChat 暂停在此处，后端工具同步等待）。 */
   function askPermission(request: FilePermissionRequest): Promise<boolean> {
     setPermissionRemember(true);
@@ -344,6 +351,7 @@ export default function ChatPanel({
     if (!text || streaming || !online) return;
     if (authStatus === "anonymous") {
       message.error("请先在右上角账号中登录，再使用云端能力。");
+      setAuthOpen(true);
       return;
     }
     const selectedSlot = model?.startsWith("user:")
@@ -463,7 +471,11 @@ export default function ChatPanel({
             size="small"
             className="chat-header-model"
             style={{ width: 210 }}
-            placeholder={models.length ? "选择模型" : "未连接后端"}
+            placeholder={
+              !online ? "等待后端连接"
+                : authStatus === "anonymous" ? "登录后选择模型"
+                  : models.length ? "选择模型" : "暂无可用模型"
+            }
             value={models.length ? model : undefined}
             onChange={(v) => {
               const next = String(v);
@@ -608,6 +620,16 @@ export default function ChatPanel({
                 重试
               </Button>
             }
+          />
+        )}
+        {online && authStatus === "anonymous" && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 10 }}
+            message="后端服务在线，请先登录"
+            description="登录后才能使用云端会话、任务和个人数据；本机缓存不会被删除。"
+            action={<Button size="small" onClick={() => setAuthOpen(true)}>登录</Button>}
           />
         )}
 
