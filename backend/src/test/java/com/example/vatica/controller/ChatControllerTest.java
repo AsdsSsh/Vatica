@@ -2,10 +2,7 @@ package com.example.vatica.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -18,9 +15,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.time.Duration;
 import java.util.List;
 
+import com.example.vatica.agentscope.AgentScopeChatService;
+import com.example.vatica.agentscope.AgentScopeChatService.ChatEvent;
+import com.example.vatica.agentscope.AgentScopeChatService.ChatResult;
 import com.example.vatica.config.ChatProperties;
 import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.config.ModelSlot;
+import com.example.vatica.model.ConversationMessage;
+import com.example.vatica.model.ModelUsage;
 import com.example.vatica.permission.FilePermissionRequestService;
 import com.example.vatica.permission.PermissionEventPublisher;
 
@@ -33,12 +35,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.MessageType;
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.http.MediaType;
@@ -77,17 +73,7 @@ class ChatControllerTest {
     @Mock
     ModelRegistry registry;
     @Mock
-    ChatClient chatClient;
-    @Mock
-    ChatClient qwenChatClient;
-    @Mock
-    ChatClient.ChatClientRequestSpec spec;
-    @Mock
-    ChatClient.ChatClientRequestSpec qwenSpec;
-    @Mock
-    ChatClient.StreamResponseSpec streamSpec;
-    @Mock
-    ChatClient.CallResponseSpec callSpec;
+    AgentScopeChatService chatService;
     @Mock
     ToolCallbackProvider toolProvider;
     @Mock
@@ -97,15 +83,14 @@ class ChatControllerTest {
 
     @BeforeEach
     void stubCommonChain() {
-        // 默认路由：任何模型都回落到主客户端（具体测试按需覆盖 registry 行为）
-        when(registry.defaultClient()).thenReturn(chatClient);
-        when(registry.clientFor(anyString())).thenReturn(chatClient);
-        when(chatClient.prompt()).thenReturn(spec);
-        when(spec.system(anyString())).thenReturn(spec);
-        when(spec.messages(anyList())).thenReturn(spec);
-        when(spec.user(anyString())).thenReturn(spec);
+        ModelSlot defaultSlot = slot("deepseek", true);
+        when(registry.defaultSlot()).thenReturn(defaultSlot);
+        when(registry.slotFor(anyString())).thenReturn(defaultSlot);
         when(toolProvider.getToolCallbacks()).thenReturn(new ToolCallback[0]);
-        when(spec.toolCallbacks(any(ToolCallback[].class))).thenReturn(spec);
+        when(chatService.call(any())).thenReturn(new ChatResult("好的，已记录", "", ModelUsage.empty()));
+        when(chatService.stream(any())).thenReturn(Flux.just(
+                new ChatEvent(ChatEvent.Type.TEXT, "好的", null),
+                new ChatEvent(ChatEvent.Type.USAGE, null, ModelUsage.empty())));
     }
 
     private ChatProperties defaultProps() {
@@ -114,8 +99,8 @@ class ChatControllerTest {
                 new ChatProperties.Memory(20, 64, 16000));
     }
 
-    private static ChatResponse chatResponse(String text) {
-        return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
+    private static ModelSlot slot(String id, boolean enabled) {
+        return new ModelSlot(id, id, "openai", "https://example.test", "k", id + "-model", 0.7, enabled);
     }
 
     private ChatController newController(ChatProperties props, SessionMemory memory) {
@@ -123,7 +108,7 @@ class ChatControllerTest {
         // 迭代 15：trace 包装需要 ObjectMapper（脱敏摘要序列化）+ ContextBudget 组装三层记忆
         return new ChatController(registry, props, memory, toolProvider, permissionEvents, permissionRequests,
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                new com.example.vatica.context.ContextBudget(0, 0, 0, 0, 0));
+                new com.example.vatica.context.ContextBudget(0, 0, 0, 0, 0), chatService);
     }
 
     private MockMvc mockMvcFor(ChatController controller) {
@@ -138,8 +123,11 @@ class ChatControllerTest {
     /** 正常流式：chunk 逐段送达，连接正常收尾，注册表清空，一轮对话入记忆。 */
     @Test
     void streamDeliversChunksAndCleansUp() throws Exception {
-        when(spec.stream()).thenReturn(streamSpec);
-        when(streamSpec.chatResponse()).thenReturn(Flux.just(chatResponse("你"), chatResponse("好"), chatResponse("！")));
+        when(chatService.stream(any())).thenReturn(Flux.just(
+                new ChatEvent(ChatEvent.Type.TEXT, "你", null),
+                new ChatEvent(ChatEvent.Type.TEXT, "好", null),
+                new ChatEvent(ChatEvent.Type.TEXT, "！", null),
+                new ChatEvent(ChatEvent.Type.USAGE, null, ModelUsage.empty())));
         SessionMemory memory = new InMemorySessionMemory(20, 64, 16000);
         ChatController controller = newController(defaultProps(), memory);
         MockMvc mockMvc = mockMvcFor(controller);
@@ -160,24 +148,20 @@ class ChatControllerTest {
                 });
 
         assertThat(controller.activeStreamCount()).isZero();
-        List<Message> history = memory.history("s1");
+        List<ConversationMessage> history = memory.history("s1");
         assertThat(history).hasSize(2);
-        assertThat(history.get(0).getMessageType()).isEqualTo(MessageType.USER);
-        assertThat(history.get(1).getMessageType()).isEqualTo(MessageType.ASSISTANT);
-        assertThat(history.get(1).getText()).isEqualTo("你好！");
+        assertThat(history.get(0).role()).isEqualTo(ConversationMessage.Role.USER);
+        assertThat(history.get(1).role()).isEqualTo(ConversationMessage.Role.ASSISTANT);
+        assertThat(history.get(1).text()).isEqualTo("你好！");
     }
 
     /** 迭代 15 I15-7：reasoning_content 走独立 reasoning 事件，与文本事件分离。 */
     @Test
     void streamEmitsReasoningEventSeparately() throws Exception {
-        AssistantMessage thinking = new AssistantMessage("最终回复") {
-            @Override
-            public java.util.Map<String, Object> getMetadata() {
-                return java.util.Map.of("reasoningContent", "我需要先查看文件再回答");
-            }
-        };
-        when(spec.stream()).thenReturn(streamSpec);
-        when(streamSpec.chatResponse()).thenReturn(Flux.just(new ChatResponse(List.of(new Generation(thinking)))));
+        when(chatService.stream(any())).thenReturn(Flux.just(
+                new ChatEvent(ChatEvent.Type.REASONING, "我需要先查看文件再回答", null),
+                new ChatEvent(ChatEvent.Type.TEXT, "最终回复", null),
+                new ChatEvent(ChatEvent.Type.USAGE, null, ModelUsage.empty())));
         ChatController controller = newController(defaultProps(), new InMemorySessionMemory(20, 64, 16000));
         MockMvc mockMvc = mockMvcFor(controller);
 
@@ -200,9 +184,8 @@ class ChatControllerTest {
     /** 上游异常：2 秒内完成收尾（不挂起），客户端拿到异常，注册表清空。 */
     @Test
     void upstreamErrorCompletesWithoutHanging() throws Exception {
-        when(spec.stream()).thenReturn(streamSpec);
-        when(streamSpec.chatResponse()).thenReturn(
-                Flux.<ChatResponse>error(new RuntimeException("上游 API 超时"))
+        when(chatService.stream(any())).thenReturn(
+                Flux.<ChatEvent>error(new RuntimeException("上游 API 超时"))
                         .delaySubscription(Duration.ofMillis(100)));
         ChatController controller = newController(defaultProps(), new InMemorySessionMemory(20, 64, 16000));
         MockMvc mockMvc = mockMvcFor(controller);
@@ -224,8 +207,7 @@ class ChatControllerTest {
      *  由 I2.5-1 的 curl 集成验证覆盖（base-url 指向不可达地址 + 短超时观察连接收尾）。 */
     @Test
     void sseTimeoutIsConfigured() {
-        when(spec.stream()).thenReturn(streamSpec);
-        when(streamSpec.chatResponse()).thenReturn(Flux.never());
+        when(chatService.stream(any())).thenReturn(Flux.never());
         ChatProperties props = new ChatProperties(
                 new ChatProperties.Sse(Duration.ofSeconds(30)),
                 new ChatProperties.Memory(20, 64, 16000));
@@ -240,9 +222,8 @@ class ChatControllerTest {
     /** 迭代 7 I7-5 / 迭代 8.5：注册表拒绝的模型（未启用/未知）→ 快速失败，不进入流式流程。 */
     @Test
     void modelRoutingRejectsUnconfiguredOrUnknownModel() {
-        when(registry.clientFor("qwen")).thenThrow(
-                new IllegalArgumentException("操作失败：模型未启用（通义千问），请在设置中启用。"));
-        when(registry.clientFor("gpt-5")).thenThrow(
+        when(registry.slotFor("qwen")).thenReturn(slot("qwen", false));
+        when(registry.slotFor("gpt-5")).thenThrow(
                 new IllegalArgumentException("操作失败：未知模型（gpt-5）。"));
         ChatController controller = newController(defaultProps(), new InMemorySessionMemory(20, 64, 16000));
 
@@ -259,15 +240,10 @@ class ChatControllerTest {
 
     /** 迭代 7 I7-5 / 迭代 8.5：显式模型 id 路由到注册表对应客户端。 */
     @Test
-    void modelRoutingUsesSelectedClient() throws Exception {
-        when(registry.clientFor("qwen")).thenReturn(qwenChatClient);
-        when(qwenChatClient.prompt()).thenReturn(qwenSpec);
-        when(qwenSpec.system(anyString())).thenReturn(qwenSpec);
-        when(qwenSpec.messages(anyList())).thenReturn(qwenSpec);
-        when(qwenSpec.user(anyString())).thenReturn(qwenSpec);
-        when(qwenSpec.toolCallbacks(any(ToolCallback[].class))).thenReturn(qwenSpec);
-        when(qwenSpec.call()).thenReturn(callSpec);
-        when(callSpec.content()).thenReturn("通义回复");
+    void modelRoutingUsesSelectedSlot() throws Exception {
+        ModelSlot qwen = slot("qwen", true);
+        when(registry.slotFor("qwen")).thenReturn(qwen);
+        when(chatService.call(any())).thenReturn(new ChatResult("通义回复", "", ModelUsage.empty()));
         ChatController controller = newController(defaultProps(), new InMemorySessionMemory(20, 64, 16000));
         MockMvc mockMvc = mockMvcFor(controller);
 
@@ -276,20 +252,16 @@ class ChatControllerTest {
                         .content("{\"message\":\"你好\",\"model\":\"qwen\"}"))
                 .andExpect(status().isOk());
 
-        verify(qwenChatClient).prompt();
+        ArgumentCaptor<AgentScopeChatService.ChatRequest> captor =
+                ArgumentCaptor.forClass(AgentScopeChatService.ChatRequest.class);
+        verify(chatService).call(captor.capture());
+        assertThat(captor.getValue().slot()).isEqualTo(qwen);
     }
 
     /** 迭代 13 I13-5：请求级临时凭据路由到 ephemeralClient，不与共享缓存混用。 */
     @Test
-    void ephemeralCredentialRoutesToRequestClient() throws Exception {
-        when(registry.ephemeralClient(any(), anyBoolean())).thenReturn(qwenChatClient);
-        when(qwenChatClient.prompt()).thenReturn(qwenSpec);
-        when(qwenSpec.system(anyString())).thenReturn(qwenSpec);
-        when(qwenSpec.messages(anyList())).thenReturn(qwenSpec);
-        when(qwenSpec.user(anyString())).thenReturn(qwenSpec);
-        when(qwenSpec.toolCallbacks(any(ToolCallback[].class))).thenReturn(qwenSpec);
-        when(qwenSpec.call()).thenReturn(callSpec);
-        when(callSpec.content()).thenReturn("临时回复");
+    void ephemeralCredentialRoutesToRequestSlot() throws Exception {
+        when(chatService.call(any())).thenReturn(new ChatResult("临时回复", "", ModelUsage.empty()));
         ChatController controller = newController(defaultProps(), new InMemorySessionMemory(20, 64, 16000));
         MockMvc mockMvc = mockMvcFor(controller);
 
@@ -300,7 +272,11 @@ class ChatControllerTest {
                                 + "\"temperature\":0.7,\"apiKey\":\"sk-ephemeral\"}}"))
                 .andExpect(status().isOk());
 
-        verify(registry).ephemeralClient(any(), eq(true));
+        ArgumentCaptor<AgentScopeChatService.ChatRequest> captor =
+                ArgumentCaptor.forClass(AgentScopeChatService.ChatRequest.class);
+        verify(chatService).call(captor.capture());
+        assertThat(captor.getValue().slot().protocol()).isEqualTo("openai");
+        assertThat(captor.getValue().slot().apiKey()).isEqualTo("sk-ephemeral");
     }
 
     /** 迭代 13 I13-5：临时凭据与 modelId 同时出现 → 400，避免路由歧义。 */
@@ -343,8 +319,9 @@ class ChatControllerTest {
     /** 非流式：第二轮请求自动带上第一轮历史（user + assistant）。 */
     @Test
     void chatAppendsAndReplaysHistory() throws Exception {
-        when(callSpec.content()).thenReturn("好的，已记录");
-        when(spec.call()).thenReturn(callSpec);
+        when(chatService.call(any())).thenReturn(
+                new ChatResult("好的，已记录", "", ModelUsage.empty()),
+                new ChatResult("你叫小明", "", ModelUsage.empty()));
         SessionMemory memory = new InMemorySessionMemory(20, 64, 16000);
         ChatController controller = newController(defaultProps(), memory);
         MockMvc mockMvc = mockMvcFor(controller);
@@ -359,12 +336,13 @@ class ChatControllerTest {
                         .content("{\"message\":\"我叫什么\",\"sessionId\":\"s1\"}"))
                 .andExpect(status().isOk());
 
-        ArgumentCaptor<List<Message>> captor = ArgumentCaptor.forClass(List.class);
-        verify(spec, atLeast(2)).messages(captor.capture());
-        List<Message> replay = captor.getValue();
+        ArgumentCaptor<AgentScopeChatService.ChatRequest> captor =
+                ArgumentCaptor.forClass(AgentScopeChatService.ChatRequest.class);
+        verify(chatService, atLeast(2)).call(captor.capture());
+        List<ConversationMessage> replay = captor.getValue().history();
         assertThat(replay).hasSize(2);
-        assertThat(replay.get(0).getMessageType()).isEqualTo(MessageType.USER);
-        assertThat(replay.get(0).getText()).contains("记住");
-        assertThat(replay.get(1).getMessageType()).isEqualTo(MessageType.ASSISTANT);
+        assertThat(replay.get(0).role()).isEqualTo(ConversationMessage.Role.USER);
+        assertThat(replay.get(0).text()).contains("记住");
+        assertThat(replay.get(1).role()).isEqualTo(ConversationMessage.Role.ASSISTANT);
     }
 }

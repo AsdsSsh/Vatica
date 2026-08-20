@@ -10,10 +10,9 @@ import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.MessageType;
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
+import com.example.vatica.model.ConversationMessage;
 import com.example.vatica.tool.CalendarEventRecordRepository;
 import com.example.vatica.tool.CalendarTools;
 import com.example.vatica.tool.TodoRecordRepository;
@@ -61,13 +60,13 @@ class JpaSessionMemoryTest {
     void historySurvivesRestart() {
         fresh().append("s1", "你好", "你好，我是 Vatica");
 
-        List<Message> history = fresh().history("s1");
+        List<ConversationMessage> history = fresh().history("s1");
 
         assertThat(history).hasSize(2);
-        assertThat(history.get(0).getMessageType()).isEqualTo(MessageType.USER);
-        assertThat(history.get(0).getText()).isEqualTo("你好");
-        assertThat(history.get(1).getMessageType()).isEqualTo(MessageType.ASSISTANT);
-        assertThat(history.get(1).getText()).isEqualTo("你好，我是 Vatica");
+        assertThat(history.get(0).role()).isEqualTo(ConversationMessage.Role.USER);
+        assertThat(history.get(0).text()).isEqualTo("你好");
+        assertThat(history.get(1).role()).isEqualTo(ConversationMessage.Role.ASSISTANT);
+        assertThat(history.get(1).text()).isEqualTo("你好，我是 Vatica");
     }
 
     /** 重启恢复时同样受滑窗上限约束（只取最近 N 条）。 */
@@ -79,11 +78,11 @@ class JpaSessionMemoryTest {
         }
 
         // 25 轮共 50 条消息；恢复时只取最近 20 条 = 第 16~25 轮
-        List<Message> history = fresh().history("s1");
+        List<ConversationMessage> history = fresh().history("s1");
 
         assertThat(history).hasSize(20);
-        assertThat(history.get(0).getText()).isEqualTo("问题16");
-        assertThat(history.get(history.size() - 1).getText()).isEqualTo("回答25");
+        assertThat(history.get(0).text()).isEqualTo("问题16");
+        assertThat(history.get(history.size() - 1).text()).isEqualTo("回答25");
     }
 
     /** 空文本不落库（与内存版语义一致）。 */
@@ -102,8 +101,8 @@ class JpaSessionMemoryTest {
 
         assertThat(fresh().history("s1")).hasSize(2);
         assertThat(fresh().history("s2")).hasSize(2);
-        assertThat(fresh().history("s1").get(0).getText()).isEqualTo("A");
-        assertThat(fresh().history("s2").get(0).getText()).isEqualTo("B");
+        assertThat(fresh().history("s1").get(0).text()).isEqualTo("A");
+        assertThat(fresh().history("s2").get(0).text()).isEqualTo("B");
     }
 
     /** 同一个 sessionId 在不同用户下是两份独立历史。 */
@@ -113,9 +112,9 @@ class JpaSessionMemoryTest {
         RequestIdentityContext.set(new RequestIdentity(2L, 1L, "MEMBER", "other"));
         fresh().append("shared", "用户二", "回答二");
 
-        assertThat(fresh().history("shared").get(0).getText()).isEqualTo("用户二");
+        assertThat(fresh().history("shared").get(0).text()).isEqualTo("用户二");
         RequestIdentityContext.set(new RequestIdentity(1L, 1L, "LOCAL", "test"));
-        assertThat(fresh().history("shared").get(0).getText()).isEqualTo("用户一");
+        assertThat(fresh().history("shared").get(0).text()).isEqualTo("用户一");
     }
 
     /** 日历与待办生产 Bean 使用数据库，并按当前用户过滤。 */

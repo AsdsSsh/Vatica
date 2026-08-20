@@ -6,8 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.MessageType;
+import com.example.vatica.model.ConversationMessage;
 
 /** 会话短期记忆单测（迭代 2.5 I2.5-3）：滑动窗口、空文本跳过、默认会话、LRU 淘汰。 */
 class SessionMemoryTest {
@@ -26,13 +25,13 @@ class SessionMemoryTest {
         memory.append("s1", "今天天气怎么样", "晴天，25 度");
         memory.append("s1", "适合跑步吗", "适合，注意补水");
 
-        List<Message> history = memory.history("s1");
+        List<ConversationMessage> history = memory.history("s1");
         assertThat(history).hasSize(4);
-        assertThat(history.get(0).getMessageType()).isEqualTo(MessageType.USER);
-        assertThat(history.get(1).getMessageType()).isEqualTo(MessageType.ASSISTANT);
-        assertThat(history.get(2).getMessageType()).isEqualTo(MessageType.USER);
-        assertThat(history.get(3).getMessageType()).isEqualTo(MessageType.ASSISTANT);
-        assertThat(history.get(2).getText()).isEqualTo("适合跑步吗");
+        assertThat(history.get(0).role()).isEqualTo(ConversationMessage.Role.USER);
+        assertThat(history.get(1).role()).isEqualTo(ConversationMessage.Role.ASSISTANT);
+        assertThat(history.get(2).role()).isEqualTo(ConversationMessage.Role.USER);
+        assertThat(history.get(3).role()).isEqualTo(ConversationMessage.Role.ASSISTANT);
+        assertThat(history.get(2).text()).isEqualTo("适合跑步吗");
     }
 
     /** 空文本不记录（DeepSeek v4 思考模式下 assistant 内容可能为空） */
@@ -42,10 +41,10 @@ class SessionMemoryTest {
         memory.append("s1", "你好", "");
         memory.append("s1", "   ", "回复");
 
-        List<Message> history = memory.history("s1");
+        List<ConversationMessage> history = memory.history("s1");
         assertThat(history).hasSize(2);
-        assertThat(history.get(0).getMessageType()).isEqualTo(MessageType.USER);
-        assertThat(history.get(1).getMessageType()).isEqualTo(MessageType.ASSISTANT);
+        assertThat(history.get(0).role()).isEqualTo(ConversationMessage.Role.USER);
+        assertThat(history.get(1).role()).isEqualTo(ConversationMessage.Role.ASSISTANT);
     }
 
     /** null / 空白 sessionId 归入同一个默认会话 */
@@ -68,10 +67,10 @@ class SessionMemoryTest {
         memory.append("s1", "第二轮问", "第二轮答");
         memory.append("s1", "第三轮问", "第三轮答");
 
-        List<Message> history = memory.history("s1");
+        List<ConversationMessage> history = memory.history("s1");
         assertThat(history).hasSize(4);
-        assertThat(history.get(0).getText()).isEqualTo("第二轮问");
-        assertThat(history.get(3).getText()).isEqualTo("第三轮答");
+        assertThat(history.get(0).text()).isEqualTo("第二轮问");
+        assertThat(history.get(3).text()).isEqualTo("第三轮答");
     }
 
     /** 会话数超上限时按 LRU 淘汰最久未用会话（访问会刷新热度） */
@@ -96,11 +95,11 @@ class SessionMemoryTest {
         memory.append("s1", "一二三四五六", "回一");  // 6+2=8 字符
         memory.append("s1", "七八九十", "回二");      // 8+4+2=14 > 10 → 丢最旧 U1(6) → 8 ≤ 10 停
 
-        List<Message> history = memory.history("s1");
+        List<ConversationMessage> history = memory.history("s1");
         assertThat(history).hasSize(3); // [回一, 七八九十, 回二]
-        assertThat(history.get(0).getText()).isEqualTo("回一");
-        assertThat(history.get(1).getText()).isEqualTo("七八九十");
-        assertThat(history.get(2).getText()).isEqualTo("回二");
+        assertThat(history.get(0).text()).isEqualTo("回一");
+        assertThat(history.get(1).text()).isEqualTo("七八九十");
+        assertThat(history.get(2).text()).isEqualTo("回二");
     }
 
     /** 单条消息超字符上限也不截断（保留最新完整消息，仅丢更旧的） */
@@ -109,9 +108,9 @@ class SessionMemoryTest {
         InMemorySessionMemory memory = new InMemorySessionMemory(100, 4, 5);
         memory.append("s1", "一二三四五六七八九十", ""); // 10 字符 > 上限 5
 
-        List<Message> history = memory.history("s1");
+        List<ConversationMessage> history = memory.history("s1");
         assertThat(history).hasSize(1);
-        assertThat(history.get(0).getText()).isEqualTo("一二三四五六七八九十");
+        assertThat(history.get(0).text()).isEqualTo("一二三四五六七八九十");
     }
 
     /** 非法配置拒绝：maxMessages / maxSessions / maxChars 必须为正数 */
@@ -122,4 +121,3 @@ class SessionMemoryTest {
         assertThatThrownBy(() -> new InMemorySessionMemory(20, 4, 0)).isInstanceOf(IllegalArgumentException.class);
     }
 }
-

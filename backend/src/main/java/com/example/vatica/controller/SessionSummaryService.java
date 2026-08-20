@@ -13,7 +13,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.example.vatica.config.ModelRegistry;
+import com.example.vatica.config.ModelSlot;
+import com.example.vatica.config.ReasoningMode;
 import com.example.vatica.context.TokenEstimator;
+import com.example.vatica.model.ModelGateway;
+import com.example.vatica.model.ModelInvocation;
 import com.example.vatica.usage.UsageContext;
 
 /**
@@ -34,15 +38,18 @@ public class SessionSummaryService {
     private final ChatSessionRecordRepository sessions;
     private final ChatMessageRecordRepository messages;
     private final ModelRegistry registry;
+    private final ModelGateway modelGateway;
     private final Executor executor;
     private final Set<String> inflight = ConcurrentHashMap.newKeySet();
 
     public SessionSummaryService(ChatSessionRecordRepository sessions,
             ChatMessageRecordRepository messages, ModelRegistry registry,
+            ModelGateway modelGateway,
             @Qualifier("taskParallelExecutor") Executor executor) {
         this.sessions = sessions;
         this.messages = messages;
         this.registry = registry;
+        this.modelGateway = modelGateway;
         this.executor = executor;
     }
 
@@ -82,11 +89,9 @@ public class SessionSummaryService {
         UsageContext.set(new UsageContext.Snapshot(UsageContext.newRequestId(), "SUMMARY",
                 userId, orgId, "summarizer", sessionId, null, "DISABLED", 8_000, null, true));
         try {
-            String summary = registry.summarizerClient().prompt()
-                    .system(SUMMARY_SYSTEM)
-                    .user(prompt)
-                    .call()
-                    .content();
+            String summary = modelGateway.call(new ModelInvocation(
+                    registry.activeSlotFor(ModelSlot.CAP_SUMMARIZER), SUMMARY_SYSTEM, List.of(), prompt,
+                    ReasoningMode.DISABLED)).content();
             if (summary == null || summary.isBlank()) {
                 return;
             }

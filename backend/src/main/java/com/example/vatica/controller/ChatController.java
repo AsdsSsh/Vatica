@@ -8,7 +8,10 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import com.example.vatica.config.ChatProperties;
 import com.example.vatica.config.ModelRegistry;
+import com.example.vatica.config.ModelSlot;
 import com.example.vatica.config.ReasoningMode;
+import com.example.vatica.agentscope.AgentScopeChatService;
+import com.example.vatica.agentscope.AgentScopeChatService.ChatEvent;
 import com.example.vatica.context.ContextAssembler;
 import com.example.vatica.context.ContextBudget;
 import com.example.vatica.event.SseEventGateway;
@@ -27,7 +30,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -75,6 +77,7 @@ public class ChatController {
             数据铁律：只使用工具返回的数据，不得编造工具没有返回的内容。""";
 
     private final ModelRegistry registry;
+    private final AgentScopeChatService chatService;
     private final ChatProperties chatProperties;
     private final SessionMemory sessionMemory;
     private final ToolCallbackProvider vaticaTools;
@@ -91,7 +94,7 @@ public class ChatController {
     public ChatController(ModelRegistry registry, ChatProperties chatProperties, SessionMemory sessionMemory,
             ToolCallbackProvider vaticaTools, PermissionEventPublisher permissionEvents,
             FilePermissionRequestService permissionRequests, ObjectMapper mapper, ContextBudget contextBudget,
-            SseEventGateway eventGateway) {
+            SseEventGateway eventGateway, AgentScopeChatService chatService) {
         this.registry = registry;
         this.chatProperties = chatProperties;
         this.sessionMemory = sessionMemory;
@@ -101,6 +104,7 @@ public class ChatController {
         this.mapper = mapper;
         this.contextBudget = contextBudget;
         this.eventGateway = eventGateway;
+        this.chatService = chatService;
     }
 
     /** 测试/兼容构造器；生产装配使用统一网关 Bean。 */
@@ -108,7 +112,16 @@ public class ChatController {
             ToolCallbackProvider vaticaTools, PermissionEventPublisher permissionEvents,
             FilePermissionRequestService permissionRequests, ObjectMapper mapper, ContextBudget contextBudget) {
         this(registry, chatProperties, sessionMemory, vaticaTools, permissionEvents, permissionRequests,
-                mapper, contextBudget, new SseEventGateway(mapper));
+                mapper, contextBudget, new SseEventGateway(mapper), null);
+    }
+
+    /** 迭代 22A 测试构造器：显式注入 AgentScope 聊天服务。 */
+    public ChatController(ModelRegistry registry, ChatProperties chatProperties, SessionMemory sessionMemory,
+            ToolCallbackProvider vaticaTools, PermissionEventPublisher permissionEvents,
+            FilePermissionRequestService permissionRequests, ObjectMapper mapper, ContextBudget contextBudget,
+            AgentScopeChatService chatService) {
+        this(registry, chatProperties, sessionMemory, vaticaTools, permissionEvents, permissionRequests,
+                mapper, contextBudget, new SseEventGateway(mapper), chatService);
     }
 
     /** 可用模型清单（迭代 7 模型选择器；迭代 8.5 起来自动态注册表；迭代 9 类型化 DTO）。 */
@@ -120,47 +133,49 @@ public class ChatController {
     }
 
     /** 按请求路由模型（迭代 8.5：id 空取默认；未启用/未知模型快速失败，不进入流式流程）。 */
-    private ChatClient resolveClient(String model) {
+    private ModelSlot resolveSlot(String model) {
         if (model == null || model.isBlank()) {
-            return registry.defaultClient();
+            return registry.defaultSlot();
         }
         if (model.startsWith("user:")) {
             RequestIdentity identity = RequestIdentityContext.require();
-            return registry.userClient(identity.userId(), model.substring("user:".length()), true);
+            return registry.userSlot(identity.userId(), model.substring("user:".length()));
         }
-        return registry.clientFor(model);
+        ModelSlot slot = registry.slotFor(model);
+        if (!slot.enabled()) {
+            throw new IllegalArgumentException("操作失败：模型未启用（" + slot.name() + "），请在设置中启用。");
+        }
+        return slot;
     }
 
     /** 迭代 13 I13-5：有 credential 走请求级临时客户端；两者同时出现快速失败。 */
-    private ChatClient resolveClient(ChatRequest request) {
+    private ModelSlot resolveSlot(ChatRequest request) {
         if (request.credential() != null) {
             if (request.model() != null && !request.model().isBlank()) {
                 throw new IllegalArgumentException("操作失败：临时凭据与 modelId 不能同时使用。");
             }
-            return registry.ephemeralClient(request.credential(), true);
+            return request.credential().toSlot();
         }
-        return resolveClient(request.model());
+        return resolveSlot(request.model());
     }
 
     /** 非流式对话（无 UI 权限弹窗：越界直接拒绝，由前端把权限快照先行送达） */
     @PostMapping
     public String chat(@RequestBody ChatRequest request) {
         RequestIdentity identity = RequestIdentityContext.require();
-        ChatClient client = resolveClient(request);
+        ModelSlot slot = resolveSlot(request);
         ToolCallback[] callbacks = PermissionBoundToolCallbacks.wrap(
                 vaticaTools, request.permission(), null, identity, request.mailCredential());
         // 迭代 15 I15-3：retryable 工具错误带上下文重试 1 次（权限包装在内层，每次真实执行都过权限）
         callbacks = new RetryableToolCallbacks().wrap(callbacks);
         // 迭代 15 I15-1：显式 ReAct trace（非流式仅脱敏与计时，不推送 SSE）
         callbacks = new TracedToolCallbacks(mapper, (SseEmitter) null).wrap(callbacks, chatTrace(identity, request.sessionId()));
-        var prompt = client.prompt()
-                .system(SYSTEM_PROMPT)
-                .messages(ContextAssembler.chatHistory(sessionMemory, request.sessionId(), contextBudget))
-                .user(request.message())
-                .toolCallbacks(callbacks);
         UsageContext.set(usageSnapshot(request, identity));
         try {
-            String reply = withDeepThinking(prompt, request, identity).call().content();
+            String reply = requireChatService().call(new AgentScopeChatService.ChatRequest(slot,
+                    reasoningMode(request), SYSTEM_PROMPT,
+                    ContextAssembler.chatHistory(sessionMemory, request.sessionId(), contextBudget),
+                    request.message(), callbacks, identity, request.sessionId(), false)).content();
             sessionMemory.append(request.sessionId(), request.message(), reply);
             return reply;
         } finally {
@@ -173,7 +188,7 @@ public class ChatController {
     public SseEmitter stream(@RequestBody ChatRequest request,
             @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId) {
         RequestIdentity identity = RequestIdentityContext.require();
-        ChatClient client = resolveClient(request);
+        ModelSlot slot = resolveSlot(request);
         String channel = TenantChannels.chat(identity, request.sessionId());
         SseEmitter emitter = eventGateway.subscribe(channel, lastEventId, chatProperties.sse().timeout());
         activeEmitters.add(emitter);
@@ -207,27 +222,26 @@ public class ChatController {
         emitter.onError(e -> cleanup.run());
         emitter.onCompletion(cleanup::run);
 
-        subscription[0] = withDeepThinking(client.prompt()
-                .system(SYSTEM_PROMPT)
-                .messages(ContextAssembler.chatHistory(sessionMemory, request.sessionId(), contextBudget))
-                .user(request.message())
-                .toolCallbacks(callbacks), request, identity)
-                .stream()
-                .chatResponse()
+        subscription[0] = requireChatService().stream(new AgentScopeChatService.ChatRequest(slot,
+                reasoningMode(request), SYSTEM_PROMPT,
+                ContextAssembler.chatHistory(sessionMemory, request.sessionId(), contextBudget),
+                request.message(), callbacks, identity, request.sessionId(), true))
                 .subscribe(
-                        response -> {
-                            // 迭代 15 I15-7：reasoning_content 走独立 SSE 事件，文本照旧逐块输出
-                            String reasoning = reasoningContent(response);
-                            if (reasoning != null && !reasoning.isBlank()) {
-                                if (!eventGateway.publish(channel, "reasoning", Map.of("content", reasoning))) {
+                        event -> {
+                            if (event.type() == ChatEvent.Type.REASONING
+                                    && event.content() != null && !event.content().isBlank()) {
+                                if (!eventGateway.publish(channel, "reasoning",
+                                        Map.of("content", event.content()))) {
                                     cleanup.run();
                                     emitter.complete();
-                                    return;
                                 }
+                                return;
                             }
-                            String chunk = response.getResult() == null
-                                    || response.getResult().getOutput() == null
-                                    ? "" : response.getResult().getOutput().getText();
+                            if (event.type() == ChatEvent.Type.USAGE && event.usage() != null) {
+                                eventGateway.publish(channel, "usage", event.usage());
+                                return;
+                            }
+                            String chunk = event.type() == ChatEvent.Type.TEXT ? event.content() : null;
                             if (chunk == null || chunk.isEmpty()) {
                                 return;
                             }
@@ -243,16 +257,6 @@ public class ChatController {
                             emitter.completeWithError(error);
                         },
                         () -> {
-                            // 迭代 15 I15-13：收尾聚合 usage 事件（advisor 已写入 ThreadLocal）
-                            String usageJson = UsageContext.takeLastUsageJson();
-                            if (usageJson != null) {
-                                try {
-                                    eventGateway.publish(channel, "usage",
-                                            mapper.readValue(usageJson, Object.class));
-                                } catch (Exception e) {
-                                    log.warn("usage SSE 事件转换失败", e);
-                                }
-                            }
                             RequestIdentityContext.callWith(identity, () -> {
                                 sessionMemory.append(request.sessionId(), request.message(), reply.toString());
                                 return null;
@@ -269,39 +273,15 @@ public class ChatController {
         return stream(request, null);
     }
 
-    /** 迭代 15 I15-7：从 ChatResponse 提取思考内容（优先消息级，其次响应级；不存在返回 null）。 */
-    private static String reasoningContent(org.springframework.ai.chat.model.ChatResponse response) {
-        for (org.springframework.ai.chat.model.Generation generation : response.getResults()) {
-            if (generation.getOutput() != null) {
-                Object value = generation.getOutput().getMetadata().get("reasoningContent");
-                if (value != null) {
-                    return String.valueOf(value);
-                }
-            }
-        }
-        if (response.getMetadata() != null) {
-            Object value = response.getMetadata().get("reasoningContent");
-            if (value != null) {
-                return String.valueOf(value);
-            }
-        }
-        return null;
+    private static ReasoningMode reasoningMode(ChatRequest request) {
+        return Boolean.TRUE.equals(request.deepThinking()) ? ReasoningMode.HIGH : ReasoningMode.DISABLED;
     }
 
-    /** 迭代 15 I15-4：用户开启“深思”时，按当前模型槽位协议注入 HIGH 思考选项。 */
-    private ChatClient.ChatClientRequestSpec withDeepThinking(ChatClient.ChatClientRequestSpec spec,
-            ChatRequest request, RequestIdentity identity) {
-        if (!Boolean.TRUE.equals(request.deepThinking())) {
-            return spec;
+    private AgentScopeChatService requireChatService() {
+        if (chatService == null) {
+            throw new IllegalStateException("操作失败：AgentScope 聊天服务未装配。");
         }
-        if (request.credential() != null) {
-            return spec.options(registry.reasoningOptions(null, request.credential(), ReasoningMode.HIGH));
-        }
-        if (request.model() != null && request.model().startsWith("user:")) {
-            return spec.options(registry.reasoningOptionsForUser(identity.userId(),
-                    request.model().substring("user:".length()), ReasoningMode.HIGH));
-        }
-        return spec.options(registry.reasoningOptions(request.model(), null, ReasoningMode.HIGH));
+        return chatService;
     }
 
     /** 迭代 15 I15-13：聊天用量上下文——平台模型计配额，自配/临时模型只记录不扣额度。 */

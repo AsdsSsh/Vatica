@@ -3,13 +3,11 @@ package com.example.vatica.controller;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.data.domain.PageRequest;
 
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
+import com.example.vatica.model.ConversationMessage;
 
 /**
  * 会话短期记忆·MySQL 持久化实现（迭代 5 I5-4；迭代 15 I15-9 增加中期摘要层）。
@@ -44,7 +42,7 @@ public final class JpaSessionMemory implements SessionMemory {
     }
 
     @Override
-    public synchronized List<Message> history(String sessionId) {
+    public synchronized List<ConversationMessage> history(String sessionId) {
         RequestIdentity identity = RequestIdentityContext.require();
         String session = sessionIdOf(sessionId);
         String key = cacheKey(identity.userId(), session);
@@ -97,7 +95,7 @@ public final class JpaSessionMemory implements SessionMemory {
     }
 
     @Override
-    public synchronized List<Message> recent(String sessionId) {
+    public synchronized List<ConversationMessage> recent(String sessionId) {
         return history(sessionId);
     }
 
@@ -105,10 +103,12 @@ public final class JpaSessionMemory implements SessionMemory {
     private void restore(Long userId, String sessionId, String key) {
         List<ChatMessageRecord> recent = repository.findByUserIdAndSessionIdOrderBySeqDesc(userId, sessionId,
                 PageRequest.of(0, windowSize));
-        List<Message> messages = new ArrayList<>(recent.size());
+        List<ConversationMessage> messages = new ArrayList<>(recent.size());
         for (int i = recent.size() - 1; i >= 0; i--) {
             ChatMessageRecord r = recent.get(i);
-            messages.add("USER".equals(r.getRole()) ? new UserMessage(r.getContent()) : new AssistantMessage(r.getContent()));
+            messages.add("USER".equals(r.getRole())
+                    ? ConversationMessage.user(r.getContent())
+                    : ConversationMessage.assistant(r.getContent()));
         }
         cache.restore(key, messages);
     }

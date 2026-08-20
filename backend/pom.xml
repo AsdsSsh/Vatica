@@ -106,6 +106,12 @@
 			<artifactId>agentscope-extensions-model-openai</artifactId>
 			<version>2.0.2</version>
 		</dependency>
+		<!-- 迭代 22A：Anthropic 也使用 AgentScope 原生 Model 扩展，不再依赖 Spring AI 模型实现。 -->
+		<dependency>
+			<groupId>io.agentscope</groupId>
+			<artifactId>agentscope-extensions-model-anthropic</artifactId>
+			<version>2.0.2</version>
+		</dependency>
 
 		<!-- 迭代 9 I9-2：前后端分离——OpenAPI 契约（springdoc）。
 		     3.1.0 面向 Spring Boot 4（模块化 starter 命名：spring-boot-tomcat / spring-boot-health）；

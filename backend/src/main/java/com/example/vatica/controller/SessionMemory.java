@@ -2,7 +2,7 @@ package com.example.vatica.controller;
 
 import java.util.List;
 
-import org.springframework.ai.chat.messages.Message;
+import com.example.vatica.model.ConversationMessage;
 
 /**
  * 会话短期记忆抽象（迭代 5）：多轮对话上下文存取。
@@ -13,7 +13,7 @@ import org.springframework.ai.chat.messages.Message;
 public interface SessionMemory {
 
     /** 取历史消息快照（时间正序）；无记录返回空列表。 */
-    List<Message> history(String sessionId);
+    List<ConversationMessage> history(String sessionId);
 
     /** 记录一轮对话（user + assistant 纯文本）。 */
     void append(String sessionId, String userText, String assistantText);
@@ -24,7 +24,7 @@ public interface SessionMemory {
     }
 
     /** 迭代 15 I15-9：水位线之后的近期原文（默认与 history 相同）。 */
-    default List<Message> recent(String sessionId) {
+    default List<ConversationMessage> recent(String sessionId) {
         return history(sessionId);
     }
 }

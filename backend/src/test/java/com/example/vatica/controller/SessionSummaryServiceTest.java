@@ -1,8 +1,7 @@
 package com.example.vatica.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -10,11 +9,14 @@ import java.util.List;
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
 import com.example.vatica.config.ModelRegistry;
+import com.example.vatica.config.ModelSlot;
+import com.example.vatica.model.ModelGateway;
+import com.example.vatica.model.ModelResponse;
+import com.example.vatica.model.ModelUsage;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -33,6 +35,8 @@ class SessionSummaryServiceTest {
 
     @MockitoBean
     ModelRegistry registry;
+    @MockitoBean
+    ModelGateway modelGateway;
 
     @Autowired
     SessionSummaryService summaryService;
@@ -65,8 +69,9 @@ class SessionSummaryServiceTest {
     @Test
     void successfulSummaryAdvancesWatermarkAndPersistsText() {
         seedMessages("s1", 1, 10);
-        ChatClient client = mockClient("用户偏好：周报周三交付");
-        when(registry.summarizerClient()).thenReturn(client);
+        when(registry.activeSlotFor(ModelSlot.CAP_SUMMARIZER)).thenReturn(summarySlot());
+        when(modelGateway.call(any())).thenReturn(
+                new ModelResponse("用户偏好：周报周三交付", "", ModelUsage.empty()));
 
         summaryService.summarize(1L, 1L, "s1", 5);
 
@@ -79,15 +84,8 @@ class SessionSummaryServiceTest {
     @Test
     void failedSummaryDoesNotAdvanceWatermark() {
         seedMessages("s1", 1, 10);
-        ChatClient client = mock(org.springframework.ai.chat.client.ChatClient.class);
-        ChatClient.ChatClientRequestSpec spec = mock(ChatClient.ChatClientRequestSpec.class);
-        ChatClient.CallResponseSpec call = mock(ChatClient.CallResponseSpec.class);
-        when(registry.summarizerClient()).thenReturn(client);
-        when(client.prompt()).thenReturn(spec);
-        when(spec.system(anyString())).thenReturn(spec);
-        when(spec.user(anyString())).thenReturn(spec);
-        when(spec.call()).thenReturn(call);
-        when(call.content()).thenThrow(new RuntimeException("上游 401"));
+        when(registry.activeSlotFor(ModelSlot.CAP_SUMMARIZER)).thenReturn(summarySlot());
+        when(modelGateway.call(any())).thenThrow(new RuntimeException("上游 401"));
 
         summaryService.summarize(1L, 1L, "s1", 5);
 
@@ -96,15 +94,8 @@ class SessionSummaryServiceTest {
         assertThat(session.getSummaryText()).isNull();
     }
 
-    private static ChatClient mockClient(String summary) {
-        ChatClient client = mock(org.springframework.ai.chat.client.ChatClient.class);
-        ChatClient.ChatClientRequestSpec spec = mock(ChatClient.ChatClientRequestSpec.class);
-        ChatClient.CallResponseSpec call = mock(ChatClient.CallResponseSpec.class);
-        when(client.prompt()).thenReturn(spec);
-        when(spec.system(anyString())).thenReturn(spec);
-        when(spec.user(anyString())).thenReturn(spec);
-        when(spec.call()).thenReturn(call);
-        when(call.content()).thenReturn(summary);
-        return client;
+    private static ModelSlot summarySlot() {
+        return new ModelSlot("summary", "Summary", "openai", "https://example.test",
+                "k", "summary-model", 0.2, true);
     }
 }

@@ -33,9 +33,6 @@ import io.agentscope.core.model.Model;
 import io.agentscope.core.model.ToolChoice;
 import io.agentscope.core.tool.ToolCallParam;
 import io.agentscope.core.tool.Toolkit;
-import io.agentscope.extensions.model.openai.OpenAIChatModel;
-import io.agentscope.extensions.model.openai.formatter.DeepSeekFormatter;
-import io.agentscope.extensions.model.openai.formatter.OpenAIChatFormatter;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -65,7 +62,7 @@ public class AgentScopeRuntime implements AgentRuntime {
 
     public AgentScopeRuntime(ModelRegistry registry, ToolCallbackProvider vaticaTools, ObjectMapper mapper,
             AgentRegistry agentRegistry) {
-        this(registry, vaticaTools, mapper, agentRegistry, AgentScopeRuntime::buildModel);
+        this(registry, vaticaTools, mapper, agentRegistry, registry::agentScopeModel);
     }
 
     AgentScopeRuntime(ModelRegistry registry, ToolCallbackProvider vaticaTools, ObjectMapper mapper,
@@ -273,23 +270,6 @@ public class AgentScopeRuntime implements AgentRuntime {
         log.info("AgentScope agent={} toolkit={} schemas={}",
                 agentName, registered, toolkit.getToolSchemas().size());
         return new ToolKitContext(toolkit, agent);
-    }
-
-    private static Model buildModel(ModelSlot slot) {
-        if (!ModelSlot.PROTOCOL_OPENAI.equals(slot.protocol())) {
-            throw new IllegalArgumentException("操作失败：AgentScope 当前仅支持 OpenAI 兼容协议槽位；"
-                    + "可临时设置 VATICA_AGENT_RUNTIME=legacy 使用 Anthropic 槽位。");
-        }
-        boolean deepseek = slot.baseUrl() != null
-                && slot.baseUrl().toLowerCase(java.util.Locale.ROOT).contains("deepseek");
-        return OpenAIChatModel.builder()
-                .apiKey(slot.apiKey() == null ? "" : slot.apiKey())
-                .baseUrl(slot.baseUrl())
-                .modelName(slot.model())
-                .stream(false)
-                .formatter(deepseek ? new DeepSeekFormatter() : new OpenAIChatFormatter())
-                .contextWindowSize(16_000)
-                .build();
     }
 
     static String stepPrompt(StepRequest request) {

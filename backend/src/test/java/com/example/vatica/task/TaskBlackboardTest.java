@@ -1,19 +1,21 @@
 package com.example.vatica.task;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
 
 import com.example.vatica.config.ModelRegistry;
+import com.example.vatica.config.ModelSlot;
 import com.example.vatica.context.ContextBudget;
+import com.example.vatica.model.ModelGateway;
+import com.example.vatica.model.ModelResponse;
+import com.example.vatica.model.ModelUsage;
 import com.example.vatica.runtime.AgentRegistry;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.client.ChatClient;
 import com.example.vatica.task.TaskPlan.TaskStep;
 
 /**
@@ -23,12 +25,14 @@ import com.example.vatica.task.TaskPlan.TaskStep;
 class TaskBlackboardTest {
 
     private ModelRegistry registry;
+    private ModelGateway modelGateway;
     private TaskBlackboard blackboard;
 
     @BeforeEach
     void setUp() {
         registry = mock(ModelRegistry.class);
-        blackboard = new TaskBlackboard(registry, new ContextBudget(0, 0, 0, 0, 0));
+        modelGateway = mock(ModelGateway.class);
+        blackboard = new TaskBlackboard(registry, modelGateway, new ContextBudget(0, 0, 0, 0, 0));
     }
 
     private static TaskPlan planWithSteps(int count) {
@@ -85,15 +89,11 @@ class TaskBlackboardTest {
     @Test
     void longResultGetsSummarizedDigest() {
         String longResult = "数字结果".repeat(200);
-        ChatClient client = mock(ChatClient.class);
-        ChatClient.ChatClientRequestSpec spec = mock(ChatClient.ChatClientRequestSpec.class);
-        ChatClient.CallResponseSpec call = mock(ChatClient.CallResponseSpec.class);
-        when(registry.summarizerClient()).thenReturn(client);
-        when(client.prompt()).thenReturn(spec);
-        when(spec.system(anyString())).thenReturn(spec);
-        when(spec.user(anyString())).thenReturn(spec);
-        when(spec.call()).thenReturn(call);
-        when(call.content()).thenReturn("关键数字：123");
+        when(registry.activeSlotFor(ModelSlot.CAP_SUMMARIZER)).thenReturn(
+                new ModelSlot("summary", "Summary", "openai", "https://example.test",
+                        "k", "summary-model", 0.2, true));
+        when(modelGateway.call(org.mockito.ArgumentMatchers.any())).thenReturn(
+                new ModelResponse("关键数字：123", "", ModelUsage.empty()));
 
         TaskPlan plan = planWithSteps(1);
         TaskStep step = plan.getSteps().get(0);

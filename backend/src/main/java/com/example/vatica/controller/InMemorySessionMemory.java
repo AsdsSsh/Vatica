@@ -5,9 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.UserMessage;
+import com.example.vatica.model.ConversationMessage;
 
 /**
  * 会话短期记忆·内存实现（迭代 2.5 I2.5-3 的滑窗核心，迭代 5 起作为 JpaSessionMemory 的热缓存）。
@@ -30,7 +28,7 @@ public final class InMemorySessionMemory implements SessionMemory {
 
     /** 单会话消息队列 + 字符总数（增量维护，避免每次 O(n) 重算）。 */
     private static final class Bucket {
-        final ArrayDeque<Message> messages = new ArrayDeque<>();
+        final ArrayDeque<ConversationMessage> messages = new ArrayDeque<>();
         int chars = 0;
     }
 
@@ -55,7 +53,7 @@ public final class InMemorySessionMemory implements SessionMemory {
     }
 
     /** 取历史消息快照（时间正序）；无会话记录时返回空列表。 */
-    public synchronized List<Message> history(String sessionId) {
+    public synchronized List<ConversationMessage> history(String sessionId) {
         Bucket bucket = sessions.get(keyOf(sessionId));
         return bucket == null ? List.of() : List.copyOf(bucket.messages);
     }
@@ -63,15 +61,15 @@ public final class InMemorySessionMemory implements SessionMemory {
     /** 记录一轮对话（user + assistant）；空文本不记录（DeepSeek v4 思考模式下内容可能为空）。 */
     public synchronized void append(String sessionId, String userText, String assistantText) {
         Bucket bucket = sessions.computeIfAbsent(keyOf(sessionId), k -> new Bucket());
-        add(bucket, new UserMessage(userText));
-        add(bucket, new AssistantMessage(assistantText));
+        add(bucket, ConversationMessage.user(userText));
+        add(bucket, ConversationMessage.assistant(assistantText));
         trim(bucket);
     }
 
     /** 从持久层恢复历史（重建滑窗状态；迭代 5 JpaSessionMemory 用）。 */
-    synchronized void restore(String sessionId, List<Message> messages) {
+    synchronized void restore(String sessionId, List<ConversationMessage> messages) {
         Bucket bucket = new Bucket();
-        for (Message m : messages) {
+        for (ConversationMessage m : messages) {
             add(bucket, m);
         }
         trim(bucket);
@@ -83,8 +81,8 @@ public final class InMemorySessionMemory implements SessionMemory {
         return sessions.containsKey(keyOf(sessionId));
     }
 
-    private void add(Bucket bucket, Message message) {
-        String text = message.getText();
+    private void add(Bucket bucket, ConversationMessage message) {
+        String text = message.text();
         if (text == null || text.isBlank()) {
             return;
         }
@@ -95,10 +93,10 @@ public final class InMemorySessionMemory implements SessionMemory {
     /** 双上限裁剪：消息数超限丢最旧；字符数超限继续丢最旧（至少保留最新一条，避免截断当前消息）。 */
     private void trim(Bucket bucket) {
         while (bucket.messages.size() > maxMessages) {
-            bucket.chars -= bucket.messages.removeFirst().getText().length();
+            bucket.chars -= bucket.messages.removeFirst().text().length();
         }
         while (bucket.chars > maxChars && bucket.messages.size() > 1) {
-            bucket.chars -= bucket.messages.removeFirst().getText().length();
+            bucket.chars -= bucket.messages.removeFirst().text().length();
         }
     }
 

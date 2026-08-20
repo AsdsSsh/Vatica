@@ -12,6 +12,9 @@ import com.openai.client.OpenAIClient;
 import com.openai.client.OpenAIClientAsync;
 
 import io.micrometer.observation.ObservationRegistry;
+import io.agentscope.core.model.GenerateOptions;
+import io.agentscope.extensions.model.openai.formatter.DeepSeekFormatter;
+import io.agentscope.extensions.model.openai.formatter.OpenAIChatFormatter;
 
 import org.springframework.ai.anthropic.AnthropicChatModel;
 import org.springframework.ai.anthropic.AnthropicChatOptions;
@@ -53,6 +56,10 @@ public class ModelRegistry {
 
     /** 客户端缓存：key = slotId + 配置指纹。 */
     private final ConcurrentHashMap<String, ChatClient> clients = new ConcurrentHashMap<>();
+
+    /** 迭代 22A：AgentScope 原生模型缓存；key = 槽位指纹，协议切换后自动重建。 */
+    private final ConcurrentHashMap<String, io.agentscope.core.model.Model> agentScopeModels =
+            new ConcurrentHashMap<>();
 
     /** 迭代 15 I15-5：每个角色在同能力槽位列表中的故障转移偏移（401/超时后推进）。 */
     private final ConcurrentHashMap<String, AtomicInteger> roleOffsets = new ConcurrentHashMap<>();
@@ -180,7 +187,7 @@ public class ModelRegistry {
         return ReasoningOptionsApplier.builder(model, mode);
     }
 
-    private ModelSlot slotFor(String modelId) {
+    public ModelSlot slotFor(String modelId) {
         if (modelId == null || modelId.isBlank()) {
             return defaultSlot();
         }
@@ -188,6 +195,60 @@ public class ModelRegistry {
                 .filter(s -> s.id().equalsIgnoreCase(modelId))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("操作失败：未知模型（" + modelId + "）。"));
+    }
+
+    /** 迭代 22A：解析用户加密保存槽位为统一模型快照。 */
+    public ModelSlot userSlot(Long ownerId, String slotId) {
+        UserModelSlot slot = userModels.resolveSlot(ownerId, slotId);
+        if (UserModelSlot.MODE_EPHEMERAL.equals(slot.getCredentialMode())) {
+            throw new IllegalArgumentException("操作失败：该模型为仅本机模式，请随请求提供 credential 后重试。");
+        }
+        String apiKey = userModels.resolveApiKey(ownerId, slotId);
+        return new ModelSlot("user:" + slotId, slot.getName(), slot.getProtocol(), slot.getBaseUrl(),
+                apiKey, slot.getModel(), slot.getTemperature(), true);
+    }
+
+    /** 迭代 22A：按槽位创建 AgentScope 原生 Model，OpenAI 与 Anthropic 使用同一抽象。 */
+    public io.agentscope.core.model.Model agentScopeModel(ModelSlot slot) {
+        if (slot == null || !slot.enabled()) {
+            throw new IllegalArgumentException("操作失败：模型槽位不可用。");
+        }
+        String id = slot.id().toLowerCase(Locale.ROOT);
+        String key = id + "|" + slot.fingerprint();
+        agentScopeModels.keySet().removeIf(k -> k.startsWith(id + "|") && !k.equals(key));
+        return agentScopeModels.computeIfAbsent(key, ignored -> buildAgentScopeModel(slot));
+    }
+
+    private static io.agentscope.core.model.Model buildAgentScopeModel(ModelSlot slot) {
+        GenerateOptions defaults = GenerateOptions.builder()
+                .temperature(slot.temperature())
+                .build();
+        if (ModelSlot.PROTOCOL_OPENAI.equals(slot.protocol())) {
+            boolean deepseek = slot.baseUrl() != null
+                    && slot.baseUrl().toLowerCase(Locale.ROOT).contains("deepseek");
+            return io.agentscope.extensions.model.openai.OpenAIChatModel.builder()
+                    .apiKey(slot.apiKey() == null ? "" : slot.apiKey())
+                    .baseUrl(slot.baseUrl())
+                    .modelName(slot.model())
+                    // AgentScope ReActAgent 通过事件层提供统一流式语义；模型 HTTP 层保持非 SSE，
+                    // 兼容 OpenAI 兼容端点的普通 JSON 响应（本地/云端网关并不都实现 SSE）。
+                    .stream(false)
+                    .generateOptions(defaults)
+                    .formatter(deepseek ? new DeepSeekFormatter() : new OpenAIChatFormatter())
+                    .contextWindowSize(16_000)
+                    .build();
+        }
+        if (ModelSlot.PROTOCOL_ANTHROPIC.equals(slot.protocol())) {
+            return io.agentscope.extensions.model.anthropic.AnthropicChatModel.builder()
+                    .apiKey(slot.apiKey() == null ? "" : slot.apiKey())
+                    .baseUrl(slot.baseUrl())
+                    .modelName(slot.model())
+                    .stream(false)
+                    .defaultOptions(defaults)
+                    .contextWindowSize(16_000)
+                    .build();
+        }
+        throw new IllegalArgumentException("操作失败：不支持的协议（" + slot.protocol() + "）。");
     }
 
     /** 迭代 15 I15-5：某能力的候选槽位（启用且带标签）；没有标签时回退默认槽位（旧配置兼容）。 */

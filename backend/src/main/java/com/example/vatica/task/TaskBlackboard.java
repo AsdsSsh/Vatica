@@ -13,13 +13,15 @@ import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.UserMessage;
-
 import com.example.vatica.config.ModelRegistry;
+import com.example.vatica.config.ModelSlot;
+import com.example.vatica.config.ReasoningMode;
 import com.example.vatica.context.ContextBudget;
 import com.example.vatica.context.ContextTrimmer;
 import com.example.vatica.context.TokenEstimator;
+import com.example.vatica.model.ConversationMessage;
+import com.example.vatica.model.ModelGateway;
+import com.example.vatica.model.ModelInvocation;
 import com.example.vatica.runtime.AgentRegistry;
 import com.example.vatica.task.CollaborationDecision.StepPatch;
 import com.example.vatica.task.TaskPlan.TaskStep;
@@ -53,15 +55,18 @@ public class TaskBlackboard {
             保留仍会影响后续步骤的目标、决定、关键数字与路径；禁止编造与评价。""";
 
     private final ModelRegistry registry;
+    private final ModelGateway modelGateway;
     private final ContextBudget budget;
     private final ObjectMapper mapper;
 
-    public TaskBlackboard(ModelRegistry registry, ContextBudget budget) {
-        this(registry, budget, new ObjectMapper());
+    public TaskBlackboard(ModelRegistry registry, ModelGateway modelGateway, ContextBudget budget) {
+        this(registry, modelGateway, budget, new ObjectMapper());
     }
 
-    public TaskBlackboard(ModelRegistry registry, ContextBudget budget, ObjectMapper mapper) {
+    public TaskBlackboard(ModelRegistry registry, ModelGateway modelGateway, ContextBudget budget,
+            ObjectMapper mapper) {
         this.registry = registry;
+        this.modelGateway = modelGateway;
         this.budget = budget;
         this.mapper = mapper;
     }
@@ -69,7 +74,7 @@ public class TaskBlackboard {
     /** 单步上下文 = 人工/Agent note + 滚动笔记 + dependsOn 结果摘要，最后统一按 executor 预算裁剪。 */
     public List<String> contextFor(String goal, TaskPlan plan, TaskStep step) {
         List<Integer> dependencies = effectiveDependencies(step);
-        List<Message> messages = new ArrayList<>();
+        List<ConversationMessage> messages = new ArrayList<>();
         List<BlackboardEntry> visibleNotes = plan.getBlackboard().stream()
                 .filter(entry -> BlackboardEntry.NOTE.equals(entry.type()))
                 .filter(entry -> entry.author().startsWith("HUMAN") || entry.stepId() <= step.getId())
@@ -78,11 +83,11 @@ public class TaskBlackboard {
         int noteStart = Math.max(0, visibleNotes.size() - MAX_CONTEXT_ENTRIES);
         for (BlackboardEntry entry : visibleNotes.subList(noteStart, visibleNotes.size())) {
             String source = entry.author().startsWith("HUMAN") ? "人工备注" : "Agent 发现";
-            messages.add(new UserMessage(source + "：" + entry.content()));
+            messages.add(ConversationMessage.user(source + "：" + entry.content()));
         }
         if (plan.getGlobalNotes() != null && !plan.getGlobalNotes().isBlank()
                 && dependencies.stream().anyMatch(dep -> dep <= plan.getNoteThroughStepId())) {
-            messages.add(new UserMessage("任务滚动笔记：\n" + plan.getGlobalNotes()));
+            messages.add(ConversationMessage.user("任务滚动笔记：\n" + plan.getGlobalNotes()));
         }
         for (Integer dep : dependencies) {
             TaskStep dependency = findStep(plan, dep);
@@ -91,11 +96,11 @@ public class TaskBlackboard {
                 String result = dependency.getResult();
                 digest = result == null ? "" : truncate(result, FALLBACK_CHARS);
             }
-            messages.add(new UserMessage("步骤 " + dep + " 摘要：" + digest));
+            messages.add(ConversationMessage.user("步骤 " + dep + " 摘要：" + digest));
         }
-        List<Message> fitted = ContextTrimmer.trim(messages,
+        List<ConversationMessage> fitted = ContextTrimmer.trim(messages,
                 budget.tokensFor(ContextBudget.CallSite.EXECUTOR), 1);
-        return fitted.stream().map(Message::getText).toList();
+        return fitted.stream().map(ConversationMessage::text).toList();
     }
 
     /** 解析 Worker 的受限结构化输出；旧运行时/旧模型返回纯文本时自动视为 result。 */
@@ -153,10 +158,7 @@ public class TaskBlackboard {
         }
         try {
             String input = result.length() > 4_000 ? result.substring(0, 4_000) + "…" : result;
-            String digest = registry.summarizerClient().prompt()
-                    .system(DIGEST_SYSTEM)
-                    .user("步骤结果：\n" + input)
-                    .call().content();
+            String digest = summarize(DIGEST_SYSTEM, "步骤结果：\n" + input);
             step.setResultDigest(digest == null || digest.isBlank()
                     ? truncate(result, DIGEST_MAX_CHARS) : truncate(digest, DIGEST_MAX_CHARS));
         } catch (Exception e) {
@@ -418,10 +420,8 @@ public class TaskBlackboard {
         }
         try {
             String oldNotes = plan.getGlobalNotes() == null ? "" : plan.getGlobalNotes();
-            String merged = registry.summarizerClient().prompt()
-                    .system(NOTES_SYSTEM)
-                    .user("已有笔记：\n" + oldNotes + "\n\n新增步骤摘要：\n" + newDigests)
-                    .call().content();
+            String merged = summarize(NOTES_SYSTEM,
+                    "已有笔记：\n" + oldNotes + "\n\n新增步骤摘要：\n" + newDigests);
             if (merged != null && !merged.isBlank()) {
                 plan.setGlobalNotes(truncate(merged, NOTES_MAX_CHARS));
                 plan.setNoteThroughStepId(newThrough);
@@ -429,6 +429,11 @@ public class TaskBlackboard {
         } catch (Exception e) {
             log.warn("任务滚动笔记合并失败，水位不动（下次波次自然重试）");
         }
+    }
+
+    private String summarize(String systemPrompt, String userPrompt) {
+        return modelGateway.call(new ModelInvocation(registry.activeSlotFor(ModelSlot.CAP_SUMMARIZER),
+                systemPrompt, List.of(), userPrompt, ReasoningMode.DISABLED)).content();
     }
 
     public static boolean hasResult(TaskStep step) {

@@ -4,6 +4,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
 import com.example.vatica.context.ContextBudget;
+import com.example.vatica.model.ModelGateway;
 import com.example.vatica.task.TaskBlackboard;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -26,7 +27,8 @@ public class TaskConfig {
 
     /** 迭代 15 I15-11：任务黑板（dependsOn 最小上下文 + 滚动笔记 + 结果摘要）。 */
     @Bean
-    TaskBlackboard taskBlackboard(ModelRegistry registry, ContextBudget contextBudget, ObjectMapper mapper) {
-        return new TaskBlackboard(registry, contextBudget, mapper);
+    TaskBlackboard taskBlackboard(ModelRegistry registry, ModelGateway modelGateway,
+            ContextBudget contextBudget, ObjectMapper mapper) {
+        return new TaskBlackboard(registry, modelGateway, contextBudget, mapper);
     }
 }

@@ -1,5 +1,7 @@
 package com.example.vatica.usage;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.stereotype.Component;
@@ -49,6 +51,7 @@ public class DirectModelUsageRecorder {
                 context.reasoningMode(), context.agentId(), context.role(), null,
                 usage.inputTokens(), usage.outputTokens(), usage.totalTokens(), 0,
                 usage.cacheReadTokens(), 0, context.contextFillRatio(), durationMs, 0));
+        UsageContext.setLastUsageJson(usageJson(usage, context.contextFillRatio()));
     }
 
     /** 迭代 17C：明确绑定失效时记录零 token 的降级观测，不伪装成模型调用。 */
@@ -72,6 +75,20 @@ public class DirectModelUsageRecorder {
         if (reservation != null && reservation.context() != null
                 && reservation.context().platformQuota() && reservation.reservedTokens() > 0) {
             quota.settle(reservation.context().userId(), actualTokens, reservation.reservedTokens());
+        }
+    }
+
+    private static String usageJson(StepUsage usage, Integer contextFillRatio) {
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("inputTokens", usage.inputTokens());
+            payload.put("outputTokens", usage.outputTokens());
+            payload.put("totalTokens", usage.totalTokens());
+            payload.put("reasoningTokens", 0);
+            payload.put("contextFillRatio", contextFillRatio);
+            return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(payload);
+        } catch (Exception ignored) {
+            return "{}";
         }
     }
 
