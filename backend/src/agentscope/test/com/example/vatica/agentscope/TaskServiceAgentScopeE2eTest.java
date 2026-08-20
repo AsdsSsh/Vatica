@@ -135,6 +135,31 @@ class TaskServiceAgentScopeE2eTest {
                 });
     }
 
+    /** 迭代 23D：锁定真实暴露过的 Planner 错配回归，错误 Skill 不得先产生一次工具失败。 */
+    @Test
+    void mismatchedPlannerSkillFallsBackBeforeFirstWorkerCall() throws Exception {
+        TaskStep step = new TaskStep(1, "使用 calculator 计算 12 + 8", false);
+        step.setAgent("research");
+        TaskPlan plan = new TaskPlan();
+        plan.setSteps(List.of(step));
+        when(plannerAgent.plan("计算本周预算")).thenReturn(plan);
+
+        TaskRecord created = taskService.create("计算本周预算");
+        TaskRecord done = taskService.approve(created.getId());
+
+        assertThat(done.getStatus()).isEqualTo(TaskStatus.DONE);
+        TaskPlan persisted = mapper.readValue(
+                repository.findById(created.getId()).orElseThrow().getPlanJson(), TaskPlan.class);
+        TaskStep persistedStep = persisted.getSteps().getFirst();
+        assertThat(persistedStep.getAgent()).isEqualTo("general");
+        assertThat(persistedStep.getSkillId()).isNull();
+        assertThat(persistedStep.getCapabilityResolution()).contains("knowledge-research", "通用 Agent");
+        assertThat(LAST_REQUEST.get()).contains("calculator").doesNotContain("knowledge-research@1.1.0");
+        assertThat(spanRepository.findByUserIdAndOrgIdAndTaskIdOrderByStartedAtAscSpanIdAsc(
+                17L, 21L, created.getId())).extracting(AgentSpanRecord::getSpanType)
+                .contains("TASK_RUN", "PLANNER", "AGENT_STEP", "MODEL_CALL", "JUDGE");
+    }
+
     private static HttpServer startModelServer() {
         try {
             HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);

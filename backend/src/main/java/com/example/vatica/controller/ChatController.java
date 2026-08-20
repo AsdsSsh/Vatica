@@ -119,7 +119,7 @@ public class ChatController {
     @GetMapping("/models")
     public List<ModelInfoDto> models() {
         return registry.slots().stream()
-                .map(s -> new ModelInfoDto(s.id(), s.name(), s.enabled()))
+                .map(s -> new ModelInfoDto(s.id(), s.name(), ModelRegistry.isCallable(s)))
                 .toList();
     }
 
@@ -135,6 +135,9 @@ public class ChatController {
         ModelSlot slot = registry.slotFor(model);
         if (!slot.enabled()) {
             throw new IllegalArgumentException("操作失败：模型未启用（" + slot.name() + "），请在设置中启用。");
+        }
+        if (!ModelRegistry.isCallable(slot)) {
+            throw new IllegalArgumentException("操作失败：模型尚未配置 API Key 或本地端点（" + slot.name() + "）。");
         }
         return slot;
     }

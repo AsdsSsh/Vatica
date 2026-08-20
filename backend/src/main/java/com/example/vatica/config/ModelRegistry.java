@@ -40,8 +40,24 @@ public class ModelRegistry {
     }
 
     public ModelSlot defaultSlot() {
-        return slots().stream().filter(ModelSlot::enabled).findFirst()
-                .orElseThrow(() -> new IllegalStateException("操作失败：没有启用的模型，请先在设置中配置。"));
+        return slots().stream().filter(ModelRegistry::isCallable).findFirst()
+                .orElseThrow(() -> new IllegalStateException("操作失败：没有可用模型，请先在设置中配置凭据或本地端点。"));
+    }
+
+    /**
+     * 迭代 23D：模型“启用”不等于可以发起请求。远程端点必须已有密钥；本机端点允许无密钥。
+     * 该判定复用于聊天清单、任务运行时和能力摘要，避免三处出现相互矛盾的状态。
+     */
+    public static boolean isCallable(ModelSlot slot) {
+        if (slot == null || !slot.enabled()) {
+            return false;
+        }
+        if (slot.apiKey() != null && !slot.apiKey().isBlank()) {
+            return true;
+        }
+        String baseUrl = slot.baseUrl() == null ? "" : slot.baseUrl().trim().toLowerCase(Locale.ROOT);
+        return baseUrl.contains("://localhost") || baseUrl.contains("://127.0.0.1")
+                || baseUrl.contains("://[::1]");
     }
 
     public ModelSlot slotFor(String modelId) {
@@ -65,8 +81,8 @@ public class ModelRegistry {
     /** AgentScope 原生模型缓存；配置指纹变化会丢弃相同槽位的旧实例。 */
     public Model agentScopeModel(ModelSlot slot) {
         ModelSlot resolved = withStoredKey(slot);
-        if (resolved == null || !resolved.enabled()) {
-            throw new IllegalArgumentException("操作失败：模型槽位不可用。");
+        if (!isCallable(resolved)) {
+            throw new IllegalArgumentException("操作失败：模型槽位不可调用，请配置 API Key 或本地模型端点。");
         }
         String id = resolved.id().toLowerCase(Locale.ROOT);
         String key = id + "|" + resolved.fingerprint();
@@ -76,7 +92,7 @@ public class ModelRegistry {
 
     /** 角色能力优先，旧配置未声明 capability 时兼容回退默认槽位。 */
     public ModelSlot activeSlotFor(String capability) {
-        List<ModelSlot> candidates = slots().stream().filter(ModelSlot::enabled)
+        List<ModelSlot> candidates = slots().stream().filter(ModelRegistry::isCallable)
                 .filter(slot -> slot.capabilities().contains(capability)).toList();
         if (candidates.isEmpty()) {
             return defaultSlot();

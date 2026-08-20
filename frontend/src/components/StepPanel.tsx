@@ -36,9 +36,11 @@ import {
   denyPermissionRequest,
   fetchRecentTasks,
   fetchBenchmarkCases,
+  fetchSystemCapabilities,
   fetchTaskDetail,
   fetchTaskTraces,
   AUTH_OPEN_EVENT,
+  MODEL_CONFIG_UPDATED_EVENT,
   isAuthExpiredError,
   subscribeTaskEvents,
   taskAction,
@@ -126,6 +128,7 @@ export default function StepPanel() {
   const [goalInput, setGoalInput] = useState("");
   const [benchmarkCases, setBenchmarkCases] = useState<BenchmarkCase[]>([]);
   const [benchmarkCaseId, setBenchmarkCaseId] = useState<string | null>(null);
+  const [modelReady, setModelReady] = useState<boolean | null>(null);
   const [noteInput, setNoteInput] = useState("");
   const [arbitrationNote, setArbitrationNote] = useState("");
   const [noteBusy, setNoteBusy] = useState(false);
@@ -226,8 +229,25 @@ export default function StepPanel() {
         .catch((e: Error) => {
           if (!isAuthExpiredError(e)) message.warning("固定评测集加载失败");
         });
+      void fetchSystemCapabilities()
+        .then((snapshot) => setModelReady(snapshot.capabilities.find((item) => item.id === "model")?.status === "READY"))
+        .catch(() => setModelReady(null));
+    } else {
+      setModelReady(null);
     }
   }, [authKey, online, authStatus, refreshTasks]);
+
+  // 模型设置在同一登录会话内保存后，任务入口立即重新判定可执行状态。
+  useEffect(() => {
+    const refreshModelReadiness = () => {
+      if (!online || authStatus === "loading" || authStatus === "anonymous") return;
+      void fetchSystemCapabilities()
+        .then((snapshot) => setModelReady(snapshot.capabilities.find((item) => item.id === "model")?.status === "READY"))
+        .catch(() => setModelReady(null));
+    };
+    window.addEventListener(MODEL_CONFIG_UPDATED_EVENT, refreshModelReadiness);
+    return () => window.removeEventListener(MODEL_CONFIG_UPDATED_EVENT, refreshModelReadiness);
+  }, [online, authStatus]);
 
   // 组件卸载时关闭全部任务订阅
   useEffect(() => {
@@ -276,6 +296,10 @@ export default function StepPanel() {
     }
     if (!online) {
       message.warning("后端尚未连接，请稍后重试。");
+      return;
+    }
+    if (modelReady === false) {
+      message.warning("没有可用模型，请先在设置中配置凭据或本地端点。");
       return;
     }
     setBusy(true);
@@ -420,6 +444,7 @@ export default function StepPanel() {
             aria-label="固定评测用例"
             style={{ width: "100%" }}
             options={benchmarkCases.map((item) => ({ value: item.id, label: item.title }))}
+            disabled={!online || authStatus === "loading" || modelReady === false}
             onChange={(value: string | undefined) => {
               setBenchmarkCaseId(value ?? null);
               const selected = benchmarkCases.find((item) => item.id === value);
@@ -432,7 +457,7 @@ export default function StepPanel() {
               className="task-create-goal"
               placeholder="一句话任务，如：整理下周日程"
               value={goalInput}
-              disabled={!online || authStatus === "loading"}
+              disabled={!online || authStatus === "loading" || modelReady === false}
               onChange={(e) => {
                 const next = e.target.value;
                 setGoalInput(next);
@@ -450,7 +475,7 @@ export default function StepPanel() {
               type="primary"
               icon={<PlusOutlined />}
               loading={busy}
-              disabled={!online || authStatus === "loading"}
+              disabled={!online || authStatus === "loading" || modelReady === false}
               onClick={handleCreate}
             >
               创建
@@ -460,6 +485,11 @@ export default function StepPanel() {
         {online && authStatus === "anonymous" && (
           <Typography.Text type="warning" style={{ display: "block", marginTop: 6, fontSize: 11 }}>
             后端在线，请先点击顶部账号登录后创建任务。
+          </Typography.Text>
+        )}
+        {online && authStatus !== "anonymous" && modelReady === false && (
+          <Typography.Text type="warning" style={{ display: "block", marginTop: 6, fontSize: 11 }}>
+            没有可用模型，请在设置中完成模型配置后再创建任务。
           </Typography.Text>
         )}
         <Typography.Text type="secondary" style={{ display: "block", marginTop: 6, fontSize: 11 }}>

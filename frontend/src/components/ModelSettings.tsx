@@ -26,6 +26,7 @@ import {
   fetchReliabilityBaseline,
   fetchUsageToday,
   isAuthExpiredError,
+  MODEL_CONFIG_UPDATED_EVENT,
   MODEL_CAPABILITIES,
   saveModelSlots,
   saveAgentBinding,
@@ -437,6 +438,7 @@ export default function ModelSettings({ open, onClose, onSaved }: Props) {
     try {
       await saveModelSlots(slots);
       message.success("已保存，立即生效");
+      window.dispatchEvent(new Event(MODEL_CONFIG_UPDATED_EVENT));
       onSaved();
       onClose();
     } catch (e) {

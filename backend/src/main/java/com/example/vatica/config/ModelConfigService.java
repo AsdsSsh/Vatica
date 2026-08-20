@@ -184,7 +184,7 @@ public class ModelConfigService {
         String deepBase = openAiDefaults.baseUrl() == null || openAiDefaults.baseUrl().isBlank()
                 ? "https://api.deepseek.com"
                 : openAiDefaults.baseUrl();
-        // 主模型默认始终启用（迭代 7 行为：configured 恒 true）；备用模型按 key 是否配置
+        // 主模型默认保持启用；是否可调用统一由 ModelRegistry.isCallable 按密钥/本地端点判断。
         // 迭代 15：默认槽位声明全部角色能力（未配置能力标签时仍保持旧行为可用）
         List<String> allCaps = List.of(ModelSlot.CAP_CHAT_FAST, ModelSlot.CAP_CHAT_REASON,
                 ModelSlot.CAP_PLANNER, ModelSlot.CAP_JUDGE, ModelSlot.CAP_SUMMARIZER);

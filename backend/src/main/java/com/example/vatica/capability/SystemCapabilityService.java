@@ -82,7 +82,7 @@ public class SystemCapabilityService {
         if (enabled.isEmpty()) {
             return actionRequired("model", "模型", "没有启用的模型。", "在模型设置中启用并配置一个模型。");
         }
-        boolean callable = enabled.stream().anyMatch(this::hasCredentialOrLocalEndpoint);
+        boolean callable = enabled.stream().anyMatch(ModelRegistry::isCallable);
         if (callable) {
             return ready("model", "模型", "至少一个启用模型具备调用凭据或本地端点。");
         }
@@ -168,14 +168,6 @@ public class SystemCapabilityService {
             // 目录、权限和路径信息均不返回客户端。
         }
         return unavailable("workspace", "工作区", "当前用户工作区不可写。", "检查工作区目录权限后重试。");
-    }
-
-    private boolean hasCredentialOrLocalEndpoint(ModelSlot slot) {
-        if (slot.apiKey() != null && !slot.apiKey().isBlank()) {
-            return true;
-        }
-        String baseUrl = slot.baseUrl() == null ? "" : slot.baseUrl().toLowerCase();
-        return baseUrl.contains("://localhost") || baseUrl.contains("://127.0.0.1");
     }
 
     private boolean mcpConnectionConfigured(McpProperties.Connection connection) {

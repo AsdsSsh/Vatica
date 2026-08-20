@@ -48,6 +48,7 @@ import {
   streamChat,
   AUTH_EXPIRED_EVENT,
   AUTH_OPEN_EVENT,
+  MODEL_CONFIG_UPDATED_EVENT,
   isAuthExpiredError,
   type EphemeralCredential,
   type FilePermissionRequest,
@@ -239,20 +240,37 @@ export default function ChatPanel({
       .then((list) => {
         setModels(list);
         setModel((prev) => {
+          if (prev?.startsWith("user:")) return prev;
           if (prev && list.some((m) => m.id === prev && m.configured)) return prev;
           const firstConfigured = list.find((m) => m.configured);
-          return firstConfigured ? firstConfigured.id : prev;
+          return firstConfigured?.id;
         });
       })
       .catch(() => {
         // 连接状态横幅已提示；保留上次成功加载的清单
       });
     fetchUserModelSlots()
-      .then(setUserSlots)
+      .then((list) => {
+        setUserSlots(list);
+        setModel((prev) => {
+          if (!prev?.startsWith("user:")) return prev;
+          return list.some((slot) => `user:${slot.id}` === prev && userSlotCallable(slot)) ? prev : undefined;
+        });
+      })
       .catch(() => {
         // 未登录/后端未启用鉴权时忽略，不影响内置模型
       });
   }, []);
+
+  function userSlotCallable(slot: UserModelSlotView): boolean {
+    if (!slot.enabled) return false;
+    return slot.credentialMode === "EPHEMERAL"
+      ? !!getEphemeralUserModelKey(slot.id)
+      : slot.apiKeySet;
+  }
+
+  const hasCallableModel = models.some((candidate) => candidate.configured)
+    || userSlots.some(userSlotCallable);
 
   const loadCapabilities = useCallback(() => {
     fetchSystemCapabilities()
@@ -261,6 +279,15 @@ export default function ChatPanel({
         // 登录状态或后端连接变化由统一横幅处理，保留最后一次成功快照即可。
       });
   }, []);
+
+  useEffect(() => {
+    const refreshModelConfiguration = () => {
+      void loadModels();
+      void loadCapabilities();
+    };
+    window.addEventListener(MODEL_CONFIG_UPDATED_EVENT, refreshModelConfiguration);
+    return () => window.removeEventListener(MODEL_CONFIG_UPDATED_EVENT, refreshModelConfiguration);
+  }, [loadCapabilities, loadModels]);
 
   const authKey =
     authStatus === "authenticated" || authStatus === "local"
@@ -372,6 +399,15 @@ export default function ChatPanel({
     if (authStatus === "anonymous") {
       message.error("请先在右上角账号中登录，再使用云端能力。");
       setAuthOpen(true);
+      return;
+    }
+    if (!hasCallableModel) {
+      message.error("没有可用模型，请先在模型设置中保存 API Key，或配置本地模型端点。");
+      setSettingsOpen(true);
+      return;
+    }
+    if (!model) {
+      message.error("请选择一个可用模型后再发送。");
       return;
     }
     const selectedSlot = model?.startsWith("user:")
@@ -494,9 +530,9 @@ export default function ChatPanel({
             placeholder={
               !online ? "等待后端连接"
                 : authStatus === "anonymous" ? "登录后选择模型"
-                  : models.length ? "选择模型" : "暂无可用模型"
+                  : hasCallableModel ? "选择模型" : "暂无可用模型"
             }
-            value={models.length ? model : undefined}
+            value={hasCallableModel ? model : undefined}
             onChange={(v) => {
               const next = String(v);
               setModel(next);
@@ -519,15 +555,17 @@ export default function ChatPanel({
                 label: "我的模型",
                 options: userSlots.map((s) => {
                   const ephemeral = s.credentialMode === "EPHEMERAL";
-                  const hasLocalKey = !ephemeral || !!getEphemeralUserModelKey(s.id);
+                  const callable = userSlotCallable(s);
                   return {
                     value: `user:${s.id}`,
                     label: ephemeral
-                      ? hasLocalKey
+                      ? callable
                         ? `${s.name} · 仅本机`
                         : `${s.name} · 仅本机（未存 Key）`
-                      : `${s.name} · 云端加密`,
-                    disabled: !hasLocalKey,
+                      : callable
+                        ? `${s.name} · 云端加密`
+                        : `${s.name} · 云端加密（未配置）`,
+                    disabled: !callable,
                   };
                 }),
               },
@@ -834,7 +872,7 @@ export default function ChatPanel({
             onChange={(e) => setInput(e.target.value)}
             placeholder="给 Vatica 发消息（Enter 发送，Shift+Enter 换行）"
             autoSize={{ minRows: 1, maxRows: 5 }}
-            disabled={streaming || !online}
+            disabled={streaming || !online || (authStatus !== "anonymous" && !hasCallableModel)}
             onPressEnter={(e) => {
               // U1：中文输入法选词回车不发送
               if (e.nativeEvent.isComposing) return;
@@ -849,12 +887,12 @@ export default function ChatPanel({
               停止
             </Button>
           ) : (
-            <Tooltip title={online ? undefined : "后端未连接"}>
+            <Tooltip title={!online ? "后端未连接" : !hasCallableModel ? "请先配置可用模型" : undefined}>
               <Button
                 type="primary"
                 icon={<SendOutlined />}
                 onClick={() => void send()}
-                disabled={!input.trim() || !online}
+                disabled={!input.trim() || !online || (authStatus !== "anonymous" && !hasCallableModel)}
               >
                 发送
               </Button>

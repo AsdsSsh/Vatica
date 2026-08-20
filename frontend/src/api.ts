@@ -54,6 +54,8 @@ const AUTH_TOKEN_KEY = "vatica.authToken";
 export const AUTH_EXPIRED_EVENT = "vatica-auth-expired";
 /** 需要登录的业务入口请求打开账号面板。 */
 export const AUTH_OPEN_EVENT = "vatica-open-auth";
+/** 模型槽位保存后广播，供聊天、能力摘要与任务入口刷新可调用状态。 */
+export const MODEL_CONFIG_UPDATED_EVENT = "vatica-model-config-updated";
 
 export class AuthExpiredError extends Error {
   constructor(message: string) {
@@ -575,6 +577,7 @@ export async function deleteRemoteSession(id: string): Promise<void> {
 export interface ModelInfo {
   id: string;
   name: string;
+  /** 已启用且具有 API Key，或配置为不需要 Key 的本地端点。 */
   configured: boolean;
 }
 
