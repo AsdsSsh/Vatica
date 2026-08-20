@@ -7,7 +7,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /** 迭代 19B：知识库索引与检索边界。 */
 @ConfigurationProperties(prefix = "vatica.knowledge")
 public record KnowledgeProperties(boolean enabled, String embeddingProvider, int vectorDimensions, int maxDocumentBytes,
-        int chunkSize, int chunkOverlap, int maxSearchChars) {
+        int chunkSize, int chunkOverlap, int maxSearchChars, OpenAi openai) {
 
     public KnowledgeProperties {
         embeddingProvider = embeddingProvider == null || embeddingProvider.isBlank()
@@ -29,6 +29,18 @@ public record KnowledgeProperties(boolean enabled, String embeddingProvider, int
         }
         if (maxSearchChars < 1000) {
             maxSearchChars = 6000;
+        }
+        if (openai == null) {
+            openai = new OpenAi(null, null, null);
+        }
+    }
+
+    /** OpenAI-compatible embedding endpoint；仅 embedding-provider=openai 时使用。 */
+    public record OpenAi(String baseUrl, String apiKey, String model) {
+        public OpenAi {
+            baseUrl = baseUrl == null ? "" : baseUrl.trim();
+            apiKey = apiKey == null ? "" : apiKey.trim();
+            model = model == null ? "" : model.trim();
         }
     }
 }

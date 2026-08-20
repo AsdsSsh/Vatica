@@ -23,7 +23,7 @@ import org.springframework.stereotype.Service;
  * （迭代 11 从 data/ 迁入内部状态目录；打包模式即 {@code %APPDATA%\Vatica\.vatica\models.json}）。
  *
  * <p><b>优先级（已定决策 2026-08-15）</b>：界面配置优先——文件存在且非空即以其为准；
- * 文件不存在/为空/损坏时回退默认槽位（DeepSeek 走 {@code spring.ai.openai.*}、
+ * 文件不存在/为空/损坏时回退默认槽位（DeepSeek 走 {@code vatica.model.openai.*}、
  * 通义走 {@code vatica.model.qwen.*}，与迭代 7 的 yml/环境变量行为完全一致）。
  * 损坏文件不静默覆盖（与 todos.json 同款数据保护约定），记日志回退默认，用户保存时自然修复。
  */

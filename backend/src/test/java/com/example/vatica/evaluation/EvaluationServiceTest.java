@@ -32,7 +32,7 @@ class EvaluationServiceTest {
             new EvaluationProperties(1, 0.8, 70, 0.1), tasks, usage, traces);
 
     @Test
-    void passesAgentScopeWhenEveryCaseMeetsThresholdAndLeavesLegacyPending() {
+    void passesAgentScopeWhenEveryCaseMeetsThreshold() {
         List<TaskRecord> rows = List.of(
                 task("t1", "document-summary", TaskStatus.DONE, TaskVerdict.PASS, 80),
                 task("t2", "weekly-report", TaskStatus.DONE, TaskVerdict.PASS, 82),
@@ -44,7 +44,7 @@ class EvaluationServiceTest {
 
         EvaluationService.EvaluationReport report = service.report(IDENTITY);
 
-        assertThat(report.results()).hasSize(8);
+        assertThat(report.results()).hasSize(4);
         assertThat(report.gates()).filteredOn(gate -> gate.runtime().equals("agentscope"))
                 .singleElement().satisfies(gate -> {
                     assertThat(gate.status()).isEqualTo(EvaluationService.GateStatus.PASS);
@@ -52,11 +52,7 @@ class EvaluationServiceTest {
                     assertThat(gate.passRate()).isEqualTo(1.0);
                     assertThat(gate.totalTokens()).isEqualTo(40);
                 });
-        assertThat(report.gates()).filteredOn(gate -> gate.runtime().equals("legacy"))
-                .singleElement().satisfies(gate -> {
-                    assertThat(gate.status()).isEqualTo(EvaluationService.GateStatus.PENDING);
-                    assertThat(gate.reasons()).hasSize(4);
-                });
+        assertThat(report.gates()).hasSize(1);
         verify(tasks).findByUserId(7L);
         verify(usage).findTaskUsageByUserId(7L);
         verify(traces).findTaskTracesByUserId(7L);

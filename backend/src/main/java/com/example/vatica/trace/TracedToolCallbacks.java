@@ -8,8 +8,6 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.example.vatica.event.SseEventSink;
@@ -27,8 +25,7 @@ import reactor.core.publisher.Mono;
  * 耗时与失败原因。聊天链路经 {@code tool_activity} SSE 推送（persist=false）；
  * 任务链路把脱敏摘要写入 {@code agent_trace}（persist=true），失败只记录不阻断主流程。
  *
- * <p>装饰顺序（内→外）：ToolCallLimitProvider → PermissionBoundToolCallbacks →（迭代 15.3
- * RetryableToolCallbacks）→ 本类。trace 在最外层看到真实耗时与最终结果。
+ * <p>装饰顺序（内→外）：权限绑定 → 重试 → 本类。trace 在最外层看到真实耗时与最终结果。
  */
 public final class TracedToolCallbacks {
 
@@ -85,62 +82,6 @@ public final class TracedToolCallbacks {
     public TracedToolCallbacks(ObjectMapper mapper, AgentTraceRecordRepository traceRepository,
             AgentObservabilityRecorder observability) {
         this(mapper, (SseEmitter) null, traceRepository, observability);
-    }
-
-    public ToolCallback[] wrap(ToolCallback[] callbacks, TraceContext.Snapshot trace) {
-        return wrap(callbacks, trace, com.example.vatica.tool.ToolResultPolicy.MAX_OUTPUT_CHARS);
-    }
-
-    /** 迭代 20D：在保留原始 outputLength 的同时，按 Skill 额度收窄模型可见输出。 */
-    public ToolCallback[] wrap(ToolCallback[] callbacks, TraceContext.Snapshot trace, int maxOutputChars) {
-        ToolCallback[] wrapped = new ToolCallback[callbacks.length];
-        for (int i = 0; i < callbacks.length; i++) {
-            wrapped[i] = wrapOne(callbacks[i], trace, maxOutputChars);
-        }
-        return wrapped;
-    }
-
-    private ToolCallback wrapOne(ToolCallback delegate, TraceContext.Snapshot trace, int maxOutputChars) {
-        return new ToolCallback() {
-            @Override
-            public ToolDefinition getToolDefinition() {
-                return delegate.getToolDefinition();
-            }
-
-            @Override
-            public String call(String toolInput) {
-                String tool = delegate.getToolDefinition().name();
-                String inputSummary = TraceSanitizer.inputSummary(mapper, toolInput);
-                long start = System.nanoTime();
-                AgentObservabilityRecorder.SpanHandle span = startSpan(tool, trace, inputSummary);
-                send(startPayload(tool, trace, inputSummary));
-                try {
-                    String out = delegate.call(toolInput);
-                    // 迭代 15 I15-10：超限输出先按预算截断再交给模型；trace 记录原始长度
-                    String modelVisible = com.example.vatica.tool.ToolResultPolicy.limit(out, maxOutputChars);
-                    long durationMs = (System.nanoTime() - start) / 1_000_000;
-                    String outputSummary = TraceSanitizer.outputSummary(
-                            TraceSanitizer.sanitize(mapper, modelVisible), null);
-                    int outputLength = out.length();
-                    send(endPayload(tool, trace, durationMs, inputSummary, outputSummary, outputLength, null));
-                    persist(trace, tool, inputSummary, outputSummary, outputLength, durationMs,
-                            AgentTraceRecord.STATUS_SUCCESS, null);
-                    finishSpan(span, AgentObservabilityRecorder.SpanFinish.success(modelVisible), start);
-                    return modelVisible;
-                } catch (RuntimeException e) {
-                    long durationMs = (System.nanoTime() - start) / 1_000_000;
-                    String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-                    if (message.length() > 500) {
-                        message = message.substring(0, 500) + "…";
-                    }
-                    send(endPayload(tool, trace, durationMs, inputSummary, "", 0, message));
-                    persist(trace, tool, inputSummary, "", 0, durationMs,
-                            AgentTraceRecord.STATUS_FAILED, message);
-                    finishSpan(span, AgentObservabilityRecorder.SpanFinish.failed("TOOL_ERROR", message), start);
-                    throw e;
-                }
-            }
-        };
     }
 
     /** 迭代 22B：AgentScope 原生工具 Trace，保留既有 SSE/持久化 Span 契约。 */

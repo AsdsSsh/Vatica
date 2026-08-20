@@ -10,7 +10,7 @@ import com.example.vatica.runtime.AgentRuntime.StepUsage;
 
 /**
  * 迭代 17A：为不经过 Spring AI Advisor 的直连运行时复用平台配额与 usage 表。
- * LegacyRuntime 仍由 UsageAdvisor 记账，调用方不得同时使用两条链路。
+ * AgentScope 聊天、建议和执行回合统一经此处记账，调用方不得重复结算。
  */
 @Component
 public class DirectModelUsageRecorder {

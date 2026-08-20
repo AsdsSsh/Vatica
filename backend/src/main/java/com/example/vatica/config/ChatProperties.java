@@ -7,7 +7,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * 对话层配置（{@code vatica.chat.*}，迭代 2.5 新增）。
  *
- * <p>沿用 {@code vatica.*} 业务自定义前缀，避免与 spring.ai.* 框架配置混淆。
+ * <p>沿用 {@code vatica.*} 业务自定义前缀，避免与第三方框架配置混淆。
  *
  * @param sse    SSE 流式配置
  * @param memory 会话短期记忆（内存版）配置

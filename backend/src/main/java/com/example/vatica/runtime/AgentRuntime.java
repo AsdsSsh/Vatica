@@ -4,10 +4,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.tool.ToolCallback;
 import io.agentscope.core.tool.AgentTool;
-import com.example.vatica.agentscope.AgentToolAdapters;
 
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.config.ModelSlot;
@@ -17,8 +14,7 @@ import com.example.vatica.skill.SkillCatalogService.ExecutionProfile;
 import com.example.vatica.task.TaskPlan.TaskStep;
 
 /**
- * 迭代 15 I15-17：双运行时边界——LegacyRuntime（Spring AI 现状实现）与
- * AgentScopeRuntime（-Pagentscope profile 加载的对照实现）实现同一 POC 契约。
+ * 迭代 22D：AgentScope 运行时边界。
  * 领域状态机 / JPA / HITL / 多租户与权限规则仍是唯一事实源。
  */
 public interface AgentRuntime {
@@ -53,7 +49,7 @@ public interface AgentRuntime {
         }
     }
 
-    /** LegacyRuntime 返回 empty，由既有 Spring AI 结构化输出链路接管。 */
+    /** 无工具建议请求；业务层继续负责结构校验与领域决策。 */
     default Optional<AdvisoryResult> advise(AdvisoryRequest request) {
         return Optional.empty();
     }
@@ -63,7 +59,7 @@ public interface AgentRuntime {
 
     /** 迭代 17A：Vatica 编排层交给运行时的单步骤快照。 */
     record StepRequest(String goal, TaskStep step, List<String> context, String reflectionFeedback,
-            RequestIdentity identity, AgentTool[] tools, ChatClient legacyClient,
+            RequestIdentity identity, AgentTool[] tools,
             ModelSlot modelSlot, AgentDefinition agent, String sessionId, ExecutionProfile skill) {
         public StepRequest {
             context = context == null ? List.of() : List.copyOf(context);
@@ -73,24 +69,6 @@ public interface AgentRuntime {
         @Override
         public AgentTool[] tools() {
             return tools.clone();
-        }
-
-        /** 兼容 17A 的运行时单测与 POC；未绑定 Skill 时保留角色级执行。 */
-        public StepRequest(String goal, TaskStep step, List<String> context, String reflectionFeedback,
-                RequestIdentity identity, ToolCallback[] toolCallbacks, ChatClient legacyClient,
-                ModelSlot modelSlot, AgentDefinition agent, String sessionId) {
-            this(goal, step, context, reflectionFeedback, identity,
-                    AgentToolAdapters.fromCallbacks(toolCallbacks, new com.fasterxml.jackson.databind.ObjectMapper()), legacyClient,
-                    modelSlot, agent, sessionId, null);
-        }
-
-        /** 迁移期兼容：带 Skill 的旧 ToolCallback 构造器。 */
-        public StepRequest(String goal, TaskStep step, List<String> context, String reflectionFeedback,
-                RequestIdentity identity, ToolCallback[] toolCallbacks, ChatClient legacyClient,
-                ModelSlot modelSlot, AgentDefinition agent, String sessionId, ExecutionProfile skill) {
-            this(goal, step, context, reflectionFeedback, identity,
-                    AgentToolAdapters.fromCallbacks(toolCallbacks, new com.fasterxml.jackson.databind.ObjectMapper()),
-                    legacyClient, modelSlot, agent, sessionId, skill);
         }
     }
 
@@ -104,7 +82,6 @@ public interface AgentRuntime {
             toolTraces = toolTraces == null ? List.of() : List.copyOf(toolTraces);
         }
 
-        /** LegacyRuntime 的用量由 Spring AI UsageAdvisor 负责，保持旧构造兼容。 */
         public StepResult(String answer, List<String> toolTraces, long durationMs) {
             this(answer, toolTraces, durationMs, null);
         }

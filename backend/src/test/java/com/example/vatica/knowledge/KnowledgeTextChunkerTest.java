@@ -8,7 +8,7 @@ class KnowledgeTextChunkerTest {
 
     private final KnowledgeTextChunker chunker = new KnowledgeTextChunker();
     private final KnowledgeProperties properties = new KnowledgeProperties(
-            true, "local-hash", 32, 1024 * 1024, 100, 20, 2000);
+            true, "local-hash", 32, 1024 * 1024, 100, 20, 2000, null);
 
     @Test
     void splitsDeterministicallyAndKeepsSourceOffsets() {

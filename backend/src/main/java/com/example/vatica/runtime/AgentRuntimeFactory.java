@@ -4,7 +4,6 @@ import java.util.Optional;
 
 import org.springframework.stereotype.Component;
 
-import com.example.vatica.agent.ExecutorAgent;
 import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.tool.AgentToolProvider;
 import com.example.vatica.runtime.AgentRuntime.AdvisoryRequest;
@@ -12,7 +11,7 @@ import com.example.vatica.runtime.AgentRuntime.AdvisoryResult;
 import com.example.vatica.usage.DirectModelUsageRecorder;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-/** 迭代 17A：运行时工厂——默认 AgentScope，保留 legacy 配置作为即时回滚通道。 */
+/** 迭代 22D：AgentScope 是唯一运行时，工厂仅负责延迟装配与统一用量记录。 */
 @Component
 public class AgentRuntimeFactory {
 
@@ -21,20 +20,16 @@ public class AgentRuntimeFactory {
     private final ModelRegistry registry;
     private final AgentToolProvider vaticaTools;
     private final ObjectMapper mapper;
-    private final AgentRuntimeProperties props;
-    private final ExecutorAgent executorAgent;
     private final AgentRegistry agentRegistry;
     private final DirectModelUsageRecorder directUsage;
     private volatile AgentRuntime runtime;
 
     public AgentRuntimeFactory(ModelRegistry registry, AgentToolProvider vaticaTools,
-            ObjectMapper mapper, AgentRuntimeProperties props, ExecutorAgent executorAgent,
+            ObjectMapper mapper,
             AgentRegistry agentRegistry, DirectModelUsageRecorder directUsage) {
         this.registry = registry;
         this.vaticaTools = vaticaTools;
         this.mapper = mapper;
-        this.props = props;
-        this.executorAgent = executorAgent;
         this.agentRegistry = agentRegistry;
         this.directUsage = directUsage;
     }
@@ -42,9 +37,6 @@ public class AgentRuntimeFactory {
     /** 迭代 20C：AgentScope 建议直连模型，统一复用平台配额与 usage 记录。 */
     public Optional<AdvisoryResult> advise(AdvisoryRequest request) {
         AgentRuntime selected = runtime();
-        if (!AgentRuntimeProperties.AGENTSCOPE.equals(selected.name())) {
-            return Optional.empty();
-        }
         DirectModelUsageRecorder.Reservation reservation = directUsage.begin();
         try {
             Optional<AdvisoryResult> result = selected.advise(request);
@@ -75,20 +67,15 @@ public class AgentRuntimeFactory {
     }
 
     private AgentRuntime createRuntime() {
-        if (AgentRuntimeProperties.AGENTSCOPE.equals(props.runtime())) {
-            try {
-                Class<?> type = Class.forName(AGENTSCOPE_CLASS);
-                return (AgentRuntime) type.getConstructor(ModelRegistry.class, AgentToolProvider.class,
-                        ObjectMapper.class, AgentRegistry.class)
-                        .newInstance(registry, vaticaTools, mapper, agentRegistry);
-            } catch (ClassNotFoundException e) {
-                throw new IllegalStateException(
-                        "操作失败：AgentScopeRuntime 未进入当前构建，请使用默认 Maven 构建重新打包，"
-                                + "或临时设置 VATICA_AGENT_RUNTIME=legacy 回滚。");
-            } catch (ReflectiveOperationException e) {
-                throw new IllegalStateException("操作失败：AgentScopeRuntime 初始化失败。", e);
-            }
+        try {
+            Class<?> type = Class.forName(AGENTSCOPE_CLASS);
+            return (AgentRuntime) type.getConstructor(ModelRegistry.class, AgentToolProvider.class,
+                    ObjectMapper.class, AgentRegistry.class)
+                    .newInstance(registry, vaticaTools, mapper, agentRegistry);
+        } catch (ClassNotFoundException e) {
+            throw new IllegalStateException("操作失败：AgentScopeRuntime 未进入当前构建，请使用默认 Maven 构建重新打包。", e);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("操作失败：AgentScopeRuntime 初始化失败。", e);
         }
-        return new LegacyRuntime(registry, vaticaTools, mapper, executorAgent);
     }
 }

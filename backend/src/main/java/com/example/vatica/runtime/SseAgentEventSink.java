@@ -23,7 +23,7 @@ public class SseAgentEventSink implements AgentEventSink {
         this.channel = null;
     }
 
-    /** 迭代 16：AgentScope/LegacyRuntime 通过统一网关发布到租户隔离 channel。 */
+    /** 迭代 22D：AgentScope 通过统一网关发布到租户隔离 channel。 */
     public SseAgentEventSink(SseEventGateway gateway, String channel) {
         this.emitter = null;
         this.mapper = null;

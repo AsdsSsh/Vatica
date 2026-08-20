@@ -1,21 +1,10 @@
 package com.example.vatica.knowledge;
 
 import java.text.Normalizer;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
 
-import org.springframework.ai.document.Document;
-import org.springframework.ai.embedding.Embedding;
-import org.springframework.ai.embedding.EmbeddingModel;
-import org.springframework.ai.embedding.EmbeddingRequest;
-import org.springframework.ai.embedding.EmbeddingResponse;
-
-/**
- * 零外部依赖的 Spring AI EmbeddingModel：以字符 unigram/bigram 做稳定哈希向量。
- * 仅用于本地闭环、权限和生命周期测试；生产语义检索应替换为真实 embedding 模型。
- */
-public final class LocalHashEmbeddingModel implements EmbeddingModel {
+/** 零外部依赖 embedding gateway：以字符 unigram/bigram 生成稳定哈希向量。 */
+public final class LocalHashEmbeddingModel implements EmbeddingGateway {
 
     private final int dimensions;
 
@@ -24,31 +13,11 @@ public final class LocalHashEmbeddingModel implements EmbeddingModel {
     }
 
     @Override
-    public EmbeddingResponse call(EmbeddingRequest request) {
-        List<Embedding> results = new ArrayList<>();
-        List<String> inputs = request == null || request.getInstructions() == null
-                ? List.of() : request.getInstructions();
-        for (int i = 0; i < inputs.size(); i++) {
-            results.add(new Embedding(hash(inputs.get(i)), i));
-        }
-        return new EmbeddingResponse(results);
-    }
-
-    @Override
-    public float[] embed(Document document) {
-        return hash(document == null ? "" : document.getText());
-    }
-
-    @Override
-    public int dimensions() {
-        return dimensions;
-    }
-
-    private float[] hash(String source) {
-        String text = Normalizer.normalize(source == null ? "" : source, Normalizer.Form.NFKC)
+    public float[] embed(String text) {
+        String normalized = Normalizer.normalize(text == null ? "" : text, Normalizer.Form.NFKC)
                 .toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
         float[] vector = new float[dimensions];
-        int[] codePoints = text.codePoints().toArray();
+        int[] codePoints = normalized.codePoints().toArray();
         for (int i = 0; i < codePoints.length; i++) {
             add(vector, codePoints[i], 1f);
             if (i + 1 < codePoints.length) {
@@ -68,6 +37,11 @@ public final class LocalHashEmbeddingModel implements EmbeddingModel {
             vector[i] *= scale;
         }
         return vector;
+    }
+
+    @Override
+    public int dimensions() {
+        return dimensions;
     }
 
     private void add(float[] vector, long token, float weight) {

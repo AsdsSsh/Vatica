@@ -12,7 +12,6 @@ import com.example.vatica.config.ModelSlot;
 import com.example.vatica.config.ReasoningMode;
 import com.example.vatica.agentscope.AgentScopeChatService;
 import com.example.vatica.agentscope.AgentScopeChatService.ChatEvent;
-import com.example.vatica.agentscope.AgentToolAdapters;
 import com.example.vatica.context.ContextAssembler;
 import com.example.vatica.context.ContextBudget;
 import com.example.vatica.event.SseEventGateway;
@@ -33,7 +32,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -108,30 +106,12 @@ public class ChatController {
         this.chatService = chatService;
     }
 
-    /** 测试/兼容构造器；生产装配使用统一网关 Bean。 */
-    public ChatController(ModelRegistry registry, ChatProperties chatProperties, SessionMemory sessionMemory,
-            AgentToolProvider vaticaTools, PermissionEventPublisher permissionEvents,
-            FilePermissionRequestService permissionRequests, ObjectMapper mapper, ContextBudget contextBudget) {
-        this(registry, chatProperties, sessionMemory, vaticaTools, permissionEvents, permissionRequests,
-                mapper, contextBudget, new SseEventGateway(mapper), null);
-    }
-
     /** 迭代 22A 测试构造器：显式注入 AgentScope 聊天服务。 */
     public ChatController(ModelRegistry registry, ChatProperties chatProperties, SessionMemory sessionMemory,
             AgentToolProvider vaticaTools, PermissionEventPublisher permissionEvents,
             FilePermissionRequestService permissionRequests, ObjectMapper mapper, ContextBudget contextBudget,
             AgentScopeChatService chatService) {
         this(registry, chatProperties, sessionMemory, vaticaTools, permissionEvents, permissionRequests,
-                mapper, contextBudget, new SseEventGateway(mapper), chatService);
-    }
-
-    /** 迭代 22B 测试兼容：旧测试桩仍可提供 Spring AI callbacks，生产不注入该类型。 */
-    public ChatController(ModelRegistry registry, ChatProperties chatProperties, SessionMemory sessionMemory,
-            ToolCallbackProvider vaticaTools, PermissionEventPublisher permissionEvents,
-            FilePermissionRequestService permissionRequests, ObjectMapper mapper, ContextBudget contextBudget,
-            AgentScopeChatService chatService) {
-        this(registry, chatProperties, sessionMemory,
-                () -> AgentToolAdapters.fromProvider(vaticaTools, mapper), permissionEvents, permissionRequests,
                 mapper, contextBudget, new SseEventGateway(mapper), chatService);
     }
 

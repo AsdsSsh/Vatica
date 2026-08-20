@@ -9,8 +9,6 @@ import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.springframework.ai.chat.client.ChatClient;
-
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
 import com.example.vatica.config.ModelSlot;
@@ -37,7 +35,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  *       调阈值只改配置，不换 prompt</li>
  *   <li><b>解析降级</b>：LLM 输出不可解析时，规则已通过则 PASS 兜底（score=null 如实标注），
  *       评测解析故障不阻断交付</li>
- *   <li>评测用<b>无工具 ChatClient</b>：评测只读材料、不执行任何操作，防副作用</li>
+ *   <li>评测用<b>无工具 AgentScope 回合</b>：评测只读材料、不执行任何操作，防副作用</li>
  * </ul>
  */
 public class JudgeAgent {
@@ -70,7 +68,7 @@ public class JudgeAgent {
         }
     }
 
-    /** 迭代 15 I15-6：结构化输出的评分卡（Spring AI entity 转换目标；schema 优先）。 */
+    /** 评分卡 DTO：保留公开结构，便于测试和 API 演进。 */
     public static class JudgeScoreCard {
         private Integer score;
         private Integer completeness;
@@ -93,19 +91,12 @@ public class JudgeAgent {
         public void setFailStepIds(List<Integer> failStepIds) { this.failStepIds = failStepIds; }
     }
 
-    private final ChatClient judgeClient;
     private final ObjectMapper mapper;
     private final int passThreshold;
     private final AgentRuntimeFactory runtimeFactory;
 
-    public JudgeAgent(ChatClient judgeClient, ObjectMapper mapper, int passThreshold) {
-        this(judgeClient, mapper, passThreshold, null);
-    }
-
-    /** 迭代 20C：AgentScope 只给评分建议，阈值与 verdict 始终由本类决定。 */
-    public JudgeAgent(ChatClient judgeClient, ObjectMapper mapper, int passThreshold,
-            AgentRuntimeFactory runtimeFactory) {
-        this.judgeClient = judgeClient;
+    /** 迭代 22D：AgentScope 只给评分建议，阈值与 verdict 始终由本类决定。 */
+    public JudgeAgent(ObjectMapper mapper, int passThreshold, AgentRuntimeFactory runtimeFactory) {
         this.mapper = mapper;
         this.passThreshold = passThreshold;
         this.runtimeFactory = runtimeFactory;
@@ -115,43 +106,22 @@ public class JudgeAgent {
      * 评测：规则校验先行（硬失败不烧 token）→ LLM 评分卡 → 解析降级。
      */
     public Evaluation evaluate(String goal, TaskPlan plan) {
-        return evaluate(goal, plan, judgeClient, null);
+        return evaluate(goal, plan, null);
     }
 
-    /** 迭代 13 I13-5：任务级临时/指定客户端评测。 */
-    public Evaluation evaluate(String goal, TaskPlan plan, ChatClient client) {
-        return evaluate(goal, plan, client, null);
-    }
-
-    /** 迭代 20C：临时凭据显式传槽位；Legacy 仍使用传入的 Spring AI 客户端。 */
-    public Evaluation evaluate(String goal, TaskPlan plan, ChatClient client, ModelSlot modelSlot) {
+    /** 临时凭据只改变本轮 AgentScope 模型槽位。 */
+    public Evaluation evaluate(String goal, TaskPlan plan, ModelSlot modelSlot) {
         Evaluation ruleFail = ruleCheck(plan);
         if (ruleFail != null) {
             return ruleFail;
         }
         String advisedRaw = advisoryRaw(goal, plan, modelSlot);
-        if (advisedRaw != null) {
-            Evaluation advised = parse(advisedRaw);
-            if (advised != null) {
-                return advised;
-            }
-            log.warn("AgentScope 评测建议无法解析，降级为规则结果（PASS、无分数）。原始输出片段：{}",
-                    snippet(advisedRaw));
-            return new Evaluation(null, TaskVerdict.PASS,
-                    "评测解析降级：规则校验通过，AgentScope 分数不可用", List.of());
-        }
-        // 迭代 15 I15-6：结构化输出 schema 优先；供应商不支持时回退正则解析
-        Evaluation structured = evaluateStructured(goal, plan, client);
-        if (structured != null) {
-            return structured;
-        }
-        String raw = client.prompt().system(SYSTEM_PROMPT).user(userPrompt(goal, plan)).call().content();
-        Evaluation eval = parse(raw);
+        Evaluation eval = parse(advisedRaw);
         if (eval != null) {
             return eval;
         }
-        log.warn("评测输出无法解析，降级为规则结果（PASS、无分数）。原始输出片段：{}", snippet(raw));
-        return new Evaluation(null, TaskVerdict.PASS, "评测解析降级：规则校验通过，LLM 评分不可用", List.of());
+        log.warn("AgentScope 评测建议无法解析，降级为规则结果（PASS、无分数）。原始输出片段：{}", snippet(advisedRaw));
+        return new Evaluation(null, TaskVerdict.PASS, "评测解析降级：规则校验通过，AgentScope 分数不可用", List.of());
     }
 
     private String advisoryRaw(String goal, TaskPlan plan, ModelSlot modelSlot) {
@@ -163,28 +133,6 @@ public class JudgeAgent {
                 userPrompt(goal, plan), identity, modelSlot, "judge-" + UUID.randomUUID()))
                 .map(result -> result.content())
                 .orElse(null);
-    }
-
-    private Evaluation evaluateStructured(String goal, TaskPlan plan, ChatClient client) {
-        try {
-            JudgeScoreCard card = client.prompt().system(SYSTEM_PROMPT).user(userPrompt(goal, plan))
-                    .call().entity(JudgeScoreCard.class);
-            if (card == null) {
-                return null;
-            }
-            Integer score = normalizedScore(card.getScore(), card.getCompleteness(),
-                    card.getCorrectness(), card.getFormat());
-            if (score == null) {
-                return null;
-            }
-            String summary = card.getSummary() == null || card.getSummary().isBlank()
-                    ? "（无评语）" : card.getSummary();
-            return new Evaluation(score, score >= passThreshold ? TaskVerdict.PASS : TaskVerdict.FAIL,
-                    summary, card.getFailStepIds() == null ? List.of() : List.copyOf(card.getFailStepIds()));
-        } catch (Exception e) {
-            log.info("评测结构化输出不可用，回退正则解析：{}", e.getMessage());
-            return null;
-        }
     }
 
     /** 规则校验（代码先行）：计划为空 / 步骤无结果 → 硬失败，不调 LLM。 */

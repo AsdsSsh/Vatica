@@ -15,30 +15,6 @@ spring:
     hibernate:
       ddl-auto: update      # 开发期自动建表；生产应改 validate + 迁移脚本
     open-in-view: false
-  ai:
-    openai:
-      # 迭代 13：模型 Key 不再读环境变量——平台/用户凭据走加密凭据库与请求级透传
-      api-key: ""
-      base-url: https://api.deepseek.com
-      chat:
-        model: deepseek-v4-flash
-        # 注意：v4 系列默认开启思考模式，思考模式下 temperature 等采样参数被服务端忽略（不报错）
-        # 关闭思考需传 {"thinking": {"type": "disabled"}}；工具调用时须回传 reasoning_content（见官方思考模式文档）
-        temperature: 0.7
-    # ═══ 多模型切换（只改配置，不动代码）═══
-    # DeepSeek 与通义千问都兼容 OpenAI 协议：换模型 = 换 base-url + model + api-key
-    # 旧别名 deepseek-chat/deepseek-reasoner 已于 2026-07-24 弃用，改用 v4 系列 ID：deepseek-v4-flash / deepseek-v4-pro
-    #
-    # 切到通义千问时，把上方 openai 块的 api-key/base-url/chat 整块替换为：
-    #   api-key: ${QWEN_API_KEY:}
-    #   base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
-    #   chat:
-    #     model: qwen-plus
-    #     temperature: 0.7
-    #
-    # 注意：Spring AI 2.0 已弃用 chat.options.* 写法（官方元数据 deprecated 标记），
-    # 直接平铺到 chat.* 层（model / temperature 等）。勿再写 options 嵌套块。
-    # 第 7 周前端"模型选择器"(W7-5) 上线后，升级为运行时双模型 Bean 方案
 
 # ===== 工具层配置（迭代 2；迭代 11 改为 Codex workspace 语义）=====
 # workspace-dir = 默认工作区根（相对路径以进程工作目录为基准，即 Codex 的启动目录）
@@ -46,9 +22,6 @@ spring:
 vatica:
   app:
     state-dir: ./.vatica
-  # 迭代 17A：生产默认 AgentScope；紧急回滚设置 VATICA_AGENT_RUNTIME=legacy 后重启。
-  agent:
-    runtime: ${VATICA_AGENT_RUNTIME:agentscope}
   # 迭代 21D：Agent Span 明细默认保留 30 天；启动时 best-effort 清理过期记录。
   observability:
     retention: ${VATICA_OBSERVABILITY_RETENTION:30d}
@@ -80,7 +53,7 @@ vatica:
     enabled: false
     token-ttl: 12h
   tool:
-    # 迭代 2.5：单次请求工具调用次数上限（ToolCallLimitProvider 护栏），防模型死循环烧 token
+    # 迭代 2.5：单次请求工具调用次数上限（AgentScope 工具策略护栏），防模型死循环烧 token
     max-calls-per-request: 20
     file:
       workspace-dir: .
@@ -124,15 +97,25 @@ vatica:
     enabled: ${VATICA_KNOWLEDGE_ENABLED:true}
     # local-hash 用于学习/离线闭环；生产语义召回改为 openai，配置由 EmbeddingGateway 读取。
     embedding-provider: ${VATICA_KNOWLEDGE_EMBEDDING_PROVIDER:local-hash}
+    openai:
+      base-url: ${VATICA_KNOWLEDGE_EMBEDDING_BASE_URL:}
+      api-key: ${VATICA_KNOWLEDGE_EMBEDDING_API_KEY:}
+      model: ${VATICA_KNOWLEDGE_EMBEDDING_MODEL:}
     vector-dimensions: ${VATICA_KNOWLEDGE_VECTOR_DIMENSIONS:1536}
     max-document-bytes: 5242880
     chunk-size: 800
     chunk-overlap: 120
     max-search-chars: 6000
   # ===== 模型选择器（迭代 7 I7-5）=====
-  # 主模型 DeepSeek 走 spring.ai.openai.*；备用模型通义千问（OpenAI 兼容）：
+  # 主模型 DeepSeek 走 vatica.model.openai.*；备用模型通义千问（OpenAI 兼容）：
   #   setx QWEN_API_KEY <你的通义Key> 后重启，前端模型选择器即可切换
   model:
+    openai:
+      api-key: ""
+      base-url: https://api.deepseek.com
+      chat:
+        model: deepseek-v4-flash
+        temperature: 0.7
     qwen:
       # 迭代 13：不再读环境变量；key 走凭据库/请求级透传
       api-key: ""
@@ -143,7 +126,7 @@ vatica:
 # 调试工具调用轮次（需要时取消注释，默认关闭）
 # logging:
 #   level:
-#     org.springframework.ai.chat.client.advisor: DEBUG
+#     com.example.vatica.agentscope: DEBUG
 
 # ===== OpenAPI 契约（迭代 9 I9-2，springdoc）=====
 # /v3/api-docs = 前后端契约单一事实来源；/swagger-ui.html = 开发期可视化契约

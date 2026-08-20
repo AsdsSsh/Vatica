@@ -9,10 +9,6 @@ import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.ToolCallbackProvider;
-
 import com.example.vatica.task.ReflectionFeedback;
 import com.example.vatica.task.BlackboardEntry;
 import com.example.vatica.task.CollaborationDecision;
@@ -25,6 +21,7 @@ import com.example.vatica.runtime.AgentRegistry;
 import com.example.vatica.runtime.AgentRuntime.AdvisoryKind;
 import com.example.vatica.runtime.AgentRuntime.AdvisoryRequest;
 import com.example.vatica.runtime.AgentRuntimeFactory;
+import com.example.vatica.tool.AgentToolProvider;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -33,7 +30,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  *
  * <p>设计要点：
  * <ul>
- *   <li><b>规划用无工具 ChatClient</b>：规划阶段只做分解，不执行——避免模型在规划时顺手调工具产生副作用</li>
+ *   <li><b>规划用无工具 AgentScope 回合</b>：规划阶段只做分解，不执行——避免副作用</li>
  *   <li><b>结构化输出 + 降级</b>：system prompt 要求只输出 JSON；解析失败（围栏/噪声/幻觉字段）
  *       降级为"单步计划"并如实标注——规划失败不阻断任务创建，执行阶段仍可推进</li>
  *   <li><b>审批点由规划器标记</b>：涉及发邮件/覆盖文件等不可逆操作的步骤 needsApproval=true，
@@ -77,31 +74,14 @@ public class PlannerAgent {
             4. 步骤 1-8 个；不可逆操作 needsApproval=true；dependsOn 规则与首次规划一致；
             5. 每步必须选择当前可用角色之一；只使用系统提供的工具，不要发明不存在的工具。""";
 
-    private final ChatClient plannerClient;
     private final ObjectMapper mapper;
-    private final ToolCallbackProvider toolProvider;
+    private final AgentToolProvider toolProvider;
     private final AgentRegistry agentRegistry;
     private final AgentRuntimeFactory runtimeFactory;
 
-    public PlannerAgent(ChatClient plannerClient, ObjectMapper mapper) {
-        this(plannerClient, mapper, null, new AgentRegistry());
-    }
-
-    /** 迭代 15 I15-12：工具清单从 ToolCallbackProvider 动态生成，防系统提示与注册工具漂移。 */
-    public PlannerAgent(ChatClient plannerClient, ObjectMapper mapper, ToolCallbackProvider toolProvider) {
-        this(plannerClient, mapper, toolProvider, new AgentRegistry());
-    }
-
-    /** 迭代 17A：角色清单来自 AgentRegistry，模型输出统一做合法化回退。 */
-    public PlannerAgent(ChatClient plannerClient, ObjectMapper mapper, ToolCallbackProvider toolProvider,
-            AgentRegistry agentRegistry) {
-        this(plannerClient, mapper, toolProvider, agentRegistry, null);
-    }
-
-    /** 迭代 20C：AgentScope 只提供原始建议，Planner 仍拥有全部结构与角色门禁。 */
-    public PlannerAgent(ChatClient plannerClient, ObjectMapper mapper, ToolCallbackProvider toolProvider,
-            AgentRegistry agentRegistry, AgentRuntimeFactory runtimeFactory) {
-        this.plannerClient = plannerClient;
+    /** 迭代 22D：Planner 只接受 AgentScope 原始建议，业务结构校验仍由 Vatica 持有。 */
+    public PlannerAgent(ObjectMapper mapper, AgentToolProvider toolProvider, AgentRegistry agentRegistry,
+            AgentRuntimeFactory runtimeFactory) {
         this.mapper = mapper;
         this.toolProvider = toolProvider;
         this.agentRegistry = agentRegistry;
@@ -113,35 +93,16 @@ public class PlannerAgent {
      * 规划：返回步骤计划（解析失败降级为单步计划）。
      */
     public TaskPlan plan(String goal) {
-        return plan(goal, plannerClient, null);
+        return plan(goal, null);
     }
 
-    /** 迭代 13 I13-5：任务级临时/指定客户端规划（平台默认仍走注入客户端）。 */
-    public TaskPlan plan(String goal, ChatClient client) {
-        return plan(goal, client, null);
-    }
-
-    /** 迭代 20C：临时凭据显式携带槽位；Legacy 路径仍使用传入的 ChatClient。 */
-    public TaskPlan plan(String goal, ChatClient client, ModelSlot modelSlot) {
-        // 迭代 15 I15-6：结构化输出 schema 优先；供应商不支持/解析失败时回退正则降级
+    /** 临时凭据只改变本轮 AgentScope 模型槽位，不建立第二条客户端链路。 */
+    public TaskPlan plan(String goal, ModelSlot modelSlot) {
         String system = systemPrompt();
         String raw = advisoryRaw(AdvisoryKind.PLAN, system, goal, modelSlot);
-        if (raw != null) {
-            TaskPlan advised = parse(raw);
-            if (advised == null) {
-                log.warn("AgentScope 规划建议无法解析，降级为单步计划。原始输出片段：{}", snippet(raw));
-                advised = fallbackPlan(goal);
-            }
-            return normalize(advised);
-        }
-        TaskPlan structured = structuredPlan(client, system, goal);
-        if (structured != null && !structured.getSteps().isEmpty()) {
-            return normalize(structured);
-        }
-        String legacyRaw = client.prompt().system(system).user(goal).call().content();
-        TaskPlan plan = parse(legacyRaw);
+        TaskPlan plan = parse(raw);
         if (plan == null) {
-            log.warn("规划输出无法解析，降级为单步计划。原始输出片段：{}", snippet(legacyRaw));
+            log.warn("AgentScope 规划建议无法解析，降级为单步计划。原始输出片段：{}", snippet(raw));
             plan = fallbackPlan(goal);
         }
         return normalize(plan);
@@ -153,33 +114,17 @@ public class PlannerAgent {
      * 解析失败返回上一轮计划本身（回退旧计划，不改变目标/不扩大范围）。
      */
     public TaskPlan revise(String goal, TaskPlan previous, ReflectionFeedback feedback) {
-        return revise(goal, previous, feedback, plannerClient, null);
+        return revise(goal, previous, feedback, null);
     }
 
-    /** 迭代 20C：重规划同样只接受 AgentScope 建议，不允许运行时直接替换业务计划。 */
-    public TaskPlan revise(String goal, TaskPlan previous, ReflectionFeedback feedback,
-            ChatClient client, ModelSlot modelSlot) {
+    /** 重规划同样只接受 AgentScope 建议，不允许运行时直接替换业务计划。 */
+    public TaskPlan revise(String goal, TaskPlan previous, ReflectionFeedback feedback, ModelSlot modelSlot) {
         String revisePrompt = REVISE_SYSTEM_PROMPT + roleListSuffix() + toolListSuffix();
         String user = reviseUserPrompt(goal, previous, feedback);
         String raw = advisoryRaw(AdvisoryKind.PLAN_REVISION, revisePrompt, user, modelSlot);
-        if (raw != null) {
-            TaskPlan advised = parse(raw);
-            if (advised == null) {
-                log.warn("AgentScope 重规划建议无法解析，回退旧计划。原始输出片段：{}", snippet(raw));
-                return previous;
-            }
-            return normalize(advised);
-        }
-        TaskPlan structured = structuredPlan(client, revisePrompt, user);
-        if (structured != null && !structured.getSteps().isEmpty()) {
-            return normalize(structured);
-        }
-        String legacyRaw = client.prompt().system(revisePrompt)
-                .user(user)
-                .call().content();
-        TaskPlan revised = parse(legacyRaw);
+        TaskPlan revised = parse(raw);
         if (revised == null) {
-            log.warn("重规划输出无法解析，回退旧计划。原始输出片段：{}", snippet(legacyRaw));
+            log.warn("AgentScope 重规划建议无法解析，回退旧计划。原始输出片段：{}", snippet(raw));
             return previous;
         }
         return normalize(revised);
@@ -191,18 +136,12 @@ public class PlannerAgent {
      */
     public CollaborationDecision resolveCollaboration(String goal, TaskPlan plan,
             List<BlackboardEntry> signals, int maxDiscoveries) {
-        return resolveCollaboration(goal, plan, signals, maxDiscoveries, plannerClient);
-    }
-
-    /** 请求级模型凭据版本，EPHEMERAL 任务不会在协作重规划时意外切回平台模型。 */
-    public CollaborationDecision resolveCollaboration(String goal, TaskPlan plan,
-            List<BlackboardEntry> signals, int maxDiscoveries, ChatClient client) {
-        return resolveCollaboration(goal, plan, signals, maxDiscoveries, client, null);
+        return resolveCollaboration(goal, plan, signals, maxDiscoveries, null);
     }
 
     /** 迭代 20C：协作裁决仍由 TaskBlackboard 做可修改范围、依赖和预算校验。 */
     public CollaborationDecision resolveCollaboration(String goal, TaskPlan plan,
-            List<BlackboardEntry> signals, int maxDiscoveries, ChatClient client, ModelSlot modelSlot) {
+            List<BlackboardEntry> signals, int maxDiscoveries, ModelSlot modelSlot) {
         String system = """
                 你是 Vatica 协作 Planner。任务已经开始执行，收到 Worker 的 need-help 或 conflict 信号。
                 只在未完成步骤范围内做最小调整，不得改变原始目标，不得删除已完成步骤，不得引入自由对话。
@@ -223,24 +162,6 @@ public class PlannerAgent {
             log.warn("AgentScope 协作建议无法解析，升级人工。原始输出片段：{}", snippet(advisedRaw));
             return CollaborationDecision.unresolved("Planner 无法可靠裁决，请人工仲裁。");
         }
-        try {
-            CollaborationDecision structured = client.prompt().system(system).user(user)
-                    .call().entity(CollaborationDecision.class);
-            if (structured != null) {
-                return structured;
-            }
-        } catch (Exception e) {
-            log.info("协作裁决结构化输出不可用，回退 JSON 文本：{}", e.getMessage());
-        }
-        try {
-            String raw = client.prompt().system(system).user(user).call().content();
-            CollaborationDecision parsed = parseCollaboration(raw);
-            if (parsed != null) {
-                return parsed;
-            }
-        } catch (Exception e) {
-            log.warn("协作裁决输出无法解析，升级人工：{}", e.getMessage());
-        }
         return CollaborationDecision.unresolved("Planner 无法可靠裁决，请人工仲裁。");
     }
 
@@ -257,8 +178,8 @@ public class PlannerAgent {
         List<String> tools = new ArrayList<>();
         if (toolProvider != null) {
             try {
-                for (ToolCallback callback : toolProvider.getToolCallbacks()) {
-                    tools.add(callback.getToolDefinition().name());
+                for (io.agentscope.core.tool.AgentTool tool : toolProvider.getAgentTools()) {
+                    tools.add(tool.getName());
                 }
             } catch (Exception e) {
                 log.warn("动态工具清单读取失败，回退静态清单", e);
@@ -288,17 +209,6 @@ public class PlannerAgent {
             Matcher matcher = JSON_BLOCK.matcher(raw == null ? "" : raw);
             return matcher.find() ? mapper.readValue(matcher.group(), CollaborationDecision.class) : null;
         } catch (Exception e) {
-            return null;
-        }
-    }
-
-    /** Spring AI 结构化输出（JSON schema 优先）；任何异常/空结果都返回 null，由调用方正则降级。 */
-    private TaskPlan structuredPlan(ChatClient client, String system, String user) {
-        try {
-            TaskPlan plan = client.prompt().system(system).user(user).call().entity(TaskPlan.class);
-            return validPlan(plan) ? plan : null;
-        } catch (Exception e) {
-            log.info("结构化输出不可用，回退正则解析：{}", e.getMessage());
             return null;
         }
     }

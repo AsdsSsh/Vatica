@@ -10,7 +10,6 @@ import java.util.Map;
 import org.springframework.stereotype.Service;
 
 import com.example.vatica.auth.RequestIdentity;
-import com.example.vatica.runtime.AgentRuntimeProperties;
 import com.example.vatica.task.TaskRecord;
 import com.example.vatica.task.TaskRecordRepository;
 import com.example.vatica.task.TaskStatus;
@@ -24,8 +23,7 @@ import com.example.vatica.usage.UsageRecordRepository;
 @Service
 public class EvaluationService {
 
-    private static final List<String> RUNTIMES = List.of(
-            AgentRuntimeProperties.AGENTSCOPE, AgentRuntimeProperties.LEGACY);
+    private static final List<String> RUNTIMES = List.of("agentscope");
 
     public enum GateStatus {
         PENDING,

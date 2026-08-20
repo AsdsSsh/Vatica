@@ -5,7 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * 文件工具白名单配置（{@code vatica.tool.file.*}）。
  *
- * <p>注意：前缀用业务自定义的 {@code vatica.*} 而非 {@code spring.ai.*}，
+ * <p>前缀使用业务自定义的 {@code vatica.*}，避免与框架配置混淆，
  * 避免与框架配置混淆（迭代 1 已踩过 Spring AI 配置键弃用坑）。
  */
 @ConfigurationProperties(prefix = "vatica.tool.file")

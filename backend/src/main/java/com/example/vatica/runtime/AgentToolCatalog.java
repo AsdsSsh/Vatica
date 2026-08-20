@@ -12,7 +12,7 @@ import io.agentscope.core.tool.AgentTool;
 
 /** 迭代 17A：任务 Agent 的统一工具目录，本地工具与可用 MCP 工具在角色门禁前合并。 */
 @Component
-public class AgentToolCatalog {
+public class AgentToolCatalog implements AgentToolProvider {
 
     private final AgentToolProvider localTools;
     private final AgentToolProvider remoteTools;
@@ -30,6 +30,11 @@ public class AgentToolCatalog {
         add(merged, localTools.getAgentTools());
         add(merged, remoteTools.getAgentTools());
         return merged.values().toArray(AgentTool[]::new);
+    }
+
+    @Override
+    public AgentTool[] getAgentTools() {
+        return tools();
     }
 
     private static void add(Map<String, AgentTool> merged, AgentTool[] tools) {

@@ -6,7 +6,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
-import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
 
 import com.example.vatica.config.ModelSlot;
@@ -66,20 +65,6 @@ public class AgentRegistry {
     /** 迭代 20A：Skill manifest 注册时复用角色机械门禁，禁止声明角色不可用的工具。 */
     public boolean allowsTool(String requestedId, String toolName) {
         return toolName != null && resolve(requestedId).allows(toolName);
-    }
-
-    /** 在运行时注入前按角色裁剪工具；门禁不依赖 prompt，模型无法绕过。 */
-    public ToolCallback[] allowedCallbacks(String requestedId, ToolCallback[] callbacks) {
-        AgentDefinition role = resolve(requestedId);
-        if (callbacks == null || callbacks.length == 0) {
-            return new ToolCallback[0];
-        }
-        if (role.allowAllTools()) {
-            return callbacks.clone();
-        }
-        return java.util.Arrays.stream(callbacks)
-                .filter(callback -> role.allows(callback.getToolDefinition().name()))
-                .toArray(ToolCallback[]::new);
     }
 
     /** 迭代 22B：角色白名单在 AgentScope 原生工具注入前机械裁剪。 */

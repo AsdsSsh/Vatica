@@ -3,7 +3,7 @@ package com.example.vatica.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * 模型选择器配置（{@code vatica.model.*}，迭代 7 I7-5）：主模型 DeepSeek（spring.ai.openai.*），
+ * 模型选择器配置（{@code vatica.model.*}，迭代 7 I7-5）：主模型 DeepSeek（vatica.model.openai.*），
  * 备用模型通义千问（OpenAI 兼容，qwen.*）。
  *
  * @param qwen 备用模型配置

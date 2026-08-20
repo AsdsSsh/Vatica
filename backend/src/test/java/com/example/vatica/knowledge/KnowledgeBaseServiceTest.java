@@ -41,7 +41,7 @@ class KnowledgeBaseServiceTest {
         KnowledgeVectorIndex vectors = mock(KnowledgeVectorIndex.class);
         KnowledgeEmbeddingService embeddings = text -> new float[] { 1, 0, 0 };
         KnowledgeProperties properties = new KnowledgeProperties(
-                true, "local-hash", 3, 1024 * 1024, 100, 20, 2000);
+                true, "local-hash", 3, 1024 * 1024, 100, 20, 2000, null);
         KnowledgeBaseService service = new KnowledgeBaseService(documents, chunks, mock(FileSandboxPolicy.class),
                 new KnowledgeTextChunker(), embeddings, vectors, properties);
         RequestIdentity identity = new RequestIdentity(7L, 9L, "USER", "alice");
@@ -77,7 +77,7 @@ class KnowledgeBaseServiceTest {
         KnowledgeEmbeddingService embeddings = text -> new float[] { 1, 0, 0 };
         FileSandboxPolicy sandbox = mock(FileSandboxPolicy.class);
         KnowledgeProperties properties = new KnowledgeProperties(
-                true, "local-hash", 3, 1024 * 1024, 100, 20, 2000);
+                true, "local-hash", 3, 1024 * 1024, 100, 20, 2000, null);
         KnowledgeBaseService service = new KnowledgeBaseService(documents, chunks, sandbox,
                 new KnowledgeTextChunker(), embeddings, vectors, properties);
         RequestIdentityContext.set(new RequestIdentity(7L, 9L, "USER", "alice"));

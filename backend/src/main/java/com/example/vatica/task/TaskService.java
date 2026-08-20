@@ -18,8 +18,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
@@ -54,7 +52,6 @@ import com.example.vatica.permission.PermissionBoundToolCallbacks;
 import com.example.vatica.runtime.AgentRegistry;
 import com.example.vatica.runtime.AgentRuntime;
 import com.example.vatica.runtime.AgentRuntimeFactory;
-import com.example.vatica.runtime.AgentRuntimeProperties;
 import com.example.vatica.runtime.AgentToolCatalog;
 import com.example.vatica.skill.SkillCatalogService;
 import com.example.vatica.skill.SkillCatalogService.ExecutionProfile;
@@ -278,9 +275,7 @@ public class TaskService {
                 UsageContext.set(usageSnapshot(record, "PLANNER", null, "HIGH", contextBudget.plannerTokens(), false,
                         "planner", "Planner"));
                 try {
-                    TaskPlan plan = plannerAgent.plan(goal.trim(),
-                            registry.ephemeralClient(credential, false, com.example.vatica.config.ReasoningMode.HIGH),
-                            credential.toSlot());
+                    TaskPlan plan = plannerAgent.plan(goal.trim(), credential.toSlot());
                     bindSkills(plan, identity);
                     record.setPlanJson(toJson(plan));
                 } finally {
@@ -798,15 +793,9 @@ public class TaskService {
         try {
             int remainingDiscoveries = Math.max(0,
                     TaskBlackboard.MAX_DISCOVERY_STEPS - plan.getDiscoveryStepCount());
-            decision = RequestIdentityContext.callWith(identityOf(record), () -> {
-                ChatClient client = plannerClientFor(record);
-                if ("EPHEMERAL".equals(record.getModelSource())) {
-                    return plannerAgent.resolveCollaboration(record.getGoal(), plan, signals,
-                            remainingDiscoveries, client, ephemeralCredentialFor(record).toSlot());
-                }
-                return plannerAgent.resolveCollaboration(record.getGoal(), plan, signals,
-                        remainingDiscoveries, client);
-            });
+            decision = RequestIdentityContext.callWith(identityOf(record), () -> plannerAgent.resolveCollaboration(
+                    record.getGoal(), plan, signals, remainingDiscoveries,
+                    "EPHEMERAL".equals(record.getModelSource()) ? ephemeralCredentialFor(record).toSlot() : null));
         } catch (RuntimeException e) {
             log.warn("任务 {} 协作 Planner 裁决失败，升级人工：{}", record.getId(), e.getMessage());
             decision = CollaborationDecision.unresolved("Planner 裁决失败：" + e.getMessage());
@@ -924,9 +913,8 @@ public class TaskService {
             try {
                 AgentRuntime.StepRequest request = new AgentRuntime.StepRequest(
                         record.getGoal(), step, context, reflection, identity, tools,
-                        clientFor(record, true, model.slot()), model.slot(), agent,
+                        model.slot(), agent,
                         record.getId() + ":step:" + step.getId(), skill);
-                if (AgentRuntimeProperties.AGENTSCOPE.equals(runtime.name())) {
                     DirectModelUsageRecorder.Reservation reservation = directUsage.begin();
                     try {
                         AgentRuntime.StepResult stepResult = runtime.executeStep(request);
@@ -946,7 +934,7 @@ public class TaskService {
                                     recovery.slot().id()));
                             AgentRuntime.StepRequest retry = new AgentRuntime.StepRequest(
                                     record.getGoal(), step, context, reflection, identity, tools,
-                                    clientFor(record, true, recovery.slot()), recovery.slot(), agent,
+                                    recovery.slot(), agent,
                                     record.getId() + ":step:" + step.getId() + ":recovery", skill);
                             DirectModelUsageRecorder.Reservation retryReservation = directUsage.begin();
                             try {
@@ -962,11 +950,6 @@ public class TaskService {
                             throw e;
                         }
                     }
-                } else {
-                    AgentRuntime.StepResult stepResult = runtime.executeStep(request);
-                    observedUsage = stepResult.usage();
-                    result = stepResult.answer();
-                }
             } finally {
                 UsageContext.clear();
             }
@@ -990,38 +973,10 @@ public class TaskService {
         }
     }
 
-    /** 迭代 13 I13-5：按任务模型来源解析客户端；临时凭据仅内存，缺失即失败。
-     *  迭代 15 I15-4：平台槽位走 executorClient（LOW）/judgeClient（HIGH）。 */
-    private ChatClient clientFor(TaskRecord record, boolean withTools) {
-        return clientFor(record, withTools, null);
-    }
-
     private static boolean isRecoverableModelError(Throwable error) {
         String message = error.getMessage() == null ? "" : error.getMessage().toLowerCase(java.util.Locale.ROOT);
         return message.contains("401") || message.contains("unauthorized")
                 || message.contains("timeout") || message.contains("timed out");
-    }
-
-    private ChatClient clientFor(TaskRecord record, boolean withTools, ModelSlot selectedSlot) {
-        if ("EPHEMERAL".equals(record.getModelSource())) {
-            EphemeralCredential credential = ephemeralCredentialFor(record);
-            return registry.ephemeralClient(credential, false,
-                    withTools ? com.example.vatica.config.ReasoningMode.LOW
-                            : com.example.vatica.config.ReasoningMode.HIGH);
-        }
-        if (withTools) {
-            return selectedSlot == null ? registry.taskExecutorClient() : registry.taskClientFor(selectedSlot);
-        }
-        return registry.judgeClient();
-    }
-
-    private ChatClient plannerClientFor(TaskRecord record) {
-        if ("EPHEMERAL".equals(record.getModelSource())) {
-            EphemeralCredential credential = ephemeralCredentialFor(record);
-            return registry.ephemeralClient(credential, false,
-                    com.example.vatica.config.ReasoningMode.HIGH);
-        }
-        return registry.plannerClient();
     }
 
     private EphemeralCredential ephemeralCredentialFor(TaskRecord record) {
@@ -1047,14 +1002,9 @@ public class TaskService {
                     !"EPHEMERAL".equals(record.getModelSource()), "judge", "Judge"));
             try {
                 TaskPlan evaluationPlan = plan;
-                eval = RequestIdentityContext.callWith(identityOf(record), () -> {
-                    ChatClient client = clientFor(record, false);
-                    if ("EPHEMERAL".equals(record.getModelSource())) {
-                        return judgeAgent.evaluate(evaluationGoal(record), evaluationPlan, client,
-                                ephemeralCredentialFor(record).toSlot());
-                    }
-                    return judgeAgent.evaluate(evaluationGoal(record), evaluationPlan, client);
-                });
+                eval = RequestIdentityContext.callWith(identityOf(record), () -> judgeAgent.evaluate(
+                        evaluationGoal(record), evaluationPlan,
+                        "EPHEMERAL".equals(record.getModelSource()) ? ephemeralCredentialFor(record).toSlot() : null));
             } finally {
                 UsageContext.clear();
             }
@@ -1111,13 +1061,9 @@ public class TaskService {
             if (record.getPlanRevisionCount() < 1) {
                 // 第 1 次返工：让 Planner 针对失败步骤重规划（限 1 次）；解析失败回退旧计划
                 TaskPlan previousPlan = plan;
-                TaskPlan revised = RequestIdentityContext.callWith(identityOf(record), () -> {
-                    if ("EPHEMERAL".equals(record.getModelSource())) {
-                        return plannerAgent.revise(record.getGoal(), previousPlan, feedback,
-                                plannerClientFor(record), ephemeralCredentialFor(record).toSlot());
-                    }
-                    return plannerAgent.revise(record.getGoal(), previousPlan, feedback);
-                });
+                TaskPlan revised = RequestIdentityContext.callWith(identityOf(record), () -> plannerAgent.revise(
+                        record.getGoal(), previousPlan, feedback,
+                        "EPHEMERAL".equals(record.getModelSource()) ? ephemeralCredentialFor(record).toSlot() : null));
                 record.setPlanRevisionCount(record.getPlanRevisionCount() + 1);
                 if (revised != plan) {
                     bindSkills(revised, identityOf(record));

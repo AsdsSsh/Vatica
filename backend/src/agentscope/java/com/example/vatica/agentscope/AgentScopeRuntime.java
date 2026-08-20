@@ -38,10 +38,8 @@ import io.agentscope.core.tool.Toolkit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.springframework.ai.tool.ToolCallback;
-
 /**
- * 迭代 15 I15-18/I15-20：AgentScope 单/双 Agent POC（仅 -Pagentscope 构建加载）。
+ * 迭代 22D：AgentScope 单/双 Agent 生产运行时。
  * 使用 Vatica 的真实模型槽位/API Key、工具回调、身份快照与权限快照；
  * AgentScope 只负责 ReAct 循环，不建立第二套业务状态机。
  */
@@ -190,7 +188,7 @@ public class AgentScopeRuntime implements AgentRuntime {
         });
     }
 
-    /** POC 直调工具：验证 Spring AI ToolCallback 经 AgentScope Toolkit/AgentTool 适配后真实执行。 */
+    /** POC 直调工具：验证 AgentScope Toolkit/AgentTool 链路真实执行。 */
     public String callTool(String toolName, String jsonInput, RequestIdentity identity,
             FilePermissionPolicy permission) {
         return RequestIdentityContext.callWith(identity, () -> {

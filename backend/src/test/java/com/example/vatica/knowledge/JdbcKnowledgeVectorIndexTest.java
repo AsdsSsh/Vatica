@@ -17,7 +17,7 @@ class JdbcKnowledgeVectorIndexTest {
         DriverManagerDataSource dataSource = new DriverManagerDataSource(
                 "jdbc:h2:mem:knowledge-index;MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "sa", "");
         KnowledgeProperties properties = new KnowledgeProperties(
-                true, "local-hash", 3, 1024 * 1024, 100, 20, 2000);
+                true, "local-hash", 3, 1024 * 1024, 100, 20, 2000, null);
         JdbcKnowledgeVectorIndex index = new JdbcKnowledgeVectorIndex(new JdbcTemplate(dataSource), dataSource, properties);
 
         index.upsert(document(1L, 9L, 7L, KnowledgeVisibility.PRIVATE), chunk(11L), new float[] { 1, 0, 0 });

@@ -43,10 +43,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 /** 迭代 17A：任务状态机到 AgentScope ReAct 再到结果落库的零外网端到端验收。 */
 @SpringBootTest(properties = {
         "vatica.mcp.client.enabled=false",
-        "spring.ai.openai.api-key=test-key",
-        "spring.ai.openai.chat.model=test-model",
-        "spring.ai.openai.chat.temperature=0.1",
-        "vatica.agent.runtime=agentscope",
+        "vatica.model.openai.api-key=test-key",
+        "vatica.model.openai.chat.model=test-model",
+        "vatica.model.openai.chat.temperature=0.1",
         "vatica.app.state-dir=./target/test-state/agentscope-e2e-${random.uuid}",
         "spring.datasource.url=jdbc:h2:mem:vatica-agentscope-e2e;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
         "spring.datasource.driver-class-name=org.h2.Driver",
@@ -61,7 +60,7 @@ class TaskServiceAgentScopeE2eTest {
 
     @DynamicPropertySource
     static void modelEndpoint(DynamicPropertyRegistry properties) {
-        properties.add("spring.ai.openai.base-url",
+        properties.add("vatica.model.openai.base-url",
                 () -> "http://127.0.0.1:" + MODEL_SERVER.getAddress().getPort() + "/v1");
     }
 
