@@ -8,6 +8,8 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import com.example.vatica.tool.AgentToolProvider;
+import com.example.vatica.knowledge.JdbcKnowledgeVectorIndex;
+import com.example.vatica.knowledge.KnowledgeProperties;
 import io.agentscope.core.tool.AgentTool;
 
 /** 迭代 17A：任务 Agent 的统一工具目录，本地工具与可用 MCP 工具在角色门禁前合并。 */
@@ -16,12 +18,17 @@ public class AgentToolCatalog implements AgentToolProvider {
 
     private final AgentToolProvider localTools;
     private final AgentToolProvider remoteTools;
+    private final KnowledgeProperties knowledge;
+    private final JdbcKnowledgeVectorIndex knowledgeIndex;
 
     public AgentToolCatalog(@Qualifier("vaticaTools") AgentToolProvider localTools,
-            @Qualifier("remoteMcpTools") ObjectProvider<AgentToolProvider> mcpTools) {
+            @Qualifier("remoteMcpTools") ObjectProvider<AgentToolProvider> mcpTools,
+            KnowledgeProperties knowledge, JdbcKnowledgeVectorIndex knowledgeIndex) {
         this.localTools = localTools;
         AgentToolProvider provider = mcpTools.getIfAvailable();
         this.remoteTools = provider == null ? () -> new AgentTool[0] : provider;
+        this.knowledge = knowledge;
+        this.knowledgeIndex = knowledgeIndex;
     }
 
     /** 按工具名去重，本地定义优先，避免请求级工具 schema 冲突。 */
@@ -29,6 +36,10 @@ public class AgentToolCatalog implements AgentToolProvider {
         Map<String, AgentTool> merged = new LinkedHashMap<>();
         add(merged, localTools.getAgentTools());
         add(merged, remoteTools.getAgentTools());
+        // 迭代 23C：不把必然失败的知识库工具交给 Planner；能力中心同时给出恢复指引。
+        if (!knowledge.enabled() || !knowledgeIndex.readiness().ready()) {
+            merged.remove("search_knowledge_base");
+        }
         return merged.values().toArray(AgentTool[]::new);
     }
 

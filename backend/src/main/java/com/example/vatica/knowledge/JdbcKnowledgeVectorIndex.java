@@ -35,11 +35,18 @@ public class JdbcKnowledgeVectorIndex implements KnowledgeVectorIndex {
     private volatile boolean postgres;
     private volatile boolean ready;
 
+    /** 迭代 23C：供能力中心和任务工具目录读取的无副作用索引状态。 */
+    public record Readiness(boolean ready, boolean postgres) { }
+
     public JdbcKnowledgeVectorIndex(JdbcTemplate jdbc, DataSource dataSource, KnowledgeProperties properties) {
         this.jdbc = jdbc;
         this.dataSource = dataSource;
         this.properties = properties;
         initialize();
+    }
+
+    public Readiness readiness() {
+        return new Readiness(ready, postgres);
     }
 
     private void initialize() {

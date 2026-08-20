@@ -39,10 +39,17 @@ public final class McpToolProviderGuard implements AgentToolProvider {
         this.clock = clock;
     }
 
+    /**
+     * 迭代 23C：只读取本次进程已知的退避状态，不触发远程 MCP 初始化或工具发现。
+     */
+    public boolean isRetryBackoffActive() {
+        Instant failedAt = lastFailure;
+        return failedAt != null && Instant.now(clock).isBefore(failedAt.plus(retryBackoff));
+    }
+
     @Override
     public AgentTool[] getAgentTools() {
-        Instant failedAt = lastFailure;
-        if (failedAt != null && Instant.now(clock).isBefore(failedAt.plus(retryBackoff))) {
+        if (isRetryBackoffActive()) {
             return new AgentTool[0];
         }
         try {

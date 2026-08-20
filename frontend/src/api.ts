@@ -904,6 +904,25 @@ export async function fetchUserMailSettings(): Promise<UserMailSettingsView> {
   return (await getJson("/api/mail/settings")).json();
 }
 
+/** 迭代 23C：影响 Agent 执行的配置与基础设施状态（不含凭据和连接细节）。 */
+export type CapabilityStatus = "READY" | "ACTION_REQUIRED" | "DEGRADED" | "UNAVAILABLE";
+
+export interface SystemCapability {
+  id: "model" | "database" | "knowledge" | "mcp" | "mail" | "workspace" | string;
+  name: string;
+  status: CapabilityStatus;
+  message: string;
+  action: string | null;
+}
+
+export interface SystemCapabilitySnapshot {
+  capabilities: SystemCapability[];
+}
+
+export async function fetchSystemCapabilities(): Promise<SystemCapabilitySnapshot> {
+  return (await getJson("/api/system/capabilities")).json();
+}
+
 export async function saveUserMailSettings(body: {
   credentialMode: UserMailSettingsView["credentialMode"];
   imapHost: string; imapPort: number; smtpHost: string; smtpPort: number;

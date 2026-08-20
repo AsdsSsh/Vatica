@@ -42,6 +42,7 @@ import {
   approvePermissionRequest,
   denyPermissionRequest,
   fetchModels,
+  fetchSystemCapabilities,
   fetchUserModelSlots,
   getEphemeralUserModelKey,
   streamChat,
@@ -51,6 +52,7 @@ import {
   type EphemeralCredential,
   type FilePermissionRequest,
   type ModelInfo,
+  type SystemCapability,
   type ToolActivity,
   type UsageSummary,
   type UserModelSlotView,
@@ -106,6 +108,13 @@ const SUGGESTIONS: { title: string; prompt: string }[] = [
   { title: "看看工作区", prompt: "列出当前工作区根，并说说里面都有什么" },
 ];
 
+const CAPABILITY_TAG: Record<SystemCapability["status"], { color: string; label: string }> = {
+  READY: { color: "success", label: "可用" },
+  ACTION_REQUIRED: { color: "warning", label: "待配置" },
+  DEGRADED: { color: "processing", label: "降级" },
+  UNAVAILABLE: { color: "error", label: "不可用" },
+};
+
 function readSavedModel(): string | undefined {
   try {
     return localStorage.getItem(modelStorageKey()) ?? undefined;
@@ -136,6 +145,7 @@ export default function ChatPanel({
   const [deepThinking, setDeepThinking] = useState(false);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [userSlots, setUserSlots] = useState<UserModelSlotView[]>([]);
+  const [capabilities, setCapabilities] = useState<SystemCapability[]>([]);
   const [typing, setTyping] = useState(false);
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -244,6 +254,14 @@ export default function ChatPanel({
       });
   }, []);
 
+  const loadCapabilities = useCallback(() => {
+    fetchSystemCapabilities()
+      .then((snapshot) => setCapabilities(snapshot.capabilities))
+      .catch(() => {
+        // 登录状态或后端连接变化由统一横幅处理，保留最后一次成功快照即可。
+      });
+  }, []);
+
   const authKey =
     authStatus === "authenticated" || authStatus === "local"
       ? `${authUser?.orgId ?? "-"}:${authUser?.userId ?? "-"}`
@@ -253,13 +271,15 @@ export default function ChatPanel({
   useEffect(() => {
     if (previousAuthKey.current !== null && previousAuthKey.current !== authKey) {
       setUserSlots([]);
+      setCapabilities([]);
       setModel((prev) => (prev?.startsWith("user:") ? undefined : prev));
     }
     previousAuthKey.current = authKey;
     if (online && authStatus !== "loading" && authStatus !== "anonymous") {
       void loadModels();
+      void loadCapabilities();
     }
-  }, [authKey, authStatus, online, loadModels]);
+  }, [authKey, authStatus, online, loadCapabilities, loadModels]);
 
   // 迭代 14.5：401 统一收口后的全局提示只在此处弹一次，各请求组件不再重复弹错
   useEffect(() => {
@@ -631,6 +651,24 @@ export default function ChatPanel({
             description="登录后才能使用云端会话、任务和个人数据；本机缓存不会被删除。"
             action={<Button size="small" onClick={() => setAuthOpen(true)}>登录</Button>}
           />
+        )}
+        {capabilities.length > 0 && (
+          <Flex align="center" gap={6} wrap style={{ marginBottom: 10 }}>
+            <Typography.Text type="secondary">执行能力</Typography.Text>
+            {capabilities.map((capability) => {
+              const presentation = CAPABILITY_TAG[capability.status];
+              const detail = capability.action
+                ? `${capability.message} ${capability.action}`
+                : capability.message;
+              return (
+                <Tooltip key={capability.id} title={detail}>
+                  <Tag color={presentation.color} style={{ marginInlineEnd: 0 }}>
+                    {capability.name} · {presentation.label}
+                  </Tag>
+                </Tooltip>
+              );
+            })}
+          </Flex>
         )}
 
         {lastMessages.length === 0 && !streaming && (
