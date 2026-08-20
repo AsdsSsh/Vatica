@@ -17,6 +17,7 @@ import {
 } from "antd";
 import {
   CheckCircleOutlined,
+  CalendarOutlined,
   ClockCircleOutlined,
   ExclamationCircleOutlined,
   ExperimentOutlined,
@@ -57,6 +58,7 @@ import { loadPermissionPolicy } from "../permissions";
 import { useBackendStatus } from "../backendStatus";
 import { useAuth } from "../auth";
 import PermissionRequestModal from "./PermissionRequestModal";
+import MeetingPreparationPanel from "./MeetingPreparationPanel";
 
 const STATUS_COLOR: Record<string, string> = {
   PENDING: "default",
@@ -137,6 +139,7 @@ export default function StepPanel() {
   const [permissionRequests, setPermissionRequests] = useState<FilePermissionRequest[]>([]);
   const [permissionDeciding, setPermissionDeciding] = useState(false);
   const [permissionRemember, setPermissionRemember] = useState(true);
+  const [meetingPreparationOpen, setMeetingPreparationOpen] = useState(false);
   // 迭代 15 I15-1：步骤执行轨迹（agent_trace 查询弹窗）
   const [traceOpen, setTraceOpen] = useState(false);
   const [traceStepId, setTraceStepId] = useState<number | null>(null);
@@ -432,7 +435,17 @@ export default function StepPanel() {
       <div style={{ padding: 12, borderBottom: "1px solid var(--vatica-border)" }}>
         <Flex justify="space-between" align="center" style={{ marginBottom: 8 }}>
           <Typography.Text strong>任务面板</Typography.Text>
-          <Button size="small" aria-label="刷新任务列表" icon={<ReloadOutlined />} onClick={() => refreshTasks()} />
+          <Space size={2}>
+            <Button
+              size="small"
+              icon={<CalendarOutlined />}
+              disabled={!online || authStatus === "loading" || authStatus === "anonymous"}
+              onClick={() => setMeetingPreparationOpen(true)}
+            >
+              会议准备
+            </Button>
+            <Button size="small" aria-label="刷新任务列表" icon={<ReloadOutlined />} onClick={() => refreshTasks()} />
+          </Space>
         </Flex>
         <div className="task-create-form">
           <Select
@@ -869,6 +882,7 @@ export default function StepPanel() {
           </div>
         )}
       </Modal>
+      <MeetingPreparationPanel open={meetingPreparationOpen} onClose={() => setMeetingPreparationOpen(false)} />
 
       {/* 迭代 15 I15-1：步骤执行轨迹（脱敏摘要级） */}
       <Modal

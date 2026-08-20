@@ -3,6 +3,8 @@ package com.example.vatica.meeting;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -18,16 +20,20 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
+import com.example.vatica.knowledge.KnowledgeBaseService;
 import com.example.vatica.tool.CalendarEventRecord;
 import com.example.vatica.tool.CalendarEventRecordRepository;
 import com.example.vatica.tool.IcsParser.CalendarEvent;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /** 迭代 24A：会议候选与草案必须由当前用户日历事实驱动。 */
 class MeetingPreparationServiceTest {
 
     private final CalendarEventRecordRepository events = mock(CalendarEventRecordRepository.class);
     private final MeetingPreparationRecordRepository preparations = mock(MeetingPreparationRecordRepository.class);
-    private final MeetingPreparationService service = new MeetingPreparationService(events, preparations);
+    private final KnowledgeBaseService knowledge = mock(KnowledgeBaseService.class);
+    private final MeetingPreparationService service = new MeetingPreparationService(events, preparations, knowledge,
+            new ObjectMapper());
 
     @AfterEach
     void clearIdentity() {
@@ -57,6 +63,7 @@ class MeetingPreparationServiceTest {
         CalendarEventRecord event = event(11L, "项目周会", "2026-08-24T09:30", "2026-08-24T10:30");
         when(events.findByIdAndUserId(11L, 7L)).thenReturn(Optional.of(event));
         when(preparations.save(any(MeetingPreparationRecord.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(knowledge.search(anyString(), anyInt())).thenReturn(new KnowledgeBaseService.SearchResult("项目周会", List.of()));
 
         MeetingPreparationService.MeetingPreparationView draft =
                 service.create(11L, "确认项目风险和决策项", true);
@@ -66,9 +73,52 @@ class MeetingPreparationServiceTest {
         assertThat(draft.meeting().start()).isEqualTo("2026-08-24T09:30");
         assertThat(draft.goal()).isEqualTo("确认项目风险和决策项");
         assertThat(draft.knowledgeRequested()).isTrue();
+        assertThat(draft.draft()).isNotNull();
+        assertThat(draft.draft().knowledgeStatus()).isEqualTo("READY");
+        assertThat(draft.draft().evidence()).extracting(MeetingPreparationService.Evidence::type)
+                .containsExactly("CALENDAR_EVENT", "USER_INPUT");
         assertThat(draft.documentPath()).isNull();
         assertThat(draft.todoIds()).isEmpty();
         verify(preparations).save(any(MeetingPreparationRecord.class));
+    }
+
+    @Test
+    void draftKeepsKnowledgeCitationsAndNeverTurnsThemIntoCalendarFacts() {
+        identity(7L);
+        CalendarEventRecord event = event(11L, "架构评审", "2026-08-24T09:30", "2026-08-24T10:30");
+        when(events.findByIdAndUserId(11L, 7L)).thenReturn(Optional.of(event));
+        when(preparations.save(any(MeetingPreparationRecord.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        KnowledgeBaseService.Citation citation = new KnowledgeBaseService.Citation("C1", 51L, "架构方案.md",
+                "docs/架构方案.md", 81L, "风险", 12, 48, 0.91, "服务边界尚待确认。");
+        when(knowledge.search(anyString(), anyInt()))
+                .thenReturn(new KnowledgeBaseService.SearchResult("架构评审", List.of(citation)));
+
+        MeetingPreparationService.MeetingPreparationView draft = service.create(11L, null, true);
+
+        assertThat(draft.draft().knowledgeStatus()).isEqualTo("READY");
+        assertThat(draft.draft().citations()).singleElement().satisfies(value -> {
+            assertThat(value.citationId()).isEqualTo("C1");
+            assertThat(value.documentName()).isEqualTo("架构方案.md");
+            assertThat(value.quote()).isEqualTo("服务边界尚待确认。");
+        });
+        assertThat(draft.draft().evidence()).extracting(MeetingPreparationService.Evidence::type)
+                .containsExactly("CALENDAR_EVENT");
+    }
+
+    @Test
+    void draftDegradesWhenKnowledgeSearchIsUnavailableInsteadOfFailingOrInventingContent() {
+        identity(7L);
+        CalendarEventRecord event = event(11L, "架构评审", "2026-08-24T09:30", "2026-08-24T10:30");
+        when(events.findByIdAndUserId(11L, 7L)).thenReturn(Optional.of(event));
+        when(preparations.save(any(MeetingPreparationRecord.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(knowledge.search(anyString(), anyInt())).thenThrow(new IllegalStateException("pgvector 不可用"));
+
+        MeetingPreparationService.MeetingPreparationView draft = service.create(11L, "确认风险", true);
+
+        assertThat(draft.status()).isEqualTo("DRAFT");
+        assertThat(draft.draft().knowledgeStatus()).isEqualTo("DEGRADED");
+        assertThat(draft.draft().knowledgeMessage()).contains("仅基于日历和用户输入");
+        assertThat(draft.draft().citations()).isEmpty();
     }
 
     @Test

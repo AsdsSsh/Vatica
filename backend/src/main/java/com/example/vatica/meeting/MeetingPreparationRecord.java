@@ -135,4 +135,15 @@ public class MeetingPreparationRecord {
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
     public Instant getAppliedAt() { return appliedAt; }
+
+    /** 24B：草案仍处于无副作用阶段，允许用户调整准备目标后重新生成预览。 */
+    public void replaceDraft(String goal, boolean requestedKnowledge, String nextDraftJson) {
+        if (status != MeetingPreparationStatus.DRAFT) {
+            throw new IllegalStateException("操作失败：只有待批准的会议准备可以修改草案。");
+        }
+        this.userGoal = goal;
+        this.knowledgeRequested = requestedKnowledge;
+        this.draftJson = nextDraftJson;
+        this.errorMessage = null;
+    }
 }

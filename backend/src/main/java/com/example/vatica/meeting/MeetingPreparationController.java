@@ -3,6 +3,7 @@ package com.example.vatica.meeting;
 import java.util.List;
 
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class MeetingPreparationController {
 
     public record CreateRequest(Long calendarEventId, String goal, Boolean includeKnowledge) { }
+    public record DraftUpdateRequest(String goal, Boolean includeKnowledge) { }
 
     private final MeetingPreparationService service;
 
@@ -35,6 +37,16 @@ public class MeetingPreparationController {
             throw new IllegalArgumentException("操作失败：会议准备请求不能为空。");
         }
         return service.create(request.calendarEventId(), request.goal(), request.includeKnowledge());
+    }
+
+    /** 24B：草案可在批准前按新的用户目标或资料选项重新生成。 */
+    @PatchMapping("/{id}/draft")
+    public MeetingPreparationService.MeetingPreparationView refreshDraft(@PathVariable String id,
+            @RequestBody DraftUpdateRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("操作失败：会议准备草案请求不能为空。");
+        }
+        return service.refreshDraft(id, request.goal(), request.includeKnowledge());
     }
 
     @GetMapping

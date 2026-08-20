@@ -24,9 +24,12 @@ class MeetingPreparationControllerTest {
         MeetingPreparationService service = mock(MeetingPreparationService.class);
         MeetingPreparationService.MeetingCandidate candidate =
                 new MeetingPreparationService.MeetingCandidate(11L, "项目周会", "2026-08-24T09:30", "2026-08-24T10:30");
+        MeetingPreparationService.MeetingPreparationDraft preview = new MeetingPreparationService.MeetingPreparationDraft(
+                candidate, "准备决策项", List.of(), "NOT_REQUESTED", "仅基于日历和用户输入。", List.of(),
+                List.of("确认决策项"), List.of("补充参会者"), List.of(), "# 项目周会");
         MeetingPreparationService.MeetingPreparationView draft = new MeetingPreparationService.MeetingPreparationView(
                 "prep-1", "DRAFT", candidate, "准备决策项", true, "2026-08-20T10:00:00Z",
-                "2026-08-20T10:00:00Z", null, null, List.of(), null, null);
+                "2026-08-20T10:00:00Z", preview, null, List.of(), null, null);
         when(service.candidates("2026-08-24", "2026-08-24", "周会")).thenReturn(List.of(candidate));
         when(service.create(11L, "准备决策项", true)).thenReturn(draft);
         MockMvc mvc = MockMvcBuilders.standaloneSetup(new MeetingPreparationController(service)).build();
@@ -42,6 +45,7 @@ class MeetingPreparationControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("DRAFT"))
                 .andExpect(jsonPath("$.meeting.eventId").value(11))
+                .andExpect(jsonPath("$.draft.knowledgeStatus").value("NOT_REQUESTED"))
                 .andExpect(jsonPath("$.todoIds").isArray());
 
         verify(service).candidates("2026-08-24", "2026-08-24", "周会");
