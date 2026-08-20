@@ -10,7 +10,7 @@ import org.springframework.test.annotation.DirtiesContext;
 /** 迭代 13 I13-3：模型凭据密文存取（set/read/clear/keyVersion 递增）。 */
 @DirtiesContext
 @SpringBootTest(properties = {
-        "spring.ai.mcp.client.enabled=false",
+        "vatica.mcp.client.enabled=false",
         "spring.datasource.url=jdbc:h2:mem:vatica-cred;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",

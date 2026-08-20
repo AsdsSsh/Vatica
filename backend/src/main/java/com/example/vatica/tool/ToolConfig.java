@@ -10,25 +10,17 @@ import com.example.vatica.mail.UserMailService;
 import com.example.vatica.knowledge.KnowledgeBaseService;
 import com.example.vatica.knowledge.KnowledgeTools;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.example.vatica.agentscope.AgentToolAdapters;
 import com.example.vatica.agentscope.AgentScopeToolProvider;
 
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.ai.tool.ToolCallbackProvider;
 
 /**
  * 工具层装配：AgentScope Toolkit 反射本地 @Tool 方法并生成原生工具目录。
  *
- * <p>两层机制（面试可讲）：
- * <ol>
- *   <li><b>模型侧工具定义</b>：模型能看到哪些工具，取决于请求选项里的 tool callbacks
- *       （ChatController 的 {@code defaultTools(...)} 把本 Provider 喂给每个请求）</li>
- *   <li><b>执行期兜底</b>：Spring AI 自动收集的 ToolCallback Bean/Provider Bean 构成 resolver，
- *       工具执行期按名匹配不到时兜底（MCP 时代本地工具与 MCP 工具混用的执行入口）</li>
- * </ol>
- * 两者缺一不可：defaultTools 喂定义，Bean 收集留兜底。
+ * <p>AgentScope 注解是本地工具名、描述和 JSON Schema 的唯一事实来源；聊天、任务和 MCP
+ * Server 复用同一 {@link AgentToolProvider}，避免三套工具目录漂移。
  */
 @Configuration
 @EnableConfigurationProperties({FileToolProperties.class, ToolProperties.class, MailProperties.class,
@@ -94,11 +86,5 @@ public class ToolConfig {
             KnowledgeTools knowledgeTools, ToolProperties props, ObjectMapper mapper) {
         return new AgentScopeToolProvider(props.maxCallsPerRequest(), mapper, fileTools, textTools, documentTools,
                 calendarTools, todoTools, mailTools, workspaceTools, knowledgeTools);
-    }
-
-    /** 迭代 22B 迁移桥：22C 切换 AgentScope MCP Server 后删除。 */
-    @Bean
-    ToolCallbackProvider springMcpLocalToolBridge(AgentToolProvider vaticaTools, ObjectMapper mapper) {
-        return () -> AgentToolAdapters.toCallbacks(vaticaTools.getAgentTools(), mapper);
     }
 }

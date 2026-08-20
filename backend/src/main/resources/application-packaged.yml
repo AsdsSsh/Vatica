@@ -23,10 +23,8 @@ spring:
     hibernate:
       ddl-auto: update   # 与开发模式一致：H2 文件库自动建表，重启数据保留
     open-in-view: false
-  ai:
-    mcp:
-      client:
-        # 与开发模式一致：启动不握手第三方 MCP（无 key / 断网也能开箱即用）；
-        # 首次真正用到 MCP 工具时才连接，失败由 McpToolProviderGuard 兜底退避
-        initialized: false
-        request-timeout: 10s   # 降低无 key 场景首次工具发现失败的等待（默认 20s）
+vatica:
+  mcp:
+    client:
+      request-timeout: 10s
+      initialization-timeout: 10s

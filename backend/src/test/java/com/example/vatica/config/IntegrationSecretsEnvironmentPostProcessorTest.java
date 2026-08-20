@@ -33,8 +33,8 @@ class IntegrationSecretsEnvironmentPostProcessorTest {
         MockEnvironment env = new MockEnvironment().withProperty("vatica.app.state-dir", dir.toString());
         new IntegrationSecretsEnvironmentPostProcessor().postProcessEnvironment(env, null);
 
-        assertThat(env.getProperty("spring.ai.mcp.client.streamable-http.connections.amap.endpoint"))
-                .isEqualTo("/mcp?key=amap-key-123");
+        assertThat(env.getProperty("vatica.mcp.client.connections.amap.api-key"))
+                .isEqualTo("amap-key-123");
         assertThat(env.getProperty("vatica.mail.username")).isEqualTo("me@qq.com");
         assertThat(env.getProperty("vatica.mail.password")).isEqualTo("mail-pass");
         assertThat(env.getProperty("spring.datasource.url")).contains("jdbc:h2:file:");

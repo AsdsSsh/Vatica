@@ -32,8 +32,7 @@ public class IntegrationSecretsEnvironmentPostProcessor implements EnvironmentPo
             Map<String, Object> props = new LinkedHashMap<>();
 
             if (settings.amap().apiKey() != null && !settings.amap().apiKey().isBlank()) {
-                props.put("spring.ai.mcp.client.streamable-http.connections.amap.endpoint",
-                        "/mcp?key=" + settings.amap().apiKey());
+                props.put("vatica.mcp.client.connections.amap.api-key", settings.amap().apiKey());
             }
 
             IntegrationSettings.Mail mail = settings.mail();

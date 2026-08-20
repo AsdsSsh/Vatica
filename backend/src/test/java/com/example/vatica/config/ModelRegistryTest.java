@@ -17,10 +17,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 import org.springframework.ai.anthropic.AnthropicChatModel;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.openai.OpenAiChatModel;
-import org.springframework.beans.factory.ObjectProvider;
 
 /** 动态模型注册表单测（迭代 8.5）：双协议构建 / 路由与快速失败 / 配置指纹缓存。 */
 class ModelRegistryTest {
@@ -44,7 +42,6 @@ class ModelRegistryTest {
                 credentials);
         UserModelService userModels = mock(UserModelService.class);
         registry = new ModelRegistry(config, credentials, userModels,
-                mcpProvider(null),
                 ToolCallingManager.builder().build(),
                 null);   // usage advisor 在纯构建测试中不参与，生产装配由 ChatConfig 注入
     }
@@ -137,30 +134,5 @@ class ModelRegistryTest {
                 .extracting(ModelSlot::id).containsExactly("deepseek");
         assertThat(registry.slotsForRole("not-a-tag"))
                 .extracting(ModelSlot::id).containsExactly("deepseek");
-    }
-
-    private static ObjectProvider<SyncMcpToolCallbackProvider> mcpProvider(
-            SyncMcpToolCallbackProvider provider) {
-        return new ObjectProvider<>() {
-            @Override
-            public SyncMcpToolCallbackProvider getObject() {
-                return provider;
-            }
-
-            @Override
-            public SyncMcpToolCallbackProvider getObject(Object... args) {
-                return provider;
-            }
-
-            @Override
-            public SyncMcpToolCallbackProvider getIfAvailable() {
-                return provider;
-            }
-
-            @Override
-            public SyncMcpToolCallbackProvider getIfUnique() {
-                return provider;
-            }
-        };
     }
 }

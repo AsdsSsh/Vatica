@@ -25,7 +25,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
  * 迭代 15 I15-9：中期滚动摘要——成功推进水位线；失败不推进（下次自然重试）。
  */
 @SpringBootTest(properties = {
-        "spring.ai.mcp.client.enabled=false",
+        "vatica.mcp.client.enabled=false",
         "spring.datasource.url=jdbc:h2:mem:vatica-summary;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",

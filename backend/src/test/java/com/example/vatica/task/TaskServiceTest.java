@@ -51,7 +51,7 @@ import com.example.vatica.task.TaskPlan.TaskStep;
  * 返工副作用步骤重新审批（可重入设计）、评测异常→FAILED。
  */
 @SpringBootTest(properties = {
-        "spring.ai.mcp.client.enabled=false",
+        "vatica.mcp.client.enabled=false",
         "vatica.agent.runtime=legacy",
         "spring.datasource.url=jdbc:h2:mem:vatica-task;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
         "spring.datasource.driver-class-name=org.h2.Driver",

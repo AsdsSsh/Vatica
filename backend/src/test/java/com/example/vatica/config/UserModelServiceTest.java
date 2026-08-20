@@ -11,7 +11,7 @@ import org.springframework.test.annotation.DirtiesContext;
 /** 迭代 13 I13-4：用户自配槽位 + EPHEMERAL/ENCRYPTED_AT_REST 开关。 */
 @DirtiesContext
 @SpringBootTest(properties = {
-        "spring.ai.mcp.client.enabled=false",
+        "vatica.mcp.client.enabled=false",
         "spring.datasource.url=jdbc:h2:mem:vatica-user-model;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",

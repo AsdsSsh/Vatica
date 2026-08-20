@@ -1,64 +1,62 @@
 package com.example.vatica.config;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.ToolCallbackProvider;
+import com.example.vatica.tool.AgentToolProvider;
+
+import io.agentscope.core.tool.AgentTool;
 
 /**
- * MCP 工具提供者的韧性包装（迭代 8 I8-1）：
- * {@link org.springframework.ai.mcp.SyncMcpToolCallbackProvider} 在首次取工具列表时才真正
- * 连接第三方 MCP 服务（yml {@code spring.ai.mcp.client.initialized=false} 懒初始化，SDK
- * {@code LifecycleInitializer.withInitialization} 源码核实），连接失败（未配置 key / 网关不可达 /
- * 断网）会以异常形式抛给调用方——若直接暴露，一次失败会拖垮整次对话请求。
- *
- * <p>本包装的职责：失败时返回空工具集（本地工具不受影响，对话照常进行），并退避
- * {@value #RETRY_BACKOFF_SECONDS} 秒——期间不重试、日志只打一次，避免每次请求都卡一次
- * 第三方超时。连接恢复后自动回到透传模式。
+ * 迭代 22C：AgentScope MCP 工具发现失败时返回空目录，并按窗口退避。
  */
-public class McpToolProviderGuard implements ToolCallbackProvider {
+public final class McpToolProviderGuard implements AgentToolProvider {
 
     private static final Logger log = LoggerFactory.getLogger(McpToolProviderGuard.class);
 
-    /** 失败退避窗口（秒）：期间直接返回空工具集，不重试第三方连接。 */
-    static final long RETRY_BACKOFF_SECONDS = 300;
+    static final Duration DEFAULT_RETRY_BACKOFF = Duration.ofSeconds(300);
 
-    private final ToolCallbackProvider delegate;
-    private final long retryBackoffSeconds;
-    private volatile long lastFailureEpoch = 0;
+    private final AgentToolProvider delegate;
+    private final Duration retryBackoff;
+    private final Clock clock;
+    private volatile Instant lastFailure;
 
-    public McpToolProviderGuard(ToolCallbackProvider delegate) {
-        this(delegate, RETRY_BACKOFF_SECONDS);
+    public McpToolProviderGuard(AgentToolProvider delegate) {
+        this(delegate, DEFAULT_RETRY_BACKOFF, Clock.systemUTC());
     }
 
-    /** @param retryBackoffSeconds 失败退避窗口（秒），测试可传 0 立即恢复 */
-    McpToolProviderGuard(ToolCallbackProvider delegate, long retryBackoffSeconds) {
+    public McpToolProviderGuard(AgentToolProvider delegate, Duration retryBackoff) {
+        this(delegate, retryBackoff, Clock.systemUTC());
+    }
+
+    McpToolProviderGuard(AgentToolProvider delegate, Duration retryBackoff, Clock clock) {
         this.delegate = delegate;
-        this.retryBackoffSeconds = retryBackoffSeconds;
+        this.retryBackoff = retryBackoff == null ? DEFAULT_RETRY_BACKOFF : retryBackoff;
+        this.clock = clock;
     }
 
     @Override
-    public ToolCallback[] getToolCallbacks() {
-        if (lastFailureEpoch > 0
-                && Instant.now().getEpochSecond() - lastFailureEpoch < retryBackoffSeconds) {
-            return new ToolCallback[0];
+    public AgentTool[] getAgentTools() {
+        Instant failedAt = lastFailure;
+        if (failedAt != null && Instant.now(clock).isBefore(failedAt.plus(retryBackoff))) {
+            return new AgentTool[0];
         }
         try {
-            ToolCallback[] callbacks = delegate.getToolCallbacks();
-            lastFailureEpoch = 0;
-            return callbacks;
-        }
-        catch (Exception e) {
-            boolean first = lastFailureEpoch == 0;
-            lastFailureEpoch = Instant.now().getEpochSecond();
-            if (first) {
+            AgentTool[] tools = delegate.getAgentTools();
+            lastFailure = null;
+            return tools == null ? new AgentTool[0] : tools;
+        } catch (RuntimeException e) {
+            boolean firstFailure = lastFailure == null;
+            lastFailure = Instant.now(clock);
+            if (firstFailure) {
                 log.warn("MCP 远程工具不可用，本次及 {} 秒内的请求跳过 MCP 工具：{}",
-                        RETRY_BACKOFF_SECONDS, e.getMessage());
+                        retryBackoff.toSeconds(), e.getMessage());
             }
-            return new ToolCallback[0];
+            return new AgentTool[0];
         }
     }
 }

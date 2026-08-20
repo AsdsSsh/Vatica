@@ -21,12 +21,10 @@ import org.springframework.ai.anthropic.AnthropicChatOptions;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
-import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.setup.OpenAiSetup;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
 import com.example.vatica.usage.UsageAdvisor;
@@ -50,7 +48,6 @@ public class ModelRegistry {
     private final ModelConfigService config;
     private final ModelCredentialStore credentials;
     private final UserModelService userModels;
-    private final ObjectProvider<SyncMcpToolCallbackProvider> mcpToolProvider;
     private final ToolCallingManager toolCallingManager;
     private final UsageAdvisor usageAdvisor;
 
@@ -68,12 +65,10 @@ public class ModelRegistry {
     private final ConcurrentHashMap<String, RoleFailoverChatClient> roleClients = new ConcurrentHashMap<>();
 
     public ModelRegistry(ModelConfigService config, ModelCredentialStore credentials, UserModelService userModels,
-            ObjectProvider<SyncMcpToolCallbackProvider> mcpToolProvider, ToolCallingManager toolCallingManager,
-            UsageAdvisor usageAdvisor) {
+            ToolCallingManager toolCallingManager, UsageAdvisor usageAdvisor) {
         this.config = config;
         this.credentials = credentials;
         this.userModels = userModels;
-        this.mcpToolProvider = mcpToolProvider;
         this.toolCallingManager = toolCallingManager;
         this.usageAdvisor = usageAdvisor;
     }
@@ -325,16 +320,7 @@ public class ModelRegistry {
         if (usageAdvisor != null) {
             builder.defaultAdvisors(usageAdvisor);
         }
-        if (withTools) {
-            // 迭代 12 热修：本地工具由 ChatController/TaskService 按请求用
-            // PermissionBoundToolCallbacks/ToolActivityCallbacks 注入；
-            // 这里只注册 MCP 远程工具兜底——若再注册 vaticaTools 会与请求级
-            // ToolCallback[] 叠加成同名重复，触发 ToolCallingChatOptions 校验异常。
-            SyncMcpToolCallbackProvider mcpTools = mcpToolProvider.getIfAvailable();
-            if (mcpTools != null) {
-                builder.defaultTools(new McpToolProviderGuard(mcpTools));
-            }
-        }
+        // 迭代 22C：远程 MCP 工具仅由 AgentScope AgentToolCatalog 注入。
         return builder.build();
     }
 

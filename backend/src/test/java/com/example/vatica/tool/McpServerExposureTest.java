@@ -6,18 +6,19 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.web.servlet.ServletRegistrationBean;
+import io.modelcontextprotocol.server.transport.HttpServletStreamableServerTransportProvider;
 
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
 
 /**
- * MCP Server 工具暴露验证（迭代 4 I4-2）：全上下文 + 禁用 MCP 客户端，
- * 断言本地 18 个工具全部注册进 MCP Server 的 SyncToolSpecification 列表
- * （即经 Streamable HTTP /mcp 暴露给任何 MCP 客户端）。
+ * MCP Server 工具暴露验证（迭代 22C）：官方 MCP Java SDK 的
+ * SyncToolSpecification 列表即 Streamable HTTP /mcp 的 tools/list 事实源。
  */
 @SpringBootTest(properties = {
-        "spring.ai.mcp.client.enabled=false",
+        "vatica.mcp.client.enabled=false",
         "spring.datasource.url=jdbc:h2:mem:vatica;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",
@@ -26,8 +27,11 @@ import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
 class McpServerExposureTest {
 
     @Autowired
-    @Qualifier("syncTools")
+    @org.springframework.beans.factory.annotation.Qualifier("mcpServerTools")
     List<SyncToolSpecification> mcpServerTools;
+
+    @Autowired
+    ServletRegistrationBean<HttpServletStreamableServerTransportProvider> mcpServlet;
 
     @Test
     void exposesAllEighteenLocalTools() {
@@ -51,5 +55,11 @@ class McpServerExposureTest {
         assertThat(calendarQuery.tool().description()).contains("日程");
         // 入参 schema 存在（MCP 客户端据此生成调用参数）
         assertThat(calendarQuery.tool().inputSchema()).isNotNull();
+    }
+
+    @Test
+    void registersOfficialStreamableHttpServletAtMcpEndpoint() {
+        assertThat(mcpServlet.getUrlMappings()).contains("/mcp");
+        assertThat(mcpServlet.getServlet()).isInstanceOf(HttpServletStreamableServerTransportProvider.class);
     }
 }

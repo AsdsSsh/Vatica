@@ -17,7 +17,7 @@ import org.springframework.test.web.servlet.MockMvc;
  * 迭代 14.5：补 OpenAPI 契约断言——/api/auth/me 与 CurrentUserResponse 进入契约。
  */
 @SpringBootTest(properties = {
-        "spring.ai.mcp.client.enabled=false",
+        "vatica.mcp.client.enabled=false",
         "spring.datasource.url=jdbc:h2:mem:vatica;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",

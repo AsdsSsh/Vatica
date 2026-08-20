@@ -15,7 +15,7 @@ import com.example.vatica.controller.ForbiddenException;
 
 /** 迭代 20A：默认安装、版本切换/回滚、组织隔离和管理权限。 */
 @SpringBootTest(properties = {
-        "spring.ai.mcp.client.enabled=false",
+        "vatica.mcp.client.enabled=false",
         "spring.datasource.url=jdbc:h2:mem:vatica-skills;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",

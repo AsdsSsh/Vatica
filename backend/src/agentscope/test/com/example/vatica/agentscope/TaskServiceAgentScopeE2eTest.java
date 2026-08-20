@@ -42,7 +42,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 /** 迭代 17A：任务状态机到 AgentScope ReAct 再到结果落库的零外网端到端验收。 */
 @SpringBootTest(properties = {
-        "spring.ai.mcp.client.enabled=false",
+        "vatica.mcp.client.enabled=false",
         "spring.ai.openai.api-key=test-key",
         "spring.ai.openai.chat.model=test-model",
         "spring.ai.openai.chat.temperature=0.1",

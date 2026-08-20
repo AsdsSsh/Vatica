@@ -23,7 +23,7 @@ import com.example.vatica.tool.TodoTools;
  * 验证历史恢复、滑窗裁剪（重启恢复路径）、空文本不落库、多会话隔离。
  */
 @SpringBootTest(properties = {
-        "spring.ai.mcp.client.enabled=false",
+        "vatica.mcp.client.enabled=false",
         "spring.datasource.url=jdbc:h2:mem:vatica-msg;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",
