@@ -553,9 +553,14 @@ export default function StepPanel() {
                         <Typography.Text style={{ fontSize: 12 }}>
                           {s.id}. {s.description}
                         </Typography.Text>
-                        {(s.needsApproval || (s.skillId && s.skillVersion)) && (
+                        {(s.needsApproval || (s.skillId && s.skillVersion) || (s.requiredTools?.length ?? 0) > 0) && (
                           <Flex gap={4} wrap style={{ marginTop: 2 }}>
                             {s.needsApproval && <Tag color="warning" style={{ fontSize: 10 }}>需审批</Tag>}
+                            {(s.requiredTools?.length ?? 0) > 0 && (
+                              <Tag color="cyan" style={{ fontSize: 10 }}>
+                                工具：{s.requiredTools?.join(", ")}
+                              </Tag>
+                            )}
                             {s.skillId && s.skillVersion && (
                               <Tag
                                 color="blue"
@@ -566,6 +571,11 @@ export default function StepPanel() {
                               </Tag>
                             )}
                           </Flex>
+                        )}
+                        {s.capabilityResolution && (
+                          <Typography.Text type="secondary" style={{ display: "block", fontSize: 11, marginTop: 2 }}>
+                            {s.capabilityResolution}
+                          </Typography.Text>
                         )}
                         {done && (
                           <Typography.Paragraph

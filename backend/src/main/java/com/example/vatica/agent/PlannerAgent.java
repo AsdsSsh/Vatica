@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import com.example.vatica.task.ReflectionFeedback;
 import com.example.vatica.task.BlackboardEntry;
 import com.example.vatica.task.CollaborationDecision;
+import com.example.vatica.task.TaskCapabilityMatcher;
 import com.example.vatica.task.TaskPlan;
 import com.example.vatica.task.TaskPlan.TaskStep;
 import com.example.vatica.auth.RequestIdentity;
@@ -49,7 +50,7 @@ public class PlannerAgent {
 
     private static final String SYSTEM_PROMPT = """
             你是任务规划 Agent。把用户目标拆解为可执行的步骤，只输出一个 JSON 对象（不要 markdown 代码块、不要任何解释文字），格式：
-            {"steps":[{"description":"步骤描述：具体、可执行、写明要调用哪个工具","agent":"workspace","needsApproval":false,"dependsOn":[],"writeResources":[]}]}
+            {"steps":[{"description":"步骤描述：具体、可执行、写明要调用哪个工具","agent":"workspace","requiredTools":["read_file"],"needsApproval":false,"dependsOn":[],"writeResources":[]}]}
             规则：
             1. 步骤 1-8 个，按执行顺序排列；
             2. 涉及发送邮件、覆盖用户已有文件、删除数据等不可逆操作的步骤，needsApproval 必须为 true，其余为 false；
@@ -58,6 +59,7 @@ public class PlannerAgent {
                完全独立的步骤填 []（例如两个互不依赖的查询步骤都写 []）；省略该字段 = 默认依赖上一步（顺序执行）；
             5. 每个步骤必须从"当前可用角色"中选择 agent；一个步骤需要跨角色工具时拆成有依赖关系的多个步骤；
             6. 不要发明不存在的工具，只使用"当前可用工具"清单里的工具；
+            6.1 requiredTools 必须列出本步骤准备调用的精确工具名；不调用工具才填 []；
             7. 涉及用户指定的具体文件路径时，步骤描述里直接使用该路径（先 list_files 确认存在性也是可以的）；
                未授权目录会在执行时自动触发用户授权弹窗，因此**永远不要要求用户手动添加授权目录或修改权限设置**；
             8. 基于知识库生成文档时，先安排 research 调用 search_knowledge_base 并保留引用，
@@ -66,13 +68,13 @@ public class PlannerAgent {
     private static final String REVISE_SYSTEM_PROMPT = """
             你是任务规划 Agent。上一轮计划执行后质量评测不合格，请根据反馈修订计划，只输出一个 JSON 对象
             （不要 markdown 代码块、不要任何解释文字），格式：
-            {"steps":[{"description":"步骤描述：具体、可执行、写明要调用哪个工具","agent":"workspace","needsApproval":false,"dependsOn":[],"writeResources":[]}]}
+            {"steps":[{"description":"步骤描述：具体、可执行、写明要调用哪个工具","agent":"workspace","requiredTools":["read_file"],"needsApproval":false,"dependsOn":[],"writeResources":[]}]}
             修订规则：
             1. 只针对反馈中失败的步骤改进：换更合适的工具、补充校验步骤、明确数据来源或拆分过大的步骤；
             2. 仍然正确的步骤可以保留，但输出必须包含完整步骤列表（不要省略）；
             3. 不得改变任务目标、不得扩大任务范围、不得新增用户没要求的工作；
             4. 步骤 1-8 个；不可逆操作 needsApproval=true；dependsOn 规则与首次规划一致；
-            5. 每步必须选择当前可用角色之一；只使用系统提供的工具，不要发明不存在的工具。""";
+            5. 每步必须选择当前可用角色之一；requiredTools 列出精确工具名，只使用系统提供的工具，不要发明不存在的工具。""";
 
     private final ObjectMapper mapper;
     private final AgentToolProvider toolProvider;
@@ -257,6 +259,8 @@ public class PlannerAgent {
             // Skill 版本由 Vatica 注册中心绑定，拒绝信任 Planner 幻觉字段。
             step.setSkillId(null);
             step.setSkillVersion(null);
+            step.setRequiredTools(TaskCapabilityMatcher.requiredTools(step));
+            step.setCapabilityResolution(null);
             step.setWriteResources(normalizeWriteResources(step.getWriteResources()));
             step.setDependsOn(normalizeDependencies(step.getDependsOn(), i));
             i++;

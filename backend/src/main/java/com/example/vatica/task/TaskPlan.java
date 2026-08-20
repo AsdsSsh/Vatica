@@ -115,6 +115,10 @@ public class TaskPlan {
         /** 迭代 20B：由 Vatica 固定的受控 Skill；Planner 不直接决定版本。 */
         private String skillId;
         private String skillVersion;
+        /** 迭代 23A：Planner 声明且 Vatica 归一化的本步骤所需工具。 */
+        private List<String> requiredTools = List.of();
+        /** 迭代 23A：能力不匹配时的确定性回退说明，供 HITL 预览与审计。 */
+        private String capabilityResolution;
         private boolean needsApproval;
         /** 用户已审批通过（执行流据此跳过审批点；返工需重新审批，迭代 5.5 语义）。 */
         private boolean approved;
@@ -174,6 +178,22 @@ public class TaskPlan {
 
         public void setSkillVersion(String skillVersion) {
             this.skillVersion = skillVersion;
+        }
+
+        public List<String> getRequiredTools() {
+            return requiredTools;
+        }
+
+        public void setRequiredTools(List<String> requiredTools) {
+            this.requiredTools = requiredTools == null ? List.of() : List.copyOf(requiredTools);
+        }
+
+        public String getCapabilityResolution() {
+            return capabilityResolution;
+        }
+
+        public void setCapabilityResolution(String capabilityResolution) {
+            this.capabilityResolution = capabilityResolution;
         }
 
         public boolean isNeedsApproval() {

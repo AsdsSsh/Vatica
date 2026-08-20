@@ -1,8 +1,11 @@
 package com.example.vatica.task;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.time.Duration;
 import java.time.Instant;
@@ -277,6 +280,7 @@ public class TaskService {
                 try {
                     TaskPlan plan = plannerAgent.plan(goal.trim(), credential.toSlot());
                     bindSkills(plan, identity);
+                    recordCapabilityResolutions(record, identity, plannerSpan, plan);
                     record.setPlanJson(toJson(plan));
                 } finally {
                     UsageContext.clear();
@@ -289,6 +293,7 @@ public class TaskService {
                 try {
                     TaskPlan plan = plannerAgent.plan(goal.trim());
                     bindSkills(plan, identity);
+                    recordCapabilityResolutions(record, identity, plannerSpan, plan);
                     record.setPlanJson(toJson(plan));
                 } finally {
                     UsageContext.clear();
@@ -322,23 +327,54 @@ public class TaskService {
         return benchmarkCase;
     }
 
-    /** Planner 只选角色；Vatica 在计划落库前固定当前组织的 Skill 版本。 */
+    /** Planner 只选角色；Vatica 在计划落库前固定 Skill 版本并核验工具能力交集。 */
     private void bindSkills(TaskPlan plan, RequestIdentity identity) {
         java.util.Set<String> roles = plan.getSteps().stream()
                 .map(step -> agentRegistry.normalizeId(step.getAgent()))
                 .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
         Map<String, ExecutionProfile> profiles = skillCatalog.resolveForPlanning(identity, roles);
+        Set<String> availableTools = Arrays.stream(agentTools.tools()).map(tool -> tool.getName())
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         for (TaskStep step : plan.getSteps()) {
             String role = agentRegistry.normalizeId(step.getAgent());
             step.setAgent(role);
-            ExecutionProfile profile = profiles.get(role);
-            if (profile == null) {
+            ExecutionProfile profile;
+            if (step.getSkillId() != null && !step.getSkillId().isBlank()
+                    && step.getSkillVersion() != null && !step.getSkillVersion().isBlank()) {
+                profile = skillCatalog.resolveForExecution(identity, role, step.getSkillId(), step.getSkillVersion())
+                        .orElse(null);
+            } else {
+                profile = profiles.get(role);
+            }
+            TaskCapabilityMatcher.Resolution resolution = TaskCapabilityMatcher.resolve(step, agentRegistry, profile,
+                    availableTools);
+            step.setAgent(resolution.agentId());
+            step.setRequiredTools(resolution.requiredTools());
+            step.setCapabilityResolution(resolution.explanation());
+            if (resolution.skill() == null) {
                 step.setSkillId(null);
                 step.setSkillVersion(null);
             } else {
-                step.setSkillId(profile.id());
-                step.setSkillVersion(profile.version());
+                step.setSkillId(resolution.skill().id());
+                step.setSkillVersion(resolution.skill().version());
             }
+        }
+    }
+
+    /** 迭代 23A：把审批前的确定性回退记录为 Planner 子 Span，便于解释重规划和额度消耗。 */
+    private void recordCapabilityResolutions(TaskRecord record, RequestIdentity identity,
+            AgentObservabilityRecorder.SpanHandle plannerSpan, TaskPlan plan) {
+        for (TaskStep step : plan.getSteps()) {
+            if (step.getCapabilityResolution() == null || step.getCapabilityResolution().isBlank()) {
+                continue;
+            }
+            long started = System.nanoTime();
+            AgentObservabilityRecorder.SpanHandle span = startSpan(identity, record, plannerSpan, step.getId(),
+                    "SKILL_FALLBACK", "Skill capability fallback", "planner", step.getAgent(),
+                    step.getAgent(), null, step.getSkillId(), step.getSkillVersion(),
+                    "required_tools=" + String.join(",", step.getRequiredTools()));
+            observability.finish(span, AgentObservabilityRecorder.SpanFinish.success(step.getCapabilityResolution()),
+                    started);
         }
     }
 
@@ -694,6 +730,9 @@ public class TaskService {
                             discoveryAdded |= discovery.addedCount() > 0;
                             waveEntries.addAll(discovery.entries());
                         }
+                        if (discoveryAdded) {
+                            bindSkills(plan, identityOf(record));
+                        }
                         blackboard.mergeWaveNotes(plan);
                     } finally {
                         UsageContext.clear();
@@ -870,8 +909,11 @@ public class TaskService {
             if (skill != null) {
                 step.setSkillId(skill.id());
                 step.setSkillVersion(skill.version());
+                TaskCapabilityMatcher.assertExecutionCompatible(step, agentRegistry, skill);
                 // 迭代 20D：Vatica 执行 manifest 工具交集、能力声明和资源额度。
                 tools = SkillExecutionPolicy.constrain(skill, tools);
+            } else {
+                TaskCapabilityMatcher.assertExecutionCompatible(step, agentRegistry, null);
             }
             // 迭代 15 I15-3：retryable 工具错误重试 1 次；重试同样消耗 Skill/全局调用额度。
             tools = new RetryableToolCallbacks().wrap(tools);

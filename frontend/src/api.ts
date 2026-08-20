@@ -934,6 +934,10 @@ export interface TaskStep {
   /** 迭代 20B：Vatica 固定的受控 Skill 发布版本；通用角色可能为空。 */
   skillId?: string | null;
   skillVersion?: string | null;
+  /** 迭代 23A：Planner 声明且服务端复核的工具需求。 */
+  requiredTools?: string[];
+  /** 迭代 23A：Skill 不匹配时的确定性回退原因。 */
+  capabilityResolution?: string | null;
   needsApproval: boolean;
   approved: boolean;
   result: string | null;
