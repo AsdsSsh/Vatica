@@ -20,14 +20,21 @@ import {
   ArrowLeftOutlined,
   BookOutlined,
   CalendarOutlined,
+  CheckCircleOutlined,
+  CloseOutlined,
+  DownloadOutlined,
+  ExclamationCircleOutlined,
   FileTextOutlined,
   ReloadOutlined,
   SearchOutlined,
 } from "@ant-design/icons";
 import {
+  approveMeetingPreparation,
   createMeetingPreparation,
+  downloadWorkspaceFile,
   fetchMeetingCandidates,
   isAuthExpiredError,
+  rejectMeetingPreparation,
   refreshMeetingPreparationDraft,
   type MeetingCandidate,
   type MeetingPreparationView,
@@ -44,6 +51,13 @@ const KNOWLEDGE_STATUS: Record<string, { color: string; label: string }> = {
   READY: { color: "success", label: "已引用资料" },
   DEGRADED: { color: "processing", label: "仅日历与输入" },
   NOT_REQUESTED: { color: "default", label: "未检索资料" },
+};
+
+const PREPARATION_STATUS: Record<string, { color: string; label: string }> = {
+  DRAFT: { color: "processing", label: "待批准" },
+  APPLIED: { color: "success", label: "已写入" },
+  REJECTED: { color: "default", label: "已拒绝" },
+  FAILED: { color: "error", label: "写入失败" },
 };
 
 function todayValue(): string {
@@ -77,6 +91,7 @@ export default function MeetingPreparationPanel({ open, onClose }: Props) {
   const [candidates, setCandidates] = useState<MeetingCandidate[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
   const [preparation, setPreparation] = useState<MeetingPreparationView | null>(null);
+  const [rejectionReason, setRejectionReason] = useState("");
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -91,6 +106,7 @@ export default function MeetingPreparationPanel({ open, onClose }: Props) {
     setIncludeKnowledge(false);
     setSelectedEventId(null);
     setPreparation(null);
+    setRejectionReason("");
     void loadCandidates(initialFrom, initialTo, "");
     // 打开即按默认一周读取；后续由用户手动筛选，避免随输入频繁发请求。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -143,8 +159,55 @@ export default function MeetingPreparationPanel({ open, onClose }: Props) {
     }
   }
 
+  async function approveDraft() {
+    if (!preparation || submitting) return;
+    setSubmitting(true);
+    try {
+      const updated = await approveMeetingPreparation(preparation.id);
+      setPreparation(updated);
+      if (updated.status === "APPLIED") {
+        message.success("会议准备已写入工作区和待办");
+      } else if (updated.status === "FAILED") {
+        message.error(updated.error || "会议准备写入失败，请查看错误信息后重试");
+      }
+    } catch (error) {
+      if (!isAuthExpiredError(error)) message.error((error as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function rejectDraft() {
+    if (!preparation || submitting) return;
+    setSubmitting(true);
+    try {
+      setPreparation(await rejectMeetingPreparation(preparation.id, rejectionReason.trim() || undefined));
+      message.info("已拒绝草案，未创建文档或待办");
+    } catch (error) {
+      if (!isAuthExpiredError(error)) message.error((error as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function downloadDocument() {
+    if (!preparation?.documentPath) return;
+    try {
+      const blob = await downloadWorkspaceFile(preparation.documentPath);
+      const link = document.createElement("a");
+      const url = URL.createObjectURL(blob);
+      link.href = url;
+      link.download = preparation.documentPath.split("/").pop() || "meeting-preparation.md";
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      if (!isAuthExpiredError(error)) message.error((error as Error).message);
+    }
+  }
+
   const draft = preparation?.draft;
   const status = draft ? KNOWLEDGE_STATUS[draft.knowledgeStatus] ?? KNOWLEDGE_STATUS.NOT_REQUESTED : null;
+  const preparationStatus = preparation ? PREPARATION_STATUS[preparation.status] ?? PREPARATION_STATUS.DRAFT : null;
   const selected = candidates.find((candidate) => candidate.eventId === selectedEventId);
 
   return (
@@ -227,7 +290,7 @@ export default function MeetingPreparationPanel({ open, onClose }: Props) {
         <Flex vertical gap={14}>
           <Flex justify="space-between" align="center" wrap gap={8}>
             <Space wrap>
-              <Tag color="processing">待批准</Tag>
+              {preparationStatus && <Tag color={preparationStatus.color}>{preparationStatus.label}</Tag>}
               {status && <Tag color={status.color}>{status.label}</Tag>}
             </Space>
             <Button size="small" icon={<ArrowLeftOutlined />} onClick={() => setPreparation(null)}>
@@ -241,19 +304,21 @@ export default function MeetingPreparationPanel({ open, onClose }: Props) {
             <Descriptions.Item label="准备目标" span={2}>{draft.goal || "未补充"}</Descriptions.Item>
           </Descriptions>
 
-          <Flex vertical gap={8}>
-            <Typography.Text strong>调整草案</Typography.Text>
-            <Input.TextArea value={goal} rows={2} maxLength={2000} showCount
-              onChange={(event) => setGoal(event.target.value)} />
-            <Flex justify="space-between" align="center" wrap gap={8}>
-              <Checkbox checked={includeKnowledge} onChange={(event) => setIncludeKnowledge(event.target.checked)}>
-                检索授权资料
-              </Checkbox>
-              <Button icon={<ReloadOutlined />} loading={submitting} onClick={() => void updateDraft()}>
-                更新草案
-              </Button>
+          {preparation.status === "DRAFT" && (
+            <Flex vertical gap={8}>
+              <Typography.Text strong>调整草案</Typography.Text>
+              <Input.TextArea value={goal} rows={2} maxLength={2000} showCount
+                onChange={(event) => setGoal(event.target.value)} />
+              <Flex justify="space-between" align="center" wrap gap={8}>
+                <Checkbox checked={includeKnowledge} onChange={(event) => setIncludeKnowledge(event.target.checked)}>
+                  检索授权资料
+                </Checkbox>
+                <Button icon={<ReloadOutlined />} loading={submitting} onClick={() => void updateDraft()}>
+                  更新草案
+                </Button>
+              </Flex>
             </Flex>
-          </Flex>
+          )}
 
           <Divider style={{ margin: 0 }} />
           <Flex vertical gap={7}>
@@ -305,9 +370,43 @@ export default function MeetingPreparationPanel({ open, onClose }: Props) {
             <Typography.Text strong>准备文档预览</Typography.Text>
             <Markdown content={draft.documentPreview} dark={isDark} />
           </div>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            批准写入将在下一步提供；当前预览没有创建文件或待办。
-          </Typography.Text>
+          {preparation.status === "DRAFT" && (
+            <Flex vertical gap={8} style={{ borderTop: "1px solid var(--vatica-border)", paddingTop: 10 }}>
+              <Input
+                value={rejectionReason}
+                maxLength={1000}
+                placeholder="拒绝原因（可选）"
+                onChange={(event) => setRejectionReason(event.target.value)}
+              />
+              <Flex justify="flex-end" gap={8} wrap>
+                <Button danger icon={<CloseOutlined />} loading={submitting} onClick={() => void rejectDraft()}>
+                  拒绝草案
+                </Button>
+                <Button type="primary" icon={<CheckCircleOutlined />} loading={submitting} onClick={() => void approveDraft()}>
+                  批准并创建文档和待办
+                </Button>
+              </Flex>
+            </Flex>
+          )}
+          {preparation.status === "APPLIED" && (
+            <Flex justify="space-between" align="center" wrap gap={8}>
+              <Typography.Text type="success"><CheckCircleOutlined /> 已创建 {preparation.todoIds.length} 条待办</Typography.Text>
+              {preparation.documentPath && (
+                <Button icon={<DownloadOutlined />} onClick={() => void downloadDocument()}>下载准备文档</Button>
+              )}
+            </Flex>
+          )}
+          {preparation.status === "REJECTED" && (
+            <Typography.Text type="secondary"><CloseOutlined /> 已拒绝：{preparation.rejectionReason || "未填写原因"}</Typography.Text>
+          )}
+          {preparation.status === "FAILED" && (
+            <Flex justify="space-between" align="center" wrap gap={8}>
+              <Typography.Text type="danger"><ExclamationCircleOutlined /> {preparation.error || "会议准备写入失败"}</Typography.Text>
+              {preparation.documentPath && (
+                <Button icon={<DownloadOutlined />} onClick={() => void downloadDocument()}>下载已写入文档</Button>
+              )}
+            </Flex>
+          )}
         </Flex>
       ) : null}
     </Modal>

@@ -11,7 +11,7 @@ function normalizeMarkdown(source: string): string {
   return normalizeInlineNumberedList(
     normalizeInlineTables(
       source
-        .replace(/^(#{1,6})(?=\S)/gm, "$1 ")
+        .replace(/^(#{1,6})(?=[^\s#])/gm, "$1 ")
         .replace(/^>(?=\S)/gm, "> ")
         .replace(/^(\d+\.)(?=\S)/gm, "$1 ")
         .replace(/^([-*+])(?=\S)/gm, "$1 "),

@@ -2,6 +2,10 @@ package com.example.vatica.meeting;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -16,6 +20,10 @@ import com.example.vatica.knowledge.KnowledgeBaseService;
 import com.example.vatica.tool.CalendarEventRecord;
 import com.example.vatica.tool.CalendarEventRecordRepository;
 import com.example.vatica.tool.IcsParser.CalendarEvent;
+import com.example.vatica.tool.TodoRecord;
+import com.example.vatica.tool.TodoRecordRepository;
+import com.example.vatica.tool.TodoTools;
+import com.example.vatica.workspace.WorkspaceStore;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -53,14 +61,18 @@ public class MeetingPreparationService {
     private final MeetingPreparationRecordRepository preparationRepository;
     private final KnowledgeBaseService knowledge;
     private final ObjectMapper mapper;
+    private final WorkspaceStore workspace;
+    private final TodoRecordRepository todoRepository;
 
     public MeetingPreparationService(CalendarEventRecordRepository eventRepository,
             MeetingPreparationRecordRepository preparationRepository, KnowledgeBaseService knowledge,
-            ObjectMapper mapper) {
+            ObjectMapper mapper, WorkspaceStore workspace, TodoRecordRepository todoRepository) {
         this.eventRepository = eventRepository;
         this.preparationRepository = preparationRepository;
         this.knowledge = knowledge;
         this.mapper = mapper;
+        this.workspace = workspace;
+        this.todoRepository = todoRepository;
     }
 
     @Transactional(readOnly = true)
@@ -109,6 +121,60 @@ public class MeetingPreparationService {
         return view(preparationRepository.save(record));
     }
 
+    /**
+     * 24C：批准后才写入文档和待办。行级锁把重复点击串行化；已完成请求直接返回既有结果。
+     * 文件名只使用草案 ID，不拼接会议标题，避免文件名和路径边界问题。
+     */
+    @Transactional
+    public MeetingPreparationView approve(String id) {
+        RequestIdentity identity = RequestIdentityContext.require();
+        MeetingPreparationRecord record = preparationRepository.findForApproval(id, identity.userId())
+                .orElseThrow(() -> new MeetingPreparationNotFoundException(id));
+        if (record.getStatus() == MeetingPreparationStatus.APPLIED) {
+            return view(record);
+        }
+        if (record.getStatus() != MeetingPreparationStatus.DRAFT) {
+            throw new IllegalStateException("操作失败：只有待批准的会议准备可以写入。");
+        }
+        MeetingPreparationDraft draft = decode(record.getDraftJson());
+        if (draft == null) {
+            throw new IllegalStateException("操作失败：会议准备草案缺失，无法执行写入。");
+        }
+        String documentPath = "meeting-preparation-" + record.getId() + ".md";
+        try {
+            workspace.write(identity, documentPath,
+                    new ByteArrayInputStream(draft.documentPreview().getBytes(StandardCharsets.UTF_8)));
+        } catch (IOException e) {
+            record.markFailed(null, "准备文档写入失败，请检查工作区后重新创建草案。");
+            return view(preparationRepository.save(record));
+        }
+
+        try {
+            List<String> todoIds = new ArrayList<>();
+            for (TodoDraft todo : draft.todoDrafts()) {
+                String todoId = UUID.randomUUID().toString().substring(0, 8);
+                TodoTools.Todo created = new TodoTools.Todo(todoId, todo.title(), todo.due(), false,
+                        LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")));
+                todoRepository.save(new TodoRecord(identity.userId(), identity.orgId(), created));
+                todoIds.add(todoId);
+            }
+            record.markApplied(documentPath, encodeTodoIds(todoIds));
+            return view(preparationRepository.save(record));
+        } catch (RuntimeException e) {
+            // 工作区已写入的文档保留路径，避免把部分成功伪装成“未发生”；待办由事务负责回滚。
+            record.markFailed(documentPath, "待办写入未完成；请检查本次会议准备的产物与待办后重新创建草案。");
+            return view(preparationRepository.save(record));
+        }
+    }
+
+    /** 拒绝草案只记录用户反馈，不触发工作区或待办写入。 */
+    @Transactional
+    public MeetingPreparationView reject(String id, String rawReason) {
+        MeetingPreparationRecord record = owned(id);
+        record.reject(normalizeReason(rawReason));
+        return view(preparationRepository.save(record));
+    }
+
     @Transactional(readOnly = true)
     public MeetingPreparationView get(String id) {
         return view(owned(id));
@@ -129,6 +195,23 @@ public class MeetingPreparationService {
                 .orElseThrow(() -> new MeetingPreparationNotFoundException(id));
     }
 
+    private String encodeTodoIds(List<String> ids) {
+        try {
+            return mapper.writeValueAsString(ids);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("操作失败：会议准备待办结果序列化失败。", e);
+        }
+    }
+
+    private List<String> decodeTodoIds(String json) {
+        if (json == null || json.isBlank()) return List.of();
+        try {
+            return mapper.readValue(json, mapper.getTypeFactory().constructCollectionType(List.class, String.class));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("操作失败：会议准备待办结果不可读取。", e);
+        }
+    }
+
     private MeetingCandidate candidate(CalendarEventRecord record) {
         CalendarEvent event = record.toEvent();
         return new MeetingCandidate(record.getId(), event.summary(), event.start().toString(), event.end().toString());
@@ -145,7 +228,7 @@ public class MeetingPreparationService {
                 record.getMeetingStartAt().toString(), record.getMeetingEndAt().toString());
         return new MeetingPreparationView(record.getId(), record.getStatus().name(), meeting, record.getUserGoal(),
                 record.isKnowledgeRequested(), instant(record.getCreatedAt()), instant(record.getUpdatedAt()),
-                decode(record.getDraftJson()), record.getDocumentPath(), List.of(), record.getRejectionReason(),
+                decode(record.getDraftJson()), record.getDocumentPath(), decodeTodoIds(record.getTodoIdsJson()), record.getRejectionReason(),
                 record.getErrorMessage());
     }
 
@@ -270,6 +353,15 @@ public class MeetingPreparationService {
             throw new IllegalArgumentException("操作失败：准备目标不能超过 2000 个字符。");
         }
         return goal;
+    }
+
+    private static String normalizeReason(String value) {
+        if (value == null || value.isBlank()) return null;
+        String reason = value.trim().replaceAll("\\s+", " ");
+        if (reason.length() > 1_000) {
+            throw new IllegalArgumentException("操作失败：拒绝原因不能超过 1000 个字符。");
+        }
+        return reason;
     }
 
     private static String instant(java.time.Instant value) {

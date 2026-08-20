@@ -18,6 +18,7 @@ public class MeetingPreparationController {
 
     public record CreateRequest(Long calendarEventId, String goal, Boolean includeKnowledge) { }
     public record DraftUpdateRequest(String goal, Boolean includeKnowledge) { }
+    public record RejectRequest(String reason) { }
 
     private final MeetingPreparationService service;
 
@@ -47,6 +48,18 @@ public class MeetingPreparationController {
             throw new IllegalArgumentException("操作失败：会议准备草案请求不能为空。");
         }
         return service.refreshDraft(id, request.goal(), request.includeKnowledge());
+    }
+
+    /** 24C：批准后才写入准备文档和待办；同一草案重复批准幂等返回。 */
+    @PostMapping("/{id}/approve")
+    public MeetingPreparationService.MeetingPreparationView approve(@PathVariable String id) {
+        return service.approve(id);
+    }
+
+    @PostMapping("/{id}/reject")
+    public MeetingPreparationService.MeetingPreparationView reject(@PathVariable String id,
+            @RequestBody(required = false) RejectRequest request) {
+        return service.reject(id, request == null ? null : request.reason());
     }
 
     @GetMapping

@@ -2,6 +2,7 @@ package com.example.vatica.meeting;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.List;
 
 import com.example.vatica.auth.RequestIdentity;
 
@@ -145,5 +146,36 @@ public class MeetingPreparationRecord {
         this.knowledgeRequested = requestedKnowledge;
         this.draftJson = nextDraftJson;
         this.errorMessage = null;
+    }
+
+    /** 24C：拒绝是终态，明确记录反馈但不产生文档、待办等副作用。 */
+    public void reject(String reason) {
+        if (status != MeetingPreparationStatus.DRAFT) {
+            throw new IllegalStateException("操作失败：只有待批准的会议准备可以拒绝。");
+        }
+        this.status = MeetingPreparationStatus.REJECTED;
+        this.rejectionReason = reason;
+    }
+
+    /** 24C：所有计划内写入完成后才标记已应用，后续批准请求可直接幂等返回。 */
+    public void markApplied(String nextDocumentPath, String nextTodoIdsJson) {
+        if (status != MeetingPreparationStatus.DRAFT) {
+            throw new IllegalStateException("操作失败：会议准备不再处于待批准状态。");
+        }
+        this.status = MeetingPreparationStatus.APPLIED;
+        this.documentPath = nextDocumentPath;
+        this.todoIdsJson = nextTodoIdsJson;
+        this.appliedAt = Instant.now();
+        this.errorMessage = null;
+    }
+
+    /** 文件写入失败时保留草案和已知路径，供用户定位而不掩盖为成功。 */
+    public void markFailed(String nextDocumentPath, String message) {
+        if (status != MeetingPreparationStatus.DRAFT) {
+            throw new IllegalStateException("操作失败：只有待批准的会议准备可以标记失败。");
+        }
+        this.status = MeetingPreparationStatus.FAILED;
+        this.documentPath = nextDocumentPath;
+        this.errorMessage = message;
     }
 }

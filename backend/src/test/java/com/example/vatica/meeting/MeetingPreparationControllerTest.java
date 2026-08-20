@@ -51,4 +51,33 @@ class MeetingPreparationControllerTest {
         verify(service).candidates("2026-08-24", "2026-08-24", "周会");
         verify(service).create(eq(11L), eq("准备决策项"), eq(true));
     }
+
+    @Test
+    void approveAndRejectKeepExplicitSideEffectDecisionsInTheHttpContract() throws Exception {
+        MeetingPreparationService service = mock(MeetingPreparationService.class);
+        MeetingPreparationService.MeetingCandidate candidate =
+                new MeetingPreparationService.MeetingCandidate(11L, "项目周会", "2026-08-24T09:30", "2026-08-24T10:30");
+        MeetingPreparationService.MeetingPreparationView applied = new MeetingPreparationService.MeetingPreparationView(
+                "prep-1", "APPLIED", candidate, null, false, null, null, null,
+                "meeting-preparation-prep-1.md", List.of("todo-a"), null, null);
+        MeetingPreparationService.MeetingPreparationView rejected = new MeetingPreparationService.MeetingPreparationView(
+                "prep-1", "REJECTED", candidate, null, false, null, null, null,
+                null, List.of(), "范围需要补充", null);
+        when(service.approve("prep-1")).thenReturn(applied);
+        when(service.reject("prep-1", "范围需要补充")).thenReturn(rejected);
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(new MeetingPreparationController(service)).build();
+
+        mvc.perform(post("/api/meeting-preparations/prep-1/approve"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPLIED"))
+                .andExpect(jsonPath("$.todoIds[0]").value("todo-a"));
+        mvc.perform(post("/api/meeting-preparations/prep-1/reject")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"范围需要补充\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("REJECTED"))
+                .andExpect(jsonPath("$.rejectionReason").value("范围需要补充"));
+
+        verify(service).approve("prep-1");
+        verify(service).reject("prep-1", "范围需要补充");
+    }
 }

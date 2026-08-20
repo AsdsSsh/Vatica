@@ -943,6 +943,14 @@ export async function refreshMeetingPreparationDraft(id: string, body: {
   return res.json();
 }
 
+export async function approveMeetingPreparation(id: string): Promise<MeetingPreparationView> {
+  return (await post(`/api/meeting-preparations/${encodeURIComponent(id)}/approve`, {})).json();
+}
+
+export async function rejectMeetingPreparation(id: string, reason?: string): Promise<MeetingPreparationView> {
+  return (await post(`/api/meeting-preparations/${encodeURIComponent(id)}/reject`, { reason: reason || null })).json();
+}
+
 export async function fetchRecentMeetingPreparations(): Promise<MeetingPreparationView[]> {
   return (await getJson("/api/meeting-preparations")).json();
 }
