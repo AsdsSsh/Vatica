@@ -1,0 +1,50 @@
+package com.example.vatica.meeting;
+
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import java.util.List;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+
+/** 迭代 24A：会议准备 API 的结构化输入与输出契约。 */
+class MeetingPreparationControllerTest {
+
+    @Test
+    void listsCandidatesAndCreatesOnlyFromAnExplicitEventId() throws Exception {
+        MeetingPreparationService service = mock(MeetingPreparationService.class);
+        MeetingPreparationService.MeetingCandidate candidate =
+                new MeetingPreparationService.MeetingCandidate(11L, "项目周会", "2026-08-24T09:30", "2026-08-24T10:30");
+        MeetingPreparationService.MeetingPreparationView draft = new MeetingPreparationService.MeetingPreparationView(
+                "prep-1", "DRAFT", candidate, "准备决策项", true, "2026-08-20T10:00:00Z",
+                "2026-08-20T10:00:00Z", null, null, List.of(), null, null);
+        when(service.candidates("2026-08-24", "2026-08-24", "周会")).thenReturn(List.of(candidate));
+        when(service.create(11L, "准备决策项", true)).thenReturn(draft);
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(new MeetingPreparationController(service)).build();
+
+        mvc.perform(get("/api/meeting-preparations/candidates")
+                        .param("from", "2026-08-24").param("to", "2026-08-24").param("topic", "周会"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].eventId").value(11))
+                .andExpect(jsonPath("$[0].title").value("项目周会"));
+        mvc.perform(post("/api/meeting-preparations")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"calendarEventId\":11,\"goal\":\"准备决策项\",\"includeKnowledge\":true}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("DRAFT"))
+                .andExpect(jsonPath("$.meeting.eventId").value(11))
+                .andExpect(jsonPath("$.todoIds").isArray());
+
+        verify(service).candidates("2026-08-24", "2026-08-24", "周会");
+        verify(service).create(eq(11L), eq("准备决策项"), eq(true));
+    }
+}

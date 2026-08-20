@@ -1,6 +1,7 @@
 package com.example.vatica.controller;
 
 import com.example.vatica.task.TaskNotFoundException;
+import com.example.vatica.meeting.MeetingPreparationNotFoundException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +40,12 @@ public class GlobalExceptionHandler {
     /** 资源不存在（任务 id 查无）→ 404。 */
     @ExceptionHandler(TaskNotFoundException.class)
     public ResponseEntity<ApiError> handleNotFound(TaskNotFoundException e) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
+    }
+
+    /** 会议准备同样以当前用户为边界，跨用户访问不暴露资源是否存在。 */
+    @ExceptionHandler(MeetingPreparationNotFoundException.class)
+    public ResponseEntity<ApiError> handleMeetingPreparationNotFound(MeetingPreparationNotFoundException e) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
     }
 

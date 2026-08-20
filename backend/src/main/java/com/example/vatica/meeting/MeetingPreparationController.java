@@ -1,0 +1,49 @@
+package com.example.vatica.meeting;
+
+import java.util.List;
+
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+/** 迭代 24A：结构化会议选择和无副作用草案 API。 */
+@RestController
+@RequestMapping("/api/meeting-preparations")
+public class MeetingPreparationController {
+
+    public record CreateRequest(Long calendarEventId, String goal, Boolean includeKnowledge) { }
+
+    private final MeetingPreparationService service;
+
+    public MeetingPreparationController(MeetingPreparationService service) {
+        this.service = service;
+    }
+
+    @GetMapping("/candidates")
+    public List<MeetingPreparationService.MeetingCandidate> candidates(@RequestParam String from,
+            @RequestParam String to, @RequestParam(required = false) String topic) {
+        return service.candidates(from, to, topic);
+    }
+
+    @PostMapping
+    public MeetingPreparationService.MeetingPreparationView create(@RequestBody CreateRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("操作失败：会议准备请求不能为空。");
+        }
+        return service.create(request.calendarEventId(), request.goal(), request.includeKnowledge());
+    }
+
+    @GetMapping
+    public List<MeetingPreparationService.MeetingPreparationView> recent() {
+        return service.recent();
+    }
+
+    @GetMapping("/{id}")
+    public MeetingPreparationService.MeetingPreparationView get(@PathVariable String id) {
+        return service.get(id);
+    }
+}

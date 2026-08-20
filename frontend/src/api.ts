@@ -851,6 +851,53 @@ export interface CalendarEventView {
   rrule: string | null;
 }
 
+/** 迭代 24A：用户确认后才能创建会议准备草案的日历候选。 */
+export interface MeetingCandidate {
+  eventId: number;
+  title: string;
+  start: string;
+  end: string;
+}
+
+export type MeetingPreparationStatus = "DRAFT" | "REJECTED" | "APPLIED" | "FAILED";
+
+export interface MeetingPreparationView {
+  id: string;
+  status: MeetingPreparationStatus;
+  meeting: MeetingCandidate;
+  goal: string | null;
+  knowledgeRequested: boolean;
+  createdAt: string;
+  updatedAt: string;
+  draft: string | null;
+  documentPath: string | null;
+  todoIds: string[];
+  rejectionReason: string | null;
+  error: string | null;
+}
+
+export async function fetchMeetingCandidates(from: string, to: string, topic?: string): Promise<MeetingCandidate[]> {
+  const query = new URLSearchParams({ from, to });
+  if (topic?.trim()) query.set("topic", topic.trim());
+  return (await getJson(`/api/meeting-preparations/candidates?${query.toString()}`)).json();
+}
+
+export async function createMeetingPreparation(body: {
+  calendarEventId: number;
+  goal?: string;
+  includeKnowledge: boolean;
+}): Promise<MeetingPreparationView> {
+  return (await post("/api/meeting-preparations", body)).json();
+}
+
+export async function fetchMeetingPreparation(id: string): Promise<MeetingPreparationView> {
+  return (await getJson(`/api/meeting-preparations/${encodeURIComponent(id)}`)).json();
+}
+
+export async function fetchRecentMeetingPreparations(): Promise<MeetingPreparationView[]> {
+  return (await getJson("/api/meeting-preparations")).json();
+}
+
 export async function fetchTodos(): Promise<TodoView[]> {
   return (await getJson("/api/pim/todos")).json();
 }
