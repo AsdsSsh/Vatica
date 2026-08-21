@@ -24,6 +24,7 @@ import {
   CloudOutlined,
   BranchesOutlined,
   FileSearchOutlined,
+  FileTextOutlined,
   PlusOutlined,
   ReloadOutlined,
   SendOutlined,
@@ -59,6 +60,7 @@ import { useBackendStatus } from "../backendStatus";
 import { useAuth } from "../auth";
 import PermissionRequestModal from "./PermissionRequestModal";
 import MeetingPreparationPanel from "./MeetingPreparationPanel";
+import WeeklyReportPanel from "./WeeklyReportPanel";
 
 const STATUS_COLOR: Record<string, string> = {
   PENDING: "default",
@@ -140,6 +142,7 @@ export default function StepPanel() {
   const [permissionDeciding, setPermissionDeciding] = useState(false);
   const [permissionRemember, setPermissionRemember] = useState(true);
   const [meetingPreparationOpen, setMeetingPreparationOpen] = useState(false);
+  const [weeklyReportOpen, setWeeklyReportOpen] = useState(false);
   // 迭代 15 I15-1：步骤执行轨迹（agent_trace 查询弹窗）
   const [traceOpen, setTraceOpen] = useState(false);
   const [traceStepId, setTraceStepId] = useState<number | null>(null);
@@ -443,6 +446,14 @@ export default function StepPanel() {
               onClick={() => setMeetingPreparationOpen(true)}
             >
               会议准备
+            </Button>
+            <Button
+              size="small"
+              icon={<FileTextOutlined />}
+              disabled={!online || authStatus === "loading" || authStatus === "anonymous"}
+              onClick={() => setWeeklyReportOpen(true)}
+            >
+              周报事实
             </Button>
             <Button size="small" aria-label="刷新任务列表" icon={<ReloadOutlined />} onClick={() => refreshTasks()} />
           </Space>
@@ -883,6 +894,7 @@ export default function StepPanel() {
         )}
       </Modal>
       <MeetingPreparationPanel open={meetingPreparationOpen} onClose={() => setMeetingPreparationOpen(false)} />
+      <WeeklyReportPanel open={weeklyReportOpen} onClose={() => setWeeklyReportOpen(false)} />
 
       {/* 迭代 15 I15-1：步骤执行轨迹（脱敏摘要级） */}
       <Modal

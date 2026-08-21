@@ -26,6 +26,7 @@ import {
   ExclamationCircleOutlined,
   FileTextOutlined,
   ReloadOutlined,
+  SafetyCertificateOutlined,
   SearchOutlined,
 } from "@ant-design/icons";
 import {
@@ -35,9 +36,12 @@ import {
   fetchMeetingCandidates,
   isAuthExpiredError,
   rejectMeetingPreparation,
+  retryMeetingPreparation,
+  cancelMeetingPreparation,
   refreshMeetingPreparationDraft,
   type MeetingCandidate,
   type MeetingPreparationView,
+  type ArtifactView,
 } from "../api";
 import { useTheme } from "../theme";
 import Markdown from "./Markdown";
@@ -58,6 +62,31 @@ const PREPARATION_STATUS: Record<string, { color: string; label: string }> = {
   APPLIED: { color: "success", label: "已写入" },
   REJECTED: { color: "default", label: "已拒绝" },
   FAILED: { color: "error", label: "写入失败" },
+  CANCELLED: { color: "default", label: "已取消恢复" },
+};
+
+const ACTION_APPROVAL_STATUS: Record<string, { color: string; label: string }> = {
+  PENDING: { color: "processing", label: "待批准" },
+  APPROVED: { color: "success", label: "已批准" },
+  REJECTED: { color: "default", label: "已拒绝" },
+  CANCELLED: { color: "default", label: "已取消" },
+};
+
+const ACTION_EXECUTION_STATUS: Record<string, { color: string; label: string }> = {
+  NOT_STARTED: { color: "default", label: "未执行" },
+  SUCCEEDED: { color: "success", label: "已完成" },
+  FAILED: { color: "error", label: "执行失败" },
+  RUNNING: { color: "processing", label: "执行中" },
+  CANCELLED: { color: "default", label: "已取消" },
+};
+
+const ARTIFACT_STATUS: Record<string, { color: string; label: string }> = {
+  PREVIEW: { color: "processing", label: "草案" },
+  APPROVED: { color: "gold", label: "已批准" },
+  READY: { color: "success", label: "可用" },
+  FAILED: { color: "error", label: "失败记录" },
+  REJECTED: { color: "default", label: "已拒绝" },
+  CANCELLED: { color: "default", label: "已取消" },
 };
 
 function todayValue(): string {
@@ -183,6 +212,37 @@ export default function MeetingPreparationPanel({ open, onClose }: Props) {
     try {
       setPreparation(await rejectMeetingPreparation(preparation.id, rejectionReason.trim() || undefined));
       message.info("已拒绝草案，未创建文档或待办");
+    } catch (error) {
+      if (!isAuthExpiredError(error)) message.error((error as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function retryDraft() {
+    if (!preparation || preparation.status !== "FAILED" || submitting) return;
+    setSubmitting(true);
+    try {
+      const updated = await retryMeetingPreparation(preparation.id);
+      setPreparation(updated);
+      if (updated.status === "APPLIED") {
+        message.success("失败动作已恢复，会议准备已完成");
+      } else if (updated.status === "FAILED") {
+        message.error(updated.error || "恢复仍未完成，请查看失败动作");
+      }
+    } catch (error) {
+      if (!isAuthExpiredError(error)) message.error((error as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function cancelRecovery() {
+    if (!preparation || preparation.status !== "FAILED" || submitting) return;
+    setSubmitting(true);
+    try {
+      setPreparation(await cancelMeetingPreparation(preparation.id));
+      message.info("已取消未开始的恢复动作，已完成结果仍保留");
     } catch (error) {
       if (!isAuthExpiredError(error)) message.error((error as Error).message);
     } finally {
@@ -366,6 +426,80 @@ export default function MeetingPreparationPanel({ open, onClose }: Props) {
             )} />
           </div>
 
+          {preparation.actionPlan && (
+            <div style={{ borderTop: "1px solid var(--vatica-border)", paddingTop: 10 }}>
+              <Flex justify="space-between" align="center" wrap gap={8}>
+                <Typography.Text strong><SafetyCertificateOutlined /> 执行动作</Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  计划版本 {preparation.actionPlan.revision}
+                </Typography.Text>
+              </Flex>
+              <List size="small" dataSource={preparation.actionPlan.actions} renderItem={(action) => {
+                const approval = ACTION_APPROVAL_STATUS[action.approvalStatus] ?? {
+                  color: "default", label: action.approvalStatus,
+                };
+                const execution = ACTION_EXECUTION_STATUS[action.executionStatus] ?? {
+                  color: "default", label: action.executionStatus,
+                };
+                return (
+                  <List.Item style={{ alignItems: "flex-start", padding: "9px 0" }}>
+                    <Flex vertical gap={4} style={{ width: "100%" }}>
+                      <Flex justify="space-between" align="center" wrap gap={6}>
+                        <Typography.Text strong style={{ fontSize: 13 }}>{action.purpose}</Typography.Text>
+                        <Space size={4} wrap>
+                          <Tag color={action.risk === "HIGH" ? "error" : "gold"}>{action.risk === "HIGH" ? "高风险" : "需确认"}</Tag>
+                          <Tag color={approval.color}>{approval.label}</Tag>
+                          <Tag color={execution.color}>{execution.label}</Tag>
+                        </Space>
+                      </Flex>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        {action.target} · {action.expectedChange}
+                      </Typography.Text>
+                      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                        输入：{action.inputSummary}
+                      </Typography.Text>
+                      <Flex gap={8} wrap align="center">
+                        <Typography.Text code style={{ fontSize: 11 }}>{action.requiredPermission}</Typography.Text>
+                        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                          幂等键：{action.idempotencyKey}
+                        </Typography.Text>
+                        {action.result && <Typography.Text type="success" style={{ fontSize: 11 }}>结果：{action.result}</Typography.Text>}
+                      </Flex>
+                    </Flex>
+                  </List.Item>
+                );
+              }} />
+            </div>
+          )}
+
+          {preparation.artifacts.length > 0 && (
+            <div style={{ borderTop: "1px solid var(--vatica-border)", paddingTop: 10 }}>
+              <Flex justify="space-between" align="center" wrap gap={8}>
+                <Typography.Text strong><FileTextOutlined /> 交付物</Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {preparation.artifacts.length} 项，包含草案与执行记录
+                </Typography.Text>
+              </Flex>
+              <List size="small" dataSource={preparation.artifacts} renderItem={(artifact: ArtifactView) => {
+                const artifactStatus = ARTIFACT_STATUS[artifact.status] ?? { color: "default", label: artifact.status };
+                return (
+                  <List.Item style={{ alignItems: "flex-start", padding: "7px 0" }}>
+                    <Flex justify="space-between" align="center" gap={8} wrap style={{ width: "100%" }}>
+                      <Flex vertical gap={2} style={{ minWidth: 0, flex: 1 }}>
+                        <Typography.Text strong style={{ fontSize: 12 }}>{artifact.name}</Typography.Text>
+                        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                          {artifact.summary || "无附加说明"}
+                        </Typography.Text>
+                        {artifact.locator && <Typography.Text code style={{ fontSize: 11 }}>{artifact.locator}</Typography.Text>}
+                      </Flex>
+                      <Tag color={artifactStatus.color}>{artifactStatus.label}</Tag>
+                    </Flex>
+                  </List.Item>
+                );
+              }} />
+            </div>
+          )}
+
           <div style={{ borderTop: "1px solid var(--vatica-border)", paddingTop: 10 }}>
             <Typography.Text strong>准备文档预览</Typography.Text>
             <Markdown content={draft.documentPreview} dark={isDark} />
@@ -402,10 +536,17 @@ export default function MeetingPreparationPanel({ open, onClose }: Props) {
           {preparation.status === "FAILED" && (
             <Flex justify="space-between" align="center" wrap gap={8}>
               <Typography.Text type="danger"><ExclamationCircleOutlined /> {preparation.error || "会议准备写入失败"}</Typography.Text>
-              {preparation.documentPath && (
-                <Button icon={<DownloadOutlined />} onClick={() => void downloadDocument()}>下载已写入文档</Button>
-              )}
+              <Space wrap>
+                {preparation.documentPath && (
+                  <Button icon={<DownloadOutlined />} onClick={() => void downloadDocument()}>下载已写入文档</Button>
+                )}
+                <Button icon={<ReloadOutlined />} loading={submitting} onClick={() => void retryDraft()}>重试失败动作</Button>
+                <Button danger icon={<CloseOutlined />} loading={submitting} onClick={() => void cancelRecovery()}>取消恢复</Button>
+              </Space>
             </Flex>
+          )}
+          {preparation.status === "CANCELLED" && (
+            <Typography.Text type="secondary"><CloseOutlined /> 已取消未开始的恢复动作，已完成产物和失败记录仍保留</Typography.Text>
           )}
         </Flex>
       ) : null}

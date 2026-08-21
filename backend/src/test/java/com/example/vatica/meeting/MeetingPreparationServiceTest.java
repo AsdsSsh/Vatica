@@ -95,6 +95,31 @@ class MeetingPreparationServiceTest {
     }
 
     @Test
+    void draftExposesEveryPlannedWriteWithPermissionAndStableIdempotencyKey() {
+        identity(7L);
+        CalendarEventRecord event = event(11L, "项目周会", "2026-08-24T09:30", "2026-08-24T10:30");
+        when(events.findByIdAndUserId(11L, 7L)).thenReturn(Optional.of(event));
+        when(preparations.save(any(MeetingPreparationRecord.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        MeetingPreparationService.MeetingPreparationView draft = service.create(11L, "确认风险", false);
+
+        assertThat(draft.actionPlan()).isNotNull();
+        assertThat(draft.actionPlan().status()).isEqualTo("PREVIEW");
+        assertThat(draft.actionPlan().actions()).hasSize(3);
+        assertThat(draft.actionPlan().actions()).allSatisfy(action -> {
+            assertThat(action.approvalStatus()).isEqualTo("PENDING");
+            assertThat(action.executionStatus()).isEqualTo("NOT_STARTED");
+            assertThat(action.requiredPermission()).isNotBlank();
+            assertThat(action.idempotencyKey()).startsWith("meeting-preparation:" + draft.id() + ":");
+            assertThat(action.inputSummary()).contains("项目周会");
+        });
+        assertThat(draft.actionPlan().actions().getFirst()).satisfies(action -> {
+            assertThat(action.type()).isEqualTo("WRITE_DOCUMENT");
+            assertThat(action.expectedChange()).contains("meeting-preparation-" + draft.id() + ".md");
+        });
+    }
+
+    @Test
     void draftKeepsKnowledgeCitationsAndNeverTurnsThemIntoCalendarFacts() {
         identity(7L);
         CalendarEventRecord event = event(11L, "架构评审", "2026-08-24T09:30", "2026-08-24T10:30");
@@ -158,6 +183,10 @@ class MeetingPreparationServiceTest {
         assertThat(result.status()).isEqualTo("APPLIED");
         assertThat(result.documentPath()).isEqualTo("meeting-preparation-" + record.getId() + ".md");
         assertThat(result.todoIds()).hasSize(2);
+        assertThat(result.actionPlan().actions()).allSatisfy(action -> {
+            assertThat(action.approvalStatus()).isEqualTo("APPROVED");
+            assertThat(action.executionStatus()).isEqualTo("SUCCEEDED");
+        });
         verify(workspace).write(eq(RequestIdentityContext.require()), eq(result.documentPath()), content.capture());
         assertThat(new String(content.getValue().readAllBytes(), StandardCharsets.UTF_8))
                 .contains("# 项目周会 会议准备").contains("待办草案");
@@ -189,6 +218,10 @@ class MeetingPreparationServiceTest {
 
         assertThat(rejected.status()).isEqualTo("REJECTED");
         assertThat(rejected.rejectionReason()).isEqualTo("范围需要补充");
+        assertThat(rejected.actionPlan().actions()).allSatisfy(action -> {
+            assertThat(action.approvalStatus()).isEqualTo("REJECTED");
+            assertThat(action.executionStatus()).isEqualTo("NOT_STARTED");
+        });
         verify(workspace, never()).write(any(), anyString(), any(InputStream.class));
         verify(todos, never()).save(any());
     }
@@ -204,6 +237,10 @@ class MeetingPreparationServiceTest {
         assertThat(failed.status()).isEqualTo("FAILED");
         assertThat(failed.error()).contains("文档写入失败");
         assertThat(failed.documentPath()).isNull();
+        assertThat(failed.actionPlan().actions()).allSatisfy(action -> {
+            assertThat(action.approvalStatus()).isEqualTo("APPROVED");
+            assertThat(action.executionStatus()).isEqualTo("FAILED");
+        });
         verify(todos, never()).save(any());
     }
 

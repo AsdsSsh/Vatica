@@ -851,6 +851,85 @@ export interface CalendarEventView {
   rrule: string | null;
 }
 
+/** 迭代 26A：周报只读事实快照；26B 才会在此基础上生成草案。 */
+export interface WeeklyReportSourceView {
+  source: "CALENDAR" | "TODO" | "KNOWLEDGE" | string;
+  status: "READY" | "EMPTY" | "DEGRADED" | "NOT_SELECTED" | string;
+  recordCount: number;
+  note: string;
+}
+
+export interface WeeklyReportCalendarFact {
+  eventId: number;
+  title: string;
+  start: string;
+  end: string;
+  recurring: boolean;
+}
+
+export interface WeeklyReportTodoFact {
+  todoId: string;
+  title: string;
+  due: string;
+  done: boolean;
+  createdAt: string;
+}
+
+export interface WeeklyReportStatistics {
+  meetingCount: number;
+  todoCount: number;
+  completedTodoCount: number;
+  pendingTodoCount: number;
+  overdueTodoCount: number;
+}
+
+export interface WeeklyReportFactsView {
+  reportKey: string;
+  reportType: "WEEKLY" | "WORK_WEEK" | string;
+  from: string;
+  to: string;
+  sources: WeeklyReportSourceView[];
+  calendar: WeeklyReportCalendarFact[];
+  todos: WeeklyReportTodoFact[];
+  statistics: WeeklyReportStatistics;
+  userNotes: string;
+  warnings: string[];
+  collectedAt: string;
+}
+
+/** 迭代 26B：冻结事实快照后的可编辑周报草案。 */
+export interface WeeklyReportDraftView {
+  id: string;
+  status: "DRAFT" | string;
+  title: string;
+  focus: string;
+  risks: string;
+  nextPlan: string;
+  wordRequested: boolean;
+  excelRequested: boolean;
+  facts: WeeklyReportFactsView;
+  wordPreview: string | null;
+  excelPreview: string | null;
+  artifacts: ArtifactView[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 迭代 26C：批准前的周报导出计划；邮件动作只生成本地草稿，不发送。 */
+export interface WeeklyReportExportView {
+  id: string;
+  draftId: string;
+  status: "DRAFT" | "APPROVED" | "APPLIED" | "FAILED" | "CANCELLED" | string;
+  actionPlan: ActionPlanView;
+  mailTo: string | null;
+  mailSubject: string | null;
+  mailBody: string | null;
+  artifacts: ArtifactView[];
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** 迭代 24A：用户确认后才能创建会议准备草案的日历候选。 */
 export interface MeetingCandidate {
   eventId: number;
@@ -859,7 +938,47 @@ export interface MeetingCandidate {
   end: string;
 }
 
-export type MeetingPreparationStatus = "DRAFT" | "REJECTED" | "APPLIED" | "FAILED";
+export type MeetingPreparationStatus = "DRAFT" | "REJECTED" | "APPLIED" | "FAILED" | "CANCELLED";
+
+/** 迭代 25A：所有副作用在执行前都以可审阅动作计划返回。 */
+export interface ActionPlanItem {
+  id: string;
+  type: "WRITE_DOCUMENT" | "CREATE_TODO" | string;
+  purpose: string;
+  target: string;
+  expectedChange: string;
+  inputSummary: string;
+  requiredPermission: string;
+  risk: "LOW" | "MEDIUM" | "HIGH" | string;
+  idempotencyKey: string;
+  approvalStatus: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED" | string;
+  executionStatus: "NOT_STARTED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED" | string;
+  result: string | null;
+}
+
+export interface ActionPlanView {
+  id: string;
+  subjectType: string;
+  subjectId: string;
+  revision: number;
+  status: "PREVIEW" | "APPLIED" | "FAILED" | "REJECTED" | "CANCELLED" | string;
+  actions: ActionPlanItem[];
+}
+
+export interface ArtifactView {
+  id: string;
+  subjectType: string;
+  subjectId: string;
+  type: "DOCUMENT" | "TODO" | "DRAFT" | "FAILURE" | string;
+  name: string;
+  locator: string | null;
+  status: "PREVIEW" | "APPROVED" | "READY" | "FAILED" | "REJECTED" | "CANCELLED" | string;
+  summary: string | null;
+  sourceActionId: string | null;
+  idempotencyKey: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface MeetingPreparationView {
   id: string;
@@ -874,6 +993,8 @@ export interface MeetingPreparationView {
   todoIds: string[];
   rejectionReason: string | null;
   error: string | null;
+  actionPlan: ActionPlanView | null;
+  artifacts: ArtifactView[];
 }
 
 export interface MeetingPreparationEvidence {
@@ -947,12 +1068,25 @@ export async function approveMeetingPreparation(id: string): Promise<MeetingPrep
   return (await post(`/api/meeting-preparations/${encodeURIComponent(id)}/approve`, {})).json();
 }
 
+export async function retryMeetingPreparation(id: string): Promise<MeetingPreparationView> {
+  return (await post(`/api/meeting-preparations/${encodeURIComponent(id)}/retry`, {})).json();
+}
+
+export async function cancelMeetingPreparation(id: string): Promise<MeetingPreparationView> {
+  return (await post(`/api/meeting-preparations/${encodeURIComponent(id)}/cancel`, {})).json();
+}
+
 export async function rejectMeetingPreparation(id: string, reason?: string): Promise<MeetingPreparationView> {
   return (await post(`/api/meeting-preparations/${encodeURIComponent(id)}/reject`, { reason: reason || null })).json();
 }
 
 export async function fetchRecentMeetingPreparations(): Promise<MeetingPreparationView[]> {
   return (await getJson("/api/meeting-preparations")).json();
+}
+
+export async function fetchArtifacts(subjectType: string, subjectId: string): Promise<ArtifactView[]> {
+  const query = new URLSearchParams({ subjectType, subjectId });
+  return (await getJson(`/api/artifacts?${query.toString()}`)).json();
 }
 
 export async function fetchTodos(): Promise<TodoView[]> {
@@ -975,6 +1109,76 @@ export async function deleteTodo(id: string): Promise<void> {
 export async function fetchCalendarEvents(): Promise<CalendarEventView[]> {
   return (await getJson("/api/pim/events")).json();
 }
+
+export async function collectWeeklyReportFacts(body: {
+  from: string;
+  to: string;
+  reportType: "WEEKLY" | "WORK_WEEK";
+  includeCalendar: boolean;
+  includeTodos: boolean;
+  includeKnowledge: boolean;
+  userNotes: string;
+}): Promise<WeeklyReportFactsView> {
+  return (await post("/api/weekly-reports/facts", body)).json();
+}
+
+export async function createWeeklyReportDraft(body: {
+  from: string;
+  to: string;
+  reportType: "WEEKLY" | "WORK_WEEK";
+  includeCalendar: boolean;
+  includeTodos: boolean;
+  includeKnowledge: boolean;
+  userNotes: string;
+  title: string;
+  focus: string;
+  risks: string;
+  nextPlan: string;
+  wordRequested: boolean;
+  excelRequested: boolean;
+}): Promise<WeeklyReportDraftView> {
+  return (await post("/api/weekly-reports/drafts", body)).json();
+}
+
+export async function updateWeeklyReportDraft(id: string, body: {
+  title: string;
+  focus: string;
+  risks: string;
+  nextPlan: string;
+  wordRequested: boolean;
+  excelRequested: boolean;
+}): Promise<WeeklyReportDraftView> {
+  const res = await fetch(`${getApiBase()}/api/weekly-reports/drafts/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw await toRequestError(res, `更新周报草案失败（HTTP ${res.status}）`);
+  return res.json();
+}
+
+export async function prepareWeeklyReportExport(draftId: string, body: {
+  wordRequested: boolean;
+  excelRequested: boolean;
+  mailRequested: boolean;
+  mailTo: string;
+  mailSubject: string;
+}): Promise<WeeklyReportExportView> {
+  return (await post(`/api/weekly-reports/drafts/${encodeURIComponent(draftId)}/exports`, body)).json();
+}
+
+export async function approveWeeklyReportExport(id: string): Promise<WeeklyReportExportView> {
+  return (await post(`/api/weekly-reports/exports/${encodeURIComponent(id)}/approve`, {})).json();
+}
+
+export async function retryWeeklyReportExport(id: string): Promise<WeeklyReportExportView> {
+  return (await post(`/api/weekly-reports/exports/${encodeURIComponent(id)}/retry`, {})).json();
+}
+
+export async function cancelWeeklyReportExport(id: string): Promise<WeeklyReportExportView> {
+  return (await post(`/api/weekly-reports/exports/${encodeURIComponent(id)}/cancel`, {})).json();
+}
+
 export async function addCalendarEvent(body: Omit<CalendarEventView, "id">): Promise<CalendarEventView[]> {
   return (await post("/api/pim/events", body)).json();
 }

@@ -26,7 +26,8 @@ public class TodoRecord {
     @Column(nullable = false, updatable = false)
     private Long orgId;
 
-    @Column(nullable = false, length = 8)
+    /** 25B：动作恢复使用名称型 UUID 作为稳定外部标识，避免重复重试创建待办。 */
+    @Column(nullable = false, length = 36)
     private String todoId;
 
     @Column(nullable = false, length = 500)
