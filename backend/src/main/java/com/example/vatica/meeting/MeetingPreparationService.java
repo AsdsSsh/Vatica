@@ -22,6 +22,7 @@ import com.example.vatica.artifact.ArtifactView;
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
 import com.example.vatica.knowledge.KnowledgeBaseService;
+import com.example.vatica.permission.PermissionPolicyService;
 import com.example.vatica.tool.CalendarEventRecord;
 import com.example.vatica.tool.CalendarEventRecordRepository;
 import com.example.vatica.tool.IcsParser.CalendarEvent;
@@ -87,12 +88,13 @@ public class MeetingPreparationService {
     private final TodoRecordRepository todoRepository;
     private final ActionExecutionService actionExecutions;
     private final ArtifactService artifacts;
+    private final PermissionPolicyService permissionPolicy;
 
     @Autowired
     public MeetingPreparationService(CalendarEventRecordRepository eventRepository,
             MeetingPreparationRecordRepository preparationRepository, KnowledgeBaseService knowledge,
             ObjectMapper mapper, WorkspaceStore workspace, TodoRecordRepository todoRepository,
-            ActionExecutionService actionExecutions, ArtifactService artifacts) {
+            ActionExecutionService actionExecutions, ArtifactService artifacts, PermissionPolicyService permissionPolicy) {
         this.eventRepository = eventRepository;
         this.preparationRepository = preparationRepository;
         this.knowledge = knowledge;
@@ -101,13 +103,14 @@ public class MeetingPreparationService {
         this.todoRepository = todoRepository;
         this.actionExecutions = actionExecutions;
         this.artifacts = artifacts;
+        this.permissionPolicy = permissionPolicy;
     }
 
     /** 24C 单元测试与外部构造兼容；生产装配使用带动作仓库的完整构造器。 */
     public MeetingPreparationService(CalendarEventRecordRepository eventRepository,
             MeetingPreparationRecordRepository preparationRepository, KnowledgeBaseService knowledge,
             ObjectMapper mapper, WorkspaceStore workspace, TodoRecordRepository todoRepository) {
-        this(eventRepository, preparationRepository, knowledge, mapper, workspace, todoRepository, null, null);
+        this(eventRepository, preparationRepository, knowledge, mapper, workspace, todoRepository, null, null, null);
     }
 
     @Transactional(readOnly = true)
@@ -256,12 +259,14 @@ public class MeetingPreparationService {
         String documentPath = "meeting-preparation-" + record.getId() + ".md";
         if (actionExecutions.claim(plan, "document") == ActionExecutionService.Claim.EXECUTE) {
             try {
+                ensureWorkspaceWriteStillAllowed();
                 workspace.write(identity, documentPath,
                         new ByteArrayInputStream(draft.documentPreview().getBytes(StandardCharsets.UTF_8)));
                 actionExecutions.succeed(plan, "document", documentPath);
-            } catch (IOException e) {
-                actionExecutions.fail(plan, "document", "WORKSPACE_WRITE_FAILED", "准备文档写入失败，请检查工作区后重试。");
-                record.markFailed(null, "准备文档写入失败，请检查工作区后重试。");
+            } catch (IOException | IllegalStateException e) {
+                String message = e.getMessage() == null ? "工作区写入被拒绝。" : e.getMessage();
+                actionExecutions.fail(plan, "document", "WORKSPACE_WRITE_NOT_ALLOWED", message);
+                record.markFailed(null, "准备文档写入失败：" + message);
                 return persisted(record, draft, plan);
             }
         }
@@ -289,6 +294,15 @@ public class MeetingPreparationService {
         }
         record.markApplied(documentPath, encodeTodoIds(todoIds));
         return persisted(record, draft, plan);
+    }
+
+    /** 25D：批准不是永久权限；真正写入前重新读取服务端权限，覆盖用户刚刚回收写权限的情况。 */
+    private void ensureWorkspaceWriteStillAllowed() {
+        if (permissionPolicy == null) return;
+        boolean writable = permissionPolicy.current().workspaceRoots().stream().anyMatch(root -> root.write());
+        if (!writable) {
+            throw new IllegalStateException("当前工作区写权限已被回收，请重新授权后重试。");
+        }
     }
 
     private ActionPlanView plan(MeetingPreparationRecord record, MeetingPreparationDraft draft) {
