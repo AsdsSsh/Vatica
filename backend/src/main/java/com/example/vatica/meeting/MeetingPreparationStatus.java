@@ -9,5 +9,7 @@ public enum MeetingPreparationStatus {
     /** 已按批准后的差异写入准备文档与待办。 */
     APPLIED,
     /** 写入阶段失败；保留草案、失败原因和已知产物位置供人工处理。 */
-    FAILED
+    FAILED,
+    /** 用户放弃失败后的后续恢复；已完成动作的真实结果继续保留。 */
+    CANCELLED
 }

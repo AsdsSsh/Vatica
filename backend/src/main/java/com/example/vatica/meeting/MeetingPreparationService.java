@@ -13,8 +13,10 @@ import java.util.UUID;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import com.example.vatica.action.ActionPlanView;
+import com.example.vatica.action.ActionExecutionService;
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
 import com.example.vatica.knowledge.KnowledgeBaseService;
@@ -73,16 +75,27 @@ public class MeetingPreparationService {
     private final ObjectMapper mapper;
     private final WorkspaceStore workspace;
     private final TodoRecordRepository todoRepository;
+    private final ActionExecutionService actionExecutions;
 
+    @Autowired
     public MeetingPreparationService(CalendarEventRecordRepository eventRepository,
             MeetingPreparationRecordRepository preparationRepository, KnowledgeBaseService knowledge,
-            ObjectMapper mapper, WorkspaceStore workspace, TodoRecordRepository todoRepository) {
+            ObjectMapper mapper, WorkspaceStore workspace, TodoRecordRepository todoRepository,
+            ActionExecutionService actionExecutions) {
         this.eventRepository = eventRepository;
         this.preparationRepository = preparationRepository;
         this.knowledge = knowledge;
         this.mapper = mapper;
         this.workspace = workspace;
         this.todoRepository = todoRepository;
+        this.actionExecutions = actionExecutions;
+    }
+
+    /** 24C 单元测试与外部构造兼容；生产装配使用带动作仓库的完整构造器。 */
+    public MeetingPreparationService(CalendarEventRecordRepository eventRepository,
+            MeetingPreparationRecordRepository preparationRepository, KnowledgeBaseService knowledge,
+            ObjectMapper mapper, WorkspaceStore workspace, TodoRecordRepository todoRepository) {
+        this(eventRepository, preparationRepository, knowledge, mapper, workspace, todoRepository, null);
     }
 
     @Transactional(readOnly = true)
@@ -131,10 +144,7 @@ public class MeetingPreparationService {
         return view(preparationRepository.save(record));
     }
 
-    /**
-     * 24C：批准后才写入文档和待办。行级锁把重复点击串行化；已完成请求直接返回既有结果。
-     * 文件名只使用草案 ID，不拼接会议标题，避免文件名和路径边界问题。
-     */
+    /** 24C/25B：批准并执行动作计划；行级锁和稳定动作记录共同保证恢复不重复写入。 */
     @Transactional
     public MeetingPreparationView approve(String id) {
         RequestIdentity identity = RequestIdentityContext.require();
@@ -150,15 +160,25 @@ public class MeetingPreparationService {
         if (draft == null) {
             throw new IllegalStateException("操作失败：会议准备草案缺失，无法执行写入。");
         }
+        if (actionExecutions == null) {
+            return legacyApprove(identity, record, draft);
+        }
+        ActionPlanView plan = plan(record, draft);
+        actionExecutions.approve(plan);
+        return executeApproved(identity, record, draft, plan);
+    }
+
+    /** 兼容 24C 纯场景单测的旧执行路径；生产请求始终走 25B 动作记录。 */
+    private MeetingPreparationView legacyApprove(RequestIdentity identity, MeetingPreparationRecord record,
+            MeetingPreparationDraft draft) {
         String documentPath = "meeting-preparation-" + record.getId() + ".md";
         try {
             workspace.write(identity, documentPath,
                     new ByteArrayInputStream(draft.documentPreview().getBytes(StandardCharsets.UTF_8)));
         } catch (IOException e) {
-            record.markFailed(null, "准备文档写入失败，请检查工作区后重新创建草案。");
+            record.markFailed(null, "准备文档写入失败，请检查工作区后重试。");
             return view(preparationRepository.save(record));
         }
-
         try {
             List<String> todoIds = new ArrayList<>();
             for (TodoDraft todo : draft.todoDrafts()) {
@@ -171,10 +191,99 @@ public class MeetingPreparationService {
             record.markApplied(documentPath, encodeTodoIds(todoIds));
             return view(preparationRepository.save(record));
         } catch (RuntimeException e) {
-            // 工作区已写入的文档保留路径，避免把部分成功伪装成“未发生”；待办由事务负责回滚。
             record.markFailed(documentPath, "待办写入未完成；请检查本次会议准备的产物与待办后重新创建草案。");
             return view(preparationRepository.save(record));
         }
+    }
+
+    /** 25B：只恢复失败或中断动作；已成功动作由 claim() 跳过，父记录重新进入执行阶段。 */
+    @Transactional
+    public MeetingPreparationView retry(String id) {
+        RequestIdentity identity = RequestIdentityContext.require();
+        MeetingPreparationRecord record = preparationRepository.findForApproval(id, identity.userId())
+                .orElseThrow(() -> new MeetingPreparationNotFoundException(id));
+        if (record.getStatus() != MeetingPreparationStatus.FAILED) {
+            throw new IllegalStateException("操作失败：只有失败的会议准备可以重试。");
+        }
+        MeetingPreparationDraft draft = decode(record.getDraftJson());
+        if (draft == null) {
+            throw new IllegalStateException("操作失败：会议准备草案缺失，无法恢复。");
+        }
+        ActionPlanView plan = plan(record, draft);
+        actionExecutions.requeueRecoverable(plan);
+        record.resumeForRetry();
+        return executeApproved(identity, record, draft, plan);
+    }
+
+    /** 25B：失败后取消未开始动作；已经成功或失败的动作保持真实状态。 */
+    @Transactional
+    public MeetingPreparationView cancel(String id) {
+        RequestIdentity identity = RequestIdentityContext.require();
+        MeetingPreparationRecord record = preparationRepository.findForApproval(id, identity.userId())
+                .orElseThrow(() -> new MeetingPreparationNotFoundException(id));
+        if (record.getStatus() != MeetingPreparationStatus.FAILED) {
+            throw new IllegalStateException("操作失败：只有失败的会议准备可以取消后续恢复。");
+        }
+        MeetingPreparationDraft draft = decode(record.getDraftJson());
+        if (draft == null) {
+            throw new IllegalStateException("操作失败：会议准备草案缺失，无法取消恢复。");
+        }
+        actionExecutions.cancelNotStarted(plan(record, draft));
+        record.cancelRecovery("已取消未开始的恢复动作；已完成动作和失败原因仍保留。");
+        return view(preparationRepository.save(record));
+    }
+
+    private MeetingPreparationView executeApproved(RequestIdentity identity, MeetingPreparationRecord record,
+            MeetingPreparationDraft draft, ActionPlanView plan) {
+        String documentPath = "meeting-preparation-" + record.getId() + ".md";
+        if (actionExecutions.claim(plan, "document") == ActionExecutionService.Claim.EXECUTE) {
+            try {
+                workspace.write(identity, documentPath,
+                        new ByteArrayInputStream(draft.documentPreview().getBytes(StandardCharsets.UTF_8)));
+                actionExecutions.succeed(plan, "document", documentPath);
+            } catch (IOException e) {
+                actionExecutions.fail(plan, "document", "WORKSPACE_WRITE_FAILED", "准备文档写入失败，请检查工作区后重试。");
+                record.markFailed(null, "准备文档写入失败，请检查工作区后重试。");
+                return view(preparationRepository.save(record));
+            }
+        }
+
+        List<String> todoIds = new ArrayList<>();
+        for (int index = 0; index < draft.todoDrafts().size(); index++) {
+            String actionId = "todo-" + (index + 1);
+            String todoId = stableTodoId(plan, actionId);
+            try {
+                if (actionExecutions.claim(plan, actionId) == ActionExecutionService.Claim.EXECUTE) {
+                    TodoDraft todo = draft.todoDrafts().get(index);
+                    if (todoRepository.findByUserIdAndTodoId(identity.userId(), todoId).isEmpty()) {
+                        TodoTools.Todo created = new TodoTools.Todo(todoId, todo.title(), todo.due(), false,
+                                LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")));
+                        todoRepository.save(new TodoRecord(identity.userId(), identity.orgId(), created));
+                    }
+                    actionExecutions.succeed(plan, actionId, todoId);
+                }
+                todoIds.add(todoId);
+            } catch (RuntimeException e) {
+                actionExecutions.fail(plan, actionId, "TODO_WRITE_FAILED", "待办写入失败，请重试该动作。");
+                record.markFailed(documentPath, "待办写入未完成；已完成动作保留，失败动作可单独重试。");
+                return view(preparationRepository.save(record));
+            }
+        }
+        record.markApplied(documentPath, encodeTodoIds(todoIds));
+        return view(preparationRepository.save(record));
+    }
+
+    private ActionPlanView plan(MeetingPreparationRecord record, MeetingPreparationDraft draft) {
+        return ActionPlanView.meetingPreparation(record.getId(), record.getMeetingTitle(), record.getDocumentPath(),
+                draft.todoDrafts().stream().map(TodoDraft::title).toList(), decodeTodoIds(record.getTodoIdsJson()),
+                record.getStatus().name());
+    }
+
+    private String stableTodoId(ActionPlanView plan, String actionId) {
+        String key = plan.actions().stream().filter(action -> action.id().equals(actionId))
+                .map(ActionPlanView.ActionItemView::idempotencyKey).findFirst()
+                .orElseThrow(() -> new IllegalStateException("操作失败：待办动作幂等键缺失。"));
+        return UUID.nameUUIDFromBytes(key.getBytes(StandardCharsets.UTF_8)).toString();
     }
 
     /** 拒绝草案只记录用户反馈，不触发工作区或待办写入。 */
@@ -242,6 +351,7 @@ public class MeetingPreparationService {
         List<String> todoIds = decodeTodoIds(record.getTodoIdsJson());
         ActionPlanView actionPlan = ActionPlanView.meetingPreparation(record.getId(), record.getMeetingTitle(),
                 record.getDocumentPath(), todoTitles, todoIds, record.getStatus().name());
+        if (actionExecutions != null) actionPlan = actionExecutions.decorate(actionPlan);
         return new MeetingPreparationView(record.getId(), record.getStatus().name(), meeting, record.getUserGoal(),
                 record.isKnowledgeRequested(), instant(record.getCreatedAt()), instant(record.getUpdatedAt()),
                 draft, record.getDocumentPath(), todoIds, record.getRejectionReason(), record.getErrorMessage(), actionPlan);

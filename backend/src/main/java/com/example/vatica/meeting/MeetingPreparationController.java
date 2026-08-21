@@ -56,6 +56,18 @@ public class MeetingPreparationController {
         return service.approve(id);
     }
 
+    /** 25B：只重试失败或中断动作，复用此前用户已批准的不可变差异。 */
+    @PostMapping("/{id}/retry")
+    public MeetingPreparationService.MeetingPreparationView retry(@PathVariable String id) {
+        return service.retry(id);
+    }
+
+    /** 25B：取消失败后的未开始恢复动作，不回滚已经完成的副作用。 */
+    @PostMapping("/{id}/cancel")
+    public MeetingPreparationService.MeetingPreparationView cancel(@PathVariable String id) {
+        return service.cancel(id);
+    }
+
     @PostMapping("/{id}/reject")
     public MeetingPreparationService.MeetingPreparationView reject(@PathVariable String id,
             @RequestBody(required = false) RejectRequest request) {

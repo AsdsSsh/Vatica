@@ -21,6 +21,7 @@ public record ActionPlanView(String id, String subjectType, String subjectId, in
         String approvalStatus = switch (preparationStatus) {
             case "APPLIED", "FAILED" -> "APPROVED";
             case "REJECTED" -> "REJECTED";
+            case "CANCELLED" -> "CANCELLED";
             default -> "PENDING";
         };
         String documentExecutionStatus = executionStatus(preparationStatus, resultDocumentPath != null);
@@ -28,6 +29,7 @@ public record ActionPlanView(String id, String subjectType, String subjectId, in
             case "APPLIED" -> "APPLIED";
             case "FAILED" -> "FAILED";
             case "REJECTED" -> "REJECTED";
+            case "CANCELLED" -> "CANCELLED";
             default -> "PREVIEW";
         };
         var actions = new java.util.ArrayList<ActionItemView>();
@@ -56,6 +58,7 @@ public record ActionPlanView(String id, String subjectType, String subjectId, in
             case "APPLIED" -> "SUCCEEDED";
             case "FAILED" -> succeeded ? "SUCCEEDED" : "FAILED";
             case "REJECTED" -> "NOT_STARTED";
+            case "CANCELLED" -> "CANCELLED";
             default -> "NOT_STARTED";
         };
     }

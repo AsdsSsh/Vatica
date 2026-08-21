@@ -178,4 +178,22 @@ public class MeetingPreparationRecord {
         this.documentPath = nextDocumentPath;
         this.errorMessage = message;
     }
+
+    /** 25B：重试只允许从已批准但失败的不可变草案恢复，不需要重复批准同一差异。 */
+    public void resumeForRetry() {
+        if (status != MeetingPreparationStatus.FAILED) {
+            throw new IllegalStateException("操作失败：只有失败的会议准备可以重试。");
+        }
+        this.status = MeetingPreparationStatus.DRAFT;
+        this.errorMessage = null;
+    }
+
+    /** 25B：取消仅在失败后停止尚未开始的恢复动作，已执行结果仍可回看。 */
+    public void cancelRecovery(String message) {
+        if (status != MeetingPreparationStatus.FAILED) {
+            throw new IllegalStateException("操作失败：只有失败的会议准备可以取消后续恢复。");
+        }
+        this.status = MeetingPreparationStatus.CANCELLED;
+        this.errorMessage = message;
+    }
 }

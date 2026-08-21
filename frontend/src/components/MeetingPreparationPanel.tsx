@@ -36,6 +36,8 @@ import {
   fetchMeetingCandidates,
   isAuthExpiredError,
   rejectMeetingPreparation,
+  retryMeetingPreparation,
+  cancelMeetingPreparation,
   refreshMeetingPreparationDraft,
   type MeetingCandidate,
   type MeetingPreparationView,
@@ -59,18 +61,22 @@ const PREPARATION_STATUS: Record<string, { color: string; label: string }> = {
   APPLIED: { color: "success", label: "已写入" },
   REJECTED: { color: "default", label: "已拒绝" },
   FAILED: { color: "error", label: "写入失败" },
+  CANCELLED: { color: "default", label: "已取消恢复" },
 };
 
 const ACTION_APPROVAL_STATUS: Record<string, { color: string; label: string }> = {
   PENDING: { color: "processing", label: "待批准" },
   APPROVED: { color: "success", label: "已批准" },
   REJECTED: { color: "default", label: "已拒绝" },
+  CANCELLED: { color: "default", label: "已取消" },
 };
 
 const ACTION_EXECUTION_STATUS: Record<string, { color: string; label: string }> = {
   NOT_STARTED: { color: "default", label: "未执行" },
   SUCCEEDED: { color: "success", label: "已完成" },
   FAILED: { color: "error", label: "执行失败" },
+  RUNNING: { color: "processing", label: "执行中" },
+  CANCELLED: { color: "default", label: "已取消" },
 };
 
 function todayValue(): string {
@@ -196,6 +202,37 @@ export default function MeetingPreparationPanel({ open, onClose }: Props) {
     try {
       setPreparation(await rejectMeetingPreparation(preparation.id, rejectionReason.trim() || undefined));
       message.info("已拒绝草案，未创建文档或待办");
+    } catch (error) {
+      if (!isAuthExpiredError(error)) message.error((error as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function retryDraft() {
+    if (!preparation || preparation.status !== "FAILED" || submitting) return;
+    setSubmitting(true);
+    try {
+      const updated = await retryMeetingPreparation(preparation.id);
+      setPreparation(updated);
+      if (updated.status === "APPLIED") {
+        message.success("失败动作已恢复，会议准备已完成");
+      } else if (updated.status === "FAILED") {
+        message.error(updated.error || "恢复仍未完成，请查看失败动作");
+      }
+    } catch (error) {
+      if (!isAuthExpiredError(error)) message.error((error as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function cancelRecovery() {
+    if (!preparation || preparation.status !== "FAILED" || submitting) return;
+    setSubmitting(true);
+    try {
+      setPreparation(await cancelMeetingPreparation(preparation.id));
+      message.info("已取消未开始的恢复动作，已完成结果仍保留");
     } catch (error) {
       if (!isAuthExpiredError(error)) message.error((error as Error).message);
     } finally {
@@ -461,10 +498,17 @@ export default function MeetingPreparationPanel({ open, onClose }: Props) {
           {preparation.status === "FAILED" && (
             <Flex justify="space-between" align="center" wrap gap={8}>
               <Typography.Text type="danger"><ExclamationCircleOutlined /> {preparation.error || "会议准备写入失败"}</Typography.Text>
-              {preparation.documentPath && (
-                <Button icon={<DownloadOutlined />} onClick={() => void downloadDocument()}>下载已写入文档</Button>
-              )}
+              <Space wrap>
+                {preparation.documentPath && (
+                  <Button icon={<DownloadOutlined />} onClick={() => void downloadDocument()}>下载已写入文档</Button>
+                )}
+                <Button icon={<ReloadOutlined />} loading={submitting} onClick={() => void retryDraft()}>重试失败动作</Button>
+                <Button danger icon={<CloseOutlined />} loading={submitting} onClick={() => void cancelRecovery()}>取消恢复</Button>
+              </Space>
             </Flex>
+          )}
+          {preparation.status === "CANCELLED" && (
+            <Typography.Text type="secondary"><CloseOutlined /> 已取消未开始的恢复动作，已完成产物和失败记录仍保留</Typography.Text>
           )}
         </Flex>
       ) : null}

@@ -859,7 +859,7 @@ export interface MeetingCandidate {
   end: string;
 }
 
-export type MeetingPreparationStatus = "DRAFT" | "REJECTED" | "APPLIED" | "FAILED";
+export type MeetingPreparationStatus = "DRAFT" | "REJECTED" | "APPLIED" | "FAILED" | "CANCELLED";
 
 /** 迭代 25A：所有副作用在执行前都以可审阅动作计划返回。 */
 export interface ActionPlanItem {
@@ -971,6 +971,14 @@ export async function refreshMeetingPreparationDraft(id: string, body: {
 
 export async function approveMeetingPreparation(id: string): Promise<MeetingPreparationView> {
   return (await post(`/api/meeting-preparations/${encodeURIComponent(id)}/approve`, {})).json();
+}
+
+export async function retryMeetingPreparation(id: string): Promise<MeetingPreparationView> {
+  return (await post(`/api/meeting-preparations/${encodeURIComponent(id)}/retry`, {})).json();
+}
+
+export async function cancelMeetingPreparation(id: string): Promise<MeetingPreparationView> {
+  return (await post(`/api/meeting-preparations/${encodeURIComponent(id)}/cancel`, {})).json();
 }
 
 export async function rejectMeetingPreparation(id: string, reason?: string): Promise<MeetingPreparationView> {
