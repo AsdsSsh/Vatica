@@ -19,10 +19,15 @@ import {
 import { CheckCircleOutlined, ClockCircleOutlined, EditOutlined, FileTextOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import {
   collectWeeklyReportFacts,
+  approveWeeklyReportExport,
+  cancelWeeklyReportExport,
   createWeeklyReportDraft,
   isAuthExpiredError,
+  prepareWeeklyReportExport,
+  retryWeeklyReportExport,
   updateWeeklyReportDraft,
   type WeeklyReportDraftView,
+  type WeeklyReportExportView,
   type WeeklyReportFactsView,
   type WeeklyReportSourceView,
 } from "../api";
@@ -76,6 +81,10 @@ export default function WeeklyReportPanel({ open, onClose }: Props) {
   const [nextPlan, setNextPlan] = useState("");
   const [wordRequested, setWordRequested] = useState(true);
   const [excelRequested, setExcelRequested] = useState(true);
+  const [mailRequested, setMailRequested] = useState(false);
+  const [mailTo, setMailTo] = useState("");
+  const [mailSubject, setMailSubject] = useState("");
+  const [exportPlan, setExportPlan] = useState<WeeklyReportExportView | null>(null);
   const [loading, setLoading] = useState(false);
 
   function reset() {
@@ -93,6 +102,10 @@ export default function WeeklyReportPanel({ open, onClose }: Props) {
     setNextPlan("");
     setWordRequested(true);
     setExcelRequested(true);
+    setMailRequested(false);
+    setMailTo("");
+    setMailSubject("");
+    setExportPlan(null);
   }
 
   async function collect() {
@@ -166,6 +179,42 @@ export default function WeeklyReportPanel({ open, onClose }: Props) {
         excelRequested,
       }));
       message.success("周报草案已更新");
+    } catch (error) {
+      if (!isAuthExpiredError(error)) message.error((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function prepareExport() {
+    if (!draft) return;
+    setLoading(true);
+    try {
+      setExportPlan(await prepareWeeklyReportExport(draft.id, {
+        wordRequested,
+        excelRequested,
+        mailRequested,
+        mailTo,
+        mailSubject,
+      }));
+    } catch (error) {
+      if (!isAuthExpiredError(error)) message.error((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function runExportAction(action: "approve" | "retry" | "cancel") {
+    if (!exportPlan) return;
+    setLoading(true);
+    try {
+      const next = action === "approve"
+        ? await approveWeeklyReportExport(exportPlan.id)
+        : action === "retry"
+          ? await retryWeeklyReportExport(exportPlan.id)
+          : await cancelWeeklyReportExport(exportPlan.id);
+      setExportPlan(next);
+      if (next.status === "APPLIED") message.success("周报文件和邮件草稿已写入工作区");
     } catch (error) {
       if (!isAuthExpiredError(error)) message.error((error as Error).message);
     } finally {
@@ -262,21 +311,35 @@ export default function WeeklyReportPanel({ open, onClose }: Props) {
           )}
           <Divider plain>周报草案</Divider>
           <Flex vertical gap={10}>
-            <Input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={240} placeholder="周报标题（留空使用日期范围）" />
-            <Input.TextArea value={focus} onChange={(event) => setFocus(event.target.value)} maxLength={2000} autoSize={{ minRows: 2, maxRows: 5 }} placeholder="本周重点（留空使用确定性统计摘要）" />
-            <Input.TextArea value={risks} onChange={(event) => setRisks(event.target.value)} maxLength={2000} autoSize={{ minRows: 2, maxRows: 5 }} placeholder="风险与阻塞（留空按逾期待办生成）" />
-            <Input.TextArea value={nextPlan} onChange={(event) => setNextPlan(event.target.value)} maxLength={2000} autoSize={{ minRows: 2, maxRows: 5 }} placeholder="下周计划" />
+            <Input disabled={!!exportPlan} value={title} onChange={(event) => setTitle(event.target.value)} maxLength={240} placeholder="周报标题（留空使用日期范围）" />
+            <Input.TextArea disabled={!!exportPlan} value={focus} onChange={(event) => setFocus(event.target.value)} maxLength={2000} autoSize={{ minRows: 2, maxRows: 5 }} placeholder="本周重点（留空使用确定性统计摘要）" />
+            <Input.TextArea disabled={!!exportPlan} value={risks} onChange={(event) => setRisks(event.target.value)} maxLength={2000} autoSize={{ minRows: 2, maxRows: 5 }} placeholder="风险与阻塞（留空按逾期待办生成）" />
+            <Input.TextArea disabled={!!exportPlan} value={nextPlan} onChange={(event) => setNextPlan(event.target.value)} maxLength={2000} autoSize={{ minRows: 2, maxRows: 5 }} placeholder="下周计划" />
             <Flex justify="space-between" align="center" wrap="wrap" gap={8}>
               <Space wrap>
-                <Checkbox checked={wordRequested} onChange={(event) => setWordRequested(event.target.checked)}>Word 模板</Checkbox>
-                <Checkbox checked={excelRequested} onChange={(event) => setExcelRequested(event.target.checked)}>Excel 模板</Checkbox>
+                <Checkbox disabled={!!exportPlan} checked={wordRequested} onChange={(event) => setWordRequested(event.target.checked)}>Word 模板</Checkbox>
+                <Checkbox disabled={!!exportPlan} checked={excelRequested} onChange={(event) => setExcelRequested(event.target.checked)}>Excel 模板</Checkbox>
               </Space>
               {draft ? (
-                <Button type="primary" icon={<SaveOutlined />} loading={loading} onClick={() => void saveDraft()}>保存草案</Button>
+                <Space>
+                  <Button disabled={!!exportPlan} type="primary" icon={<SaveOutlined />} loading={loading} onClick={() => void saveDraft()}>保存草案</Button>
+                  {!exportPlan && <Button icon={<EditOutlined />} loading={loading} onClick={() => void prepareExport()}>生成导出计划</Button>}
+                </Space>
               ) : (
                 <Button type="primary" icon={<EditOutlined />} loading={loading} onClick={() => void createDraft()}>创建草案</Button>
               )}
             </Flex>
+            {draft && !exportPlan && (
+              <div style={{ display: "grid", gap: 8 }}>
+                <Checkbox checked={mailRequested} onChange={(event) => setMailRequested(event.target.checked)}>邮件草稿（只保存，不发送）</Checkbox>
+                {mailRequested && (
+                  <Flex gap={8} wrap="wrap">
+                    <Input value={mailTo} onChange={(event) => setMailTo(event.target.value)} maxLength={1000} placeholder="可选：收件人建议，多个地址用逗号分隔" />
+                    <Input value={mailSubject} onChange={(event) => setMailSubject(event.target.value)} maxLength={240} placeholder="可选：邮件主题" />
+                  </Flex>
+                )}
+              </div>
+            )}
           </Flex>
           {draft && (
             <>
@@ -297,12 +360,17 @@ export default function WeeklyReportPanel({ open, onClose }: Props) {
                     label: "Excel",
                     children: <pre className="vatica-mono" style={{ margin: 0, maxHeight: 330, overflow: "auto", padding: 12, background: "var(--vatica-surface)", border: "1px solid var(--vatica-border)", borderRadius: 6, whiteSpace: "pre-wrap" }}>{draft.excelPreview}</pre>,
                   }] : []),
+                  ...(exportPlan?.mailBody ? [{
+                    key: "mail",
+                    label: "邮件草稿",
+                    children: <pre className="vatica-mono" style={{ margin: 0, maxHeight: 330, overflow: "auto", padding: 12, background: "var(--vatica-surface)", border: "1px solid var(--vatica-border)", borderRadius: 6, whiteSpace: "pre-wrap" }}>{`收件人：${exportPlan.mailTo || "（待补充）"}\n主题：${exportPlan.mailSubject || ""}\n\n${exportPlan.mailBody}`}</pre>,
+                  }] : []),
                   {
                     key: "artifacts",
-                    label: `产物 ${draft.artifacts.length}`,
+                    label: `产物 ${(exportPlan?.artifacts ?? draft.artifacts).length}`,
                     children: <List
                       size="small"
-                      dataSource={draft.artifacts}
+                      dataSource={exportPlan?.artifacts ?? draft.artifacts}
                       renderItem={(item) => <List.Item>
                         <Flex justify="space-between" align="center" style={{ width: "100%" }} gap={8}>
                           <div><Typography.Text>{item.name}</Typography.Text><br /><Typography.Text type="secondary" style={{ fontSize: 11 }}>{item.summary}</Typography.Text></div>
@@ -313,7 +381,33 @@ export default function WeeklyReportPanel({ open, onClose }: Props) {
                   },
                 ]}
               />
-              <Alert type="info" showIcon message="26B 只保存草案和模板预览；Word/Excel 文件将在 26C 明确批准后写入工作区。" />
+              {!exportPlan && <Alert type="info" showIcon message="26B 只保存草案和模板预览；生成导出计划后仍需明确批准，邮件只保存草稿，不会发送。" />}
+              {exportPlan && (
+                <div style={{ marginTop: 10 }}>
+                  <Alert
+                    type={exportPlan.status === "FAILED" ? "error" : exportPlan.status === "APPLIED" ? "success" : "info"}
+                    showIcon
+                    message={`导出计划：${exportPlan.status === "DRAFT" ? "待批准" : exportPlan.status === "APPROVED" ? "执行中" : exportPlan.status === "APPLIED" ? "已完成" : exportPlan.status === "FAILED" ? "部分失败" : "已取消"}`}
+                    description={exportPlan.error || "Word/Excel 只会写入当前账号工作区；邮件动作只保存草稿，不调用发送接口。"}
+                  />
+                  <List
+                    size="small"
+                    style={{ marginTop: 8 }}
+                    dataSource={exportPlan.actionPlan.actions}
+                    renderItem={(item) => <List.Item>
+                      <Flex justify="space-between" align="center" style={{ width: "100%" }} gap={8}>
+                        <div><Typography.Text>{item.purpose}</Typography.Text><br /><Typography.Text type="secondary" style={{ fontSize: 11 }}>{item.expectedChange}</Typography.Text></div>
+                        <Space size={4}><Tag>{item.approvalStatus}</Tag><Tag color={item.executionStatus === "SUCCEEDED" ? "success" : item.executionStatus === "FAILED" ? "error" : "default"}>{item.executionStatus}</Tag></Space>
+                      </Flex>
+                    </List.Item>}
+                  />
+                  <Space style={{ marginTop: 8 }}>
+                    {(exportPlan.status === "DRAFT") && <Button type="primary" loading={loading} onClick={() => void runExportAction("approve")}>批准并导出</Button>}
+                    {exportPlan.status === "FAILED" && <Button type="primary" loading={loading} onClick={() => void runExportAction("retry")}>重试失败动作</Button>}
+                    {(exportPlan.status === "DRAFT" || exportPlan.status === "FAILED") && <Button danger loading={loading} onClick={() => void runExportAction("cancel")}>取消导出</Button>}
+                  </Space>
+                </div>
+              )}
             </>
           )}
         </div>

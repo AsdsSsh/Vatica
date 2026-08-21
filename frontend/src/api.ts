@@ -915,6 +915,21 @@ export interface WeeklyReportDraftView {
   updatedAt: string;
 }
 
+/** 迭代 26C：批准前的周报导出计划；邮件动作只生成本地草稿，不发送。 */
+export interface WeeklyReportExportView {
+  id: string;
+  draftId: string;
+  status: "DRAFT" | "APPROVED" | "APPLIED" | "FAILED" | "CANCELLED" | string;
+  actionPlan: ActionPlanView;
+  mailTo: string | null;
+  mailSubject: string | null;
+  mailBody: string | null;
+  artifacts: ArtifactView[];
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** 迭代 24A：用户确认后才能创建会议准备草案的日历候选。 */
 export interface MeetingCandidate {
   eventId: number;
@@ -1140,6 +1155,28 @@ export async function updateWeeklyReportDraft(id: string, body: {
   });
   if (!res.ok) throw await toRequestError(res, `更新周报草案失败（HTTP ${res.status}）`);
   return res.json();
+}
+
+export async function prepareWeeklyReportExport(draftId: string, body: {
+  wordRequested: boolean;
+  excelRequested: boolean;
+  mailRequested: boolean;
+  mailTo: string;
+  mailSubject: string;
+}): Promise<WeeklyReportExportView> {
+  return (await post(`/api/weekly-reports/drafts/${encodeURIComponent(draftId)}/exports`, body)).json();
+}
+
+export async function approveWeeklyReportExport(id: string): Promise<WeeklyReportExportView> {
+  return (await post(`/api/weekly-reports/exports/${encodeURIComponent(id)}/approve`, {})).json();
+}
+
+export async function retryWeeklyReportExport(id: string): Promise<WeeklyReportExportView> {
+  return (await post(`/api/weekly-reports/exports/${encodeURIComponent(id)}/retry`, {})).json();
+}
+
+export async function cancelWeeklyReportExport(id: string): Promise<WeeklyReportExportView> {
+  return (await post(`/api/weekly-reports/exports/${encodeURIComponent(id)}/cancel`, {})).json();
 }
 
 export async function addCalendarEvent(body: Omit<CalendarEventView, "id">): Promise<CalendarEventView[]> {

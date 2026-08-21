@@ -53,6 +53,47 @@ public record ActionPlanView(String id, String subjectType, String subjectId, in
                 List.copyOf(actions));
     }
 
+    /** 迭代 26C：周报文件导出和邮件草稿共用统一动作计划与幂等键。 */
+    public static ActionPlanView weeklyReportExport(String draftId, String title, boolean wordRequested,
+            boolean excelRequested, boolean mailRequested, String mailTo, String wordFilename,
+            String excelFilename, String mailFilename, String exportStatus) {
+        String planId = "weekly-report-export:" + draftId + ":v1";
+        String approvalStatus = switch (exportStatus) {
+            case "APPLIED", "FAILED" -> "APPROVED";
+            case "CANCELLED" -> "CANCELLED";
+            default -> "PENDING";
+        };
+        String planStatus = switch (exportStatus) {
+            case "APPLIED" -> "APPLIED";
+            case "FAILED" -> "FAILED";
+            case "CANCELLED" -> "CANCELLED";
+            case "APPROVED" -> "APPROVED";
+            default -> "PREVIEW";
+        };
+        var actions = new java.util.ArrayList<ActionItemView>();
+        if (wordRequested) {
+            actions.add(new ActionItemView("word", "WRITE_DOCUMENT", "导出 Word 周报",
+                    "当前用户工作区", "新增 " + wordFilename, "已冻结周报草案：" + title,
+                    "workspace:write", "MEDIUM", "weekly-report:" + draftId + ":word",
+                    approvalStatus, executionStatus(exportStatus, false), null));
+        }
+        if (excelRequested) {
+            actions.add(new ActionItemView("excel", "WRITE_TABLE", "导出 Excel 统计表",
+                    "当前用户工作区", "新增 " + excelFilename, "已冻结周报统计事实：" + title,
+                    "workspace:write", "MEDIUM", "weekly-report:" + draftId + ":excel",
+                    approvalStatus, executionStatus(exportStatus, false), null));
+        }
+        if (mailRequested) {
+            String recipient = mailTo == null || mailTo.isBlank() ? "待用户补充收件人" : mailTo;
+            actions.add(new ActionItemView("mail", "CREATE_MAIL_DRAFT", "保存邮件草稿（不发送）",
+                    "当前用户工作区", "新增 " + mailFilename + "；收件人：" + recipient,
+                    "邮件正文由已冻结周报摘要生成", "workspace:write", "LOW",
+                    "weekly-report:" + draftId + ":mail", approvalStatus,
+                    executionStatus(exportStatus, false), null));
+        }
+        return new ActionPlanView(planId, "WEEKLY_REPORT", draftId, 1, planStatus, List.copyOf(actions));
+    }
+
     private static String executionStatus(String preparationStatus, boolean succeeded) {
         return switch (preparationStatus) {
             case "APPLIED" -> "SUCCEEDED";
@@ -62,4 +103,5 @@ public record ActionPlanView(String id, String subjectType, String subjectId, in
             default -> "NOT_STARTED";
         };
     }
+
 }

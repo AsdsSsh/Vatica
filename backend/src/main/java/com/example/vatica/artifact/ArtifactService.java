@@ -79,6 +79,48 @@ public class ArtifactService {
                 null, subjectId + ":excel");
     }
 
+    /** 26C：导出动作完成后更新同一份周报产物索引；邮件只记录本地草稿，不代表已经发送。 */
+    @Transactional
+    public void syncWeeklyReportExport(RequestIdentity identity, String subjectId, ActionPlanView plan) {
+        for (ActionPlanView.ActionItemView action : plan.actions()) {
+            String artifactKey;
+            String type;
+            String name;
+            switch (action.type()) {
+                case "WRITE_DOCUMENT" -> {
+                    artifactKey = subjectId + ":word-preview";
+                    type = "DOCUMENT";
+                    name = "Word 周报";
+                }
+                case "WRITE_TABLE" -> {
+                    artifactKey = subjectId + ":excel-preview";
+                    type = "TABLE";
+                    name = "Excel 统计表";
+                }
+                case "CREATE_MAIL_DRAFT" -> {
+                    artifactKey = subjectId + ":mail-draft";
+                    type = "MAIL_DRAFT";
+                    name = "邮件草稿";
+                }
+                default -> {
+                    continue;
+                }
+            }
+            ArtifactStatus status = plan.status().equals("CANCELLED") ? ArtifactStatus.CANCELLED
+                    : artifactStatus(action);
+            String summary = switch (status) {
+                case READY -> "已由受控导出动作 " + action.id() + " 写入工作区。";
+                case FAILED -> action.result() == null ? "导出失败，保留失败动作供重试。" : action.result();
+                case CANCELLED -> "未执行或已取消；周报草案和已有产物仍保留。";
+                case APPROVED -> "已批准，等待导出动作执行。";
+                default -> "等待用户批准导出动作。";
+            };
+            upsert(identity, subjectId, WEEKLY_REPORT, artifactKey, type, name,
+                    "SUCCEEDED".equals(action.executionStatus()) ? action.result() : null, status, summary,
+                    action.id(), action.idempotencyKey());
+        }
+    }
+
     private void upsert(RequestIdentity identity, String subjectId, String subjectType, String artifactKey, String type,
             String name, String locator, ArtifactStatus status, String summary, String actionId, String idempotencyKey) {
         ArtifactRecord record = repository.findByUserIdAndArtifactKey(identity.userId(), artifactKey).orElse(null);
