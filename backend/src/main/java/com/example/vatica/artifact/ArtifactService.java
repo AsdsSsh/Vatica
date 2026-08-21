@@ -16,6 +16,7 @@ import com.example.vatica.auth.RequestIdentityContext;
 public class ArtifactService {
 
     public static final String MEETING_PREPARATION = "MEETING_PREPARATION";
+    public static final String WEEKLY_REPORT = "WEEKLY_REPORT";
 
     private final ArtifactRepository repository;
 
@@ -28,6 +29,15 @@ public class ArtifactService {
         RequestIdentity identity = RequestIdentityContext.require();
         if (subjectType == null || subjectType.isBlank() || subjectId == null || subjectId.isBlank()) {
             throw new IllegalArgumentException("操作失败：产物查询必须提供来源类型和来源 ID。");
+        }
+        return listForSubject(identity, subjectType, subjectId);
+    }
+
+    /** 已持有请求身份的业务服务可复用，避免为查询产物重复读取 ThreadLocal。 */
+    @Transactional(readOnly = true)
+    public List<ArtifactView> listForSubject(RequestIdentity identity, String subjectType, String subjectId) {
+        if (identity == null || identity.userId() == null) {
+            throw new IllegalArgumentException("操作失败：产物查询缺少用户身份。");
         }
         return repository.findByUserIdAndSubjectTypeAndSubjectIdOrderByUpdatedAtDesc(identity.userId(), subjectType,
                 subjectId).stream().map(ArtifactView::from).toList();
@@ -51,6 +61,22 @@ public class ArtifactService {
             upsert(identity, subjectId, MEETING_PREPARATION, subjectId + ":failure", "FAILURE", "会议准备执行失败",
                     null, ArtifactStatus.FAILED, error, null, null);
         }
+    }
+
+    /** 26B：周报草案只建立预览索引；26C 批准导出后再把文档/表格推进为 READY。 */
+    @Transactional
+    public void syncWeeklyReportDraft(RequestIdentity identity, String subjectId, boolean wordRequested,
+            boolean excelRequested, String wordPreview, String excelPreview) {
+        upsert(identity, subjectId, WEEKLY_REPORT, subjectId + ":draft", "DRAFT", "周报结构化草案", null,
+                ArtifactStatus.PREVIEW, "事实快照和用户编辑字段已保存", null, null);
+        upsert(identity, subjectId, WEEKLY_REPORT, subjectId + ":word-preview", "DOCUMENT", "Word 周报模板预览",
+                null, wordRequested ? ArtifactStatus.PREVIEW : ArtifactStatus.CANCELLED,
+                wordRequested ? "等待 26C 批准后导出，预览字符数 " + length(wordPreview) : "用户未选择 Word 交付物",
+                null, subjectId + ":word");
+        upsert(identity, subjectId, WEEKLY_REPORT, subjectId + ":excel-preview", "TABLE", "Excel 统计模板预览",
+                null, excelRequested ? ArtifactStatus.PREVIEW : ArtifactStatus.CANCELLED,
+                excelRequested ? "等待 26C 批准后导出，预览字符数 " + length(excelPreview) : "用户未选择 Excel 交付物",
+                null, subjectId + ":excel");
     }
 
     private void upsert(RequestIdentity identity, String subjectId, String subjectType, String artifactKey, String type,
@@ -82,5 +108,9 @@ public class ArtifactService {
             case "CANCELLED" -> ArtifactStatus.CANCELLED;
             default -> "APPROVED".equals(action.approvalStatus()) ? ArtifactStatus.APPROVED : ArtifactStatus.PREVIEW;
         };
+    }
+
+    private static int length(String value) {
+        return value == null ? 0 : value.length();
     }
 }

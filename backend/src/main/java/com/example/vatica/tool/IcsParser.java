@@ -293,7 +293,8 @@ public final class IcsParser {
     // ══════════════════════════════ 重复展开 ══════════════════════════════
 
     /** 展开事件在 [rangeStart, rangeEnd]（左闭右开重叠判定）内的所有发生。 */
-    static List<CalendarEvent> expand(CalendarEvent event, LocalDateTime rangeStart, LocalDateTime rangeEnd) {
+    /** 对外提供确定性的重复日程展开，供周报等只读聚合场景复用同一套范围语义。 */
+    public static List<CalendarEvent> expand(CalendarEvent event, LocalDateTime rangeStart, LocalDateTime rangeEnd) {
         Rrule r = event.rrule();
         if (r == null) {
             LocalDateTime end = event.end();

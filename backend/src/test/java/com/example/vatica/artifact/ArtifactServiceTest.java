@@ -61,6 +61,22 @@ class ArtifactServiceTest {
                 .hasMessageContaining("来源类型");
     }
 
+    @Test
+    void weeklyReportDraftIndexesBothSelectedAndCancelledDeliverables() {
+        when(repository.save(any(ArtifactRecord.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.syncWeeklyReportDraft(identity, "report-1", true, false, "# 周报", null);
+
+        ArgumentCaptor<ArtifactRecord> saved = ArgumentCaptor.forClass(ArtifactRecord.class);
+        verify(repository, times(3)).save(saved.capture());
+        assertThat(saved.getAllValues()).extracting(ArtifactRecord::getType)
+                .containsExactlyInAnyOrder("DRAFT", "DOCUMENT", "TABLE");
+        assertThat(saved.getAllValues()).filteredOn(record -> "DOCUMENT".equals(record.getType())).singleElement()
+                .extracting(ArtifactRecord::getStatus).isEqualTo(ArtifactStatus.PREVIEW);
+        assertThat(saved.getAllValues()).filteredOn(record -> "TABLE".equals(record.getType())).singleElement()
+                .extracting(ArtifactRecord::getStatus).isEqualTo(ArtifactStatus.CANCELLED);
+    }
+
     private static ActionPlanView plan() {
         return new ActionPlanView("meeting-preparation:prep-1:v1", "MEETING_PREPARATION", "prep-1", 1, "FAILED",
                 List.of(

@@ -851,6 +851,70 @@ export interface CalendarEventView {
   rrule: string | null;
 }
 
+/** 迭代 26A：周报只读事实快照；26B 才会在此基础上生成草案。 */
+export interface WeeklyReportSourceView {
+  source: "CALENDAR" | "TODO" | "KNOWLEDGE" | string;
+  status: "READY" | "EMPTY" | "DEGRADED" | "NOT_SELECTED" | string;
+  recordCount: number;
+  note: string;
+}
+
+export interface WeeklyReportCalendarFact {
+  eventId: number;
+  title: string;
+  start: string;
+  end: string;
+  recurring: boolean;
+}
+
+export interface WeeklyReportTodoFact {
+  todoId: string;
+  title: string;
+  due: string;
+  done: boolean;
+  createdAt: string;
+}
+
+export interface WeeklyReportStatistics {
+  meetingCount: number;
+  todoCount: number;
+  completedTodoCount: number;
+  pendingTodoCount: number;
+  overdueTodoCount: number;
+}
+
+export interface WeeklyReportFactsView {
+  reportKey: string;
+  reportType: "WEEKLY" | "WORK_WEEK" | string;
+  from: string;
+  to: string;
+  sources: WeeklyReportSourceView[];
+  calendar: WeeklyReportCalendarFact[];
+  todos: WeeklyReportTodoFact[];
+  statistics: WeeklyReportStatistics;
+  userNotes: string;
+  warnings: string[];
+  collectedAt: string;
+}
+
+/** 迭代 26B：冻结事实快照后的可编辑周报草案。 */
+export interface WeeklyReportDraftView {
+  id: string;
+  status: "DRAFT" | string;
+  title: string;
+  focus: string;
+  risks: string;
+  nextPlan: string;
+  wordRequested: boolean;
+  excelRequested: boolean;
+  facts: WeeklyReportFactsView;
+  wordPreview: string | null;
+  excelPreview: string | null;
+  artifacts: ArtifactView[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** 迭代 24A：用户确认后才能创建会议准备草案的日历候选。 */
 export interface MeetingCandidate {
   eventId: number;
@@ -1030,6 +1094,54 @@ export async function deleteTodo(id: string): Promise<void> {
 export async function fetchCalendarEvents(): Promise<CalendarEventView[]> {
   return (await getJson("/api/pim/events")).json();
 }
+
+export async function collectWeeklyReportFacts(body: {
+  from: string;
+  to: string;
+  reportType: "WEEKLY" | "WORK_WEEK";
+  includeCalendar: boolean;
+  includeTodos: boolean;
+  includeKnowledge: boolean;
+  userNotes: string;
+}): Promise<WeeklyReportFactsView> {
+  return (await post("/api/weekly-reports/facts", body)).json();
+}
+
+export async function createWeeklyReportDraft(body: {
+  from: string;
+  to: string;
+  reportType: "WEEKLY" | "WORK_WEEK";
+  includeCalendar: boolean;
+  includeTodos: boolean;
+  includeKnowledge: boolean;
+  userNotes: string;
+  title: string;
+  focus: string;
+  risks: string;
+  nextPlan: string;
+  wordRequested: boolean;
+  excelRequested: boolean;
+}): Promise<WeeklyReportDraftView> {
+  return (await post("/api/weekly-reports/drafts", body)).json();
+}
+
+export async function updateWeeklyReportDraft(id: string, body: {
+  title: string;
+  focus: string;
+  risks: string;
+  nextPlan: string;
+  wordRequested: boolean;
+  excelRequested: boolean;
+}): Promise<WeeklyReportDraftView> {
+  const res = await fetch(`${getApiBase()}/api/weekly-reports/drafts/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw await toRequestError(res, `更新周报草案失败（HTTP ${res.status}）`);
+  return res.json();
+}
+
 export async function addCalendarEvent(body: Omit<CalendarEventView, "id">): Promise<CalendarEventView[]> {
   return (await post("/api/pim/events", body)).json();
 }
