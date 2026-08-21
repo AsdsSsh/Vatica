@@ -17,6 +17,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 
 import com.example.vatica.action.ActionPlanView;
 import com.example.vatica.action.ActionExecutionService;
+import com.example.vatica.artifact.ArtifactService;
+import com.example.vatica.artifact.ArtifactView;
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
 import com.example.vatica.knowledge.KnowledgeBaseService;
@@ -58,7 +60,7 @@ public class MeetingPreparationService {
     public record MeetingPreparationView(String id, String status, MeetingCandidate meeting,
             String goal, boolean knowledgeRequested, String createdAt, String updatedAt,
             MeetingPreparationDraft draft, String documentPath, List<String> todoIds, String rejectionReason,
-            String error, ActionPlanView actionPlan) {
+            String error, ActionPlanView actionPlan, List<ArtifactView> artifacts) {
 
         /** 24A/24B 测试与外部调用兼容：没有动作计划时仍可构造旧版视图。 */
         public MeetingPreparationView(String id, String status, MeetingCandidate meeting, String goal,
@@ -66,6 +68,14 @@ public class MeetingPreparationService {
                 String documentPath, List<String> todoIds, String rejectionReason, String error) {
             this(id, status, meeting, goal, knowledgeRequested, createdAt, updatedAt, draft, documentPath, todoIds,
                     rejectionReason, error, null);
+        }
+
+        public MeetingPreparationView(String id, String status, MeetingCandidate meeting, String goal,
+                boolean knowledgeRequested, String createdAt, String updatedAt, MeetingPreparationDraft draft,
+                String documentPath, List<String> todoIds, String rejectionReason, String error,
+                ActionPlanView actionPlan) {
+            this(id, status, meeting, goal, knowledgeRequested, createdAt, updatedAt, draft, documentPath, todoIds,
+                    rejectionReason, error, actionPlan, List.of());
         }
     }
 
@@ -76,12 +86,13 @@ public class MeetingPreparationService {
     private final WorkspaceStore workspace;
     private final TodoRecordRepository todoRepository;
     private final ActionExecutionService actionExecutions;
+    private final ArtifactService artifacts;
 
     @Autowired
     public MeetingPreparationService(CalendarEventRecordRepository eventRepository,
             MeetingPreparationRecordRepository preparationRepository, KnowledgeBaseService knowledge,
             ObjectMapper mapper, WorkspaceStore workspace, TodoRecordRepository todoRepository,
-            ActionExecutionService actionExecutions) {
+            ActionExecutionService actionExecutions, ArtifactService artifacts) {
         this.eventRepository = eventRepository;
         this.preparationRepository = preparationRepository;
         this.knowledge = knowledge;
@@ -89,13 +100,14 @@ public class MeetingPreparationService {
         this.workspace = workspace;
         this.todoRepository = todoRepository;
         this.actionExecutions = actionExecutions;
+        this.artifacts = artifacts;
     }
 
     /** 24C 单元测试与外部构造兼容；生产装配使用带动作仓库的完整构造器。 */
     public MeetingPreparationService(CalendarEventRecordRepository eventRepository,
             MeetingPreparationRecordRepository preparationRepository, KnowledgeBaseService knowledge,
             ObjectMapper mapper, WorkspaceStore workspace, TodoRecordRepository todoRepository) {
-        this(eventRepository, preparationRepository, knowledge, mapper, workspace, todoRepository, null);
+        this(eventRepository, preparationRepository, knowledge, mapper, workspace, todoRepository, null, null);
     }
 
     @Transactional(readOnly = true)
@@ -130,8 +142,11 @@ public class MeetingPreparationService {
         MeetingPreparationRecord record = new MeetingPreparationRecord(UUID.randomUUID().toString(), identity,
                 event.getId(), calendar.summary(), calendar.start(), calendar.end(), goal,
                 Boolean.TRUE.equals(rawKnowledgeRequested));
-        record.replaceDraft(goal, Boolean.TRUE.equals(rawKnowledgeRequested), encode(buildDraft(record)));
-        return view(preparationRepository.save(record));
+        MeetingPreparationDraft draft = buildDraft(record);
+        record.replaceDraft(goal, Boolean.TRUE.equals(rawKnowledgeRequested), encode(draft));
+        MeetingPreparationRecord saved = preparationRepository.save(record);
+        syncArtifacts(identity, saved, draft);
+        return view(saved);
     }
 
     /** 用户调整目标或资料选项后，只重新生成预览；仍不产生任何外部副作用。 */
@@ -140,8 +155,11 @@ public class MeetingPreparationService {
         MeetingPreparationRecord record = owned(id);
         String goal = normalizeGoal(rawGoal);
         boolean knowledgeRequested = Boolean.TRUE.equals(rawKnowledgeRequested);
-        record.replaceDraft(goal, knowledgeRequested, encode(buildDraft(record)));
-        return view(preparationRepository.save(record));
+        MeetingPreparationDraft draft = buildDraft(record);
+        record.replaceDraft(goal, knowledgeRequested, encode(draft));
+        MeetingPreparationRecord saved = preparationRepository.save(record);
+        syncArtifacts(RequestIdentityContext.require(), saved, draft);
+        return view(saved);
     }
 
     /** 24C/25B：批准并执行动作计划；行级锁和稳定动作记录共同保证恢复不重复写入。 */
@@ -230,7 +248,7 @@ public class MeetingPreparationService {
         }
         actionExecutions.cancelNotStarted(plan(record, draft));
         record.cancelRecovery("已取消未开始的恢复动作；已完成动作和失败原因仍保留。");
-        return view(preparationRepository.save(record));
+        return persisted(record, draft, plan(record, draft));
     }
 
     private MeetingPreparationView executeApproved(RequestIdentity identity, MeetingPreparationRecord record,
@@ -244,7 +262,7 @@ public class MeetingPreparationService {
             } catch (IOException e) {
                 actionExecutions.fail(plan, "document", "WORKSPACE_WRITE_FAILED", "准备文档写入失败，请检查工作区后重试。");
                 record.markFailed(null, "准备文档写入失败，请检查工作区后重试。");
-                return view(preparationRepository.save(record));
+                return persisted(record, draft, plan);
             }
         }
 
@@ -266,11 +284,11 @@ public class MeetingPreparationService {
             } catch (RuntimeException e) {
                 actionExecutions.fail(plan, actionId, "TODO_WRITE_FAILED", "待办写入失败，请重试该动作。");
                 record.markFailed(documentPath, "待办写入未完成；已完成动作保留，失败动作可单独重试。");
-                return view(preparationRepository.save(record));
+                return persisted(record, draft, plan);
             }
         }
         record.markApplied(documentPath, encodeTodoIds(todoIds));
-        return view(preparationRepository.save(record));
+        return persisted(record, draft, plan);
     }
 
     private ActionPlanView plan(MeetingPreparationRecord record, MeetingPreparationDraft draft) {
@@ -291,7 +309,10 @@ public class MeetingPreparationService {
     public MeetingPreparationView reject(String id, String rawReason) {
         MeetingPreparationRecord record = owned(id);
         record.reject(normalizeReason(rawReason));
-        return view(preparationRepository.save(record));
+        MeetingPreparationDraft draft = decode(record.getDraftJson());
+        MeetingPreparationRecord saved = preparationRepository.save(record);
+        if (draft != null) syncArtifacts(RequestIdentityContext.require(), saved, draft);
+        return view(saved);
     }
 
     @Transactional(readOnly = true)
@@ -352,9 +373,27 @@ public class MeetingPreparationService {
         ActionPlanView actionPlan = ActionPlanView.meetingPreparation(record.getId(), record.getMeetingTitle(),
                 record.getDocumentPath(), todoTitles, todoIds, record.getStatus().name());
         if (actionExecutions != null) actionPlan = actionExecutions.decorate(actionPlan);
+        List<ArtifactView> artifactViews = artifacts == null ? List.of()
+                : artifacts.list(ArtifactService.MEETING_PREPARATION, record.getId());
         return new MeetingPreparationView(record.getId(), record.getStatus().name(), meeting, record.getUserGoal(),
                 record.isKnowledgeRequested(), instant(record.getCreatedAt()), instant(record.getUpdatedAt()),
-                draft, record.getDocumentPath(), todoIds, record.getRejectionReason(), record.getErrorMessage(), actionPlan);
+                draft, record.getDocumentPath(), todoIds, record.getRejectionReason(), record.getErrorMessage(), actionPlan,
+                artifactViews);
+    }
+
+    private MeetingPreparationView persisted(MeetingPreparationRecord record, MeetingPreparationDraft draft,
+            ActionPlanView plan) {
+        MeetingPreparationRecord saved = preparationRepository.save(record);
+        syncArtifacts(RequestIdentityContext.require(), saved, draft);
+        return view(saved);
+    }
+
+    private void syncArtifacts(RequestIdentity identity, MeetingPreparationRecord record,
+            MeetingPreparationDraft draft) {
+        if (artifacts == null) return;
+        ActionPlanView plan = plan(record, draft);
+        if (actionExecutions != null) plan = actionExecutions.decorate(plan);
+        artifacts.syncMeetingPreparation(identity, record.getId(), plan, record.getStatus().name(), record.getErrorMessage());
     }
 
     /** 只根据明确来源生成结构；议程和问题都是固定的准备建议，不会被标为会议事实。 */

@@ -1,0 +1,86 @@
+package com.example.vatica.artifact;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.example.vatica.action.ActionPlanView;
+import com.example.vatica.auth.RequestIdentity;
+import com.example.vatica.auth.RequestIdentityContext;
+
+/** 迭代 25C：统一维护场景产物索引，保留失败记录而不清除审计事实。 */
+@Service
+public class ArtifactService {
+
+    public static final String MEETING_PREPARATION = "MEETING_PREPARATION";
+
+    private final ArtifactRepository repository;
+
+    public ArtifactService(ArtifactRepository repository) {
+        this.repository = repository;
+    }
+
+    @Transactional(readOnly = true)
+    public List<ArtifactView> list(String subjectType, String subjectId) {
+        RequestIdentity identity = RequestIdentityContext.require();
+        if (subjectType == null || subjectType.isBlank() || subjectId == null || subjectId.isBlank()) {
+            throw new IllegalArgumentException("操作失败：产物查询必须提供来源类型和来源 ID。");
+        }
+        return repository.findByUserIdAndSubjectTypeAndSubjectIdOrderByUpdatedAtDesc(identity.userId(), subjectType,
+                subjectId).stream().map(ArtifactView::from).toList();
+    }
+
+    /** 会议准备每次状态变化都重建当前索引；失败键只更新为最新错误，历史动作记录仍单独保留。 */
+    @Transactional
+    public void syncMeetingPreparation(RequestIdentity identity, String subjectId, ActionPlanView plan,
+            String preparationStatus, String error) {
+        upsert(identity, subjectId, MEETING_PREPARATION, subjectId + ":draft", "DRAFT", "会议准备草案", null,
+                draftStatus(preparationStatus), "审批前的结构化会议准备草案", null, null);
+        for (ActionPlanView.ActionItemView action : plan.actions()) {
+            String type = "WRITE_DOCUMENT".equals(action.type()) ? "DOCUMENT" : "TODO";
+            ArtifactStatus status = artifactStatus(action);
+            String name = "DOCUMENT".equals(type) ? "会议准备文档" : action.expectedChange();
+            upsert(identity, subjectId, MEETING_PREPARATION, action.idempotencyKey(), type, name, action.result(), status,
+                    action.result() == null ? action.expectedChange() : "已由动作 " + action.id() + " 生成", action.id(),
+                    action.idempotencyKey());
+        }
+        if (error != null && !error.isBlank()) {
+            upsert(identity, subjectId, MEETING_PREPARATION, subjectId + ":failure", "FAILURE", "会议准备执行失败",
+                    null, ArtifactStatus.FAILED, error, null, null);
+        }
+    }
+
+    private void upsert(RequestIdentity identity, String subjectId, String subjectType, String artifactKey, String type,
+            String name, String locator, ArtifactStatus status, String summary, String actionId, String idempotencyKey) {
+        ArtifactRecord record = repository.findByUserIdAndArtifactKey(identity.userId(), artifactKey).orElse(null);
+        if (record == null) {
+            record = new ArtifactRecord(UUID.randomUUID().toString(), identity, subjectType, subjectId, type, artifactKey,
+                    name, locator, status, summary, actionId, idempotencyKey);
+        } else {
+            record.update(name, locator, status, summary, actionId, idempotencyKey);
+        }
+        repository.save(record);
+    }
+
+    private static ArtifactStatus draftStatus(String status) {
+        return switch (status) {
+            case "APPLIED" -> ArtifactStatus.READY;
+            case "FAILED" -> ArtifactStatus.FAILED;
+            case "REJECTED" -> ArtifactStatus.REJECTED;
+            case "CANCELLED" -> ArtifactStatus.CANCELLED;
+            default -> ArtifactStatus.PREVIEW;
+        };
+    }
+
+    private static ArtifactStatus artifactStatus(ActionPlanView.ActionItemView action) {
+        return switch (action.executionStatus()) {
+            case "SUCCEEDED" -> ArtifactStatus.READY;
+            case "FAILED" -> ArtifactStatus.FAILED;
+            case "CANCELLED" -> ArtifactStatus.CANCELLED;
+            default -> "APPROVED".equals(action.approvalStatus()) ? ArtifactStatus.APPROVED : ArtifactStatus.PREVIEW;
+        };
+    }
+}

@@ -872,8 +872,8 @@ export interface ActionPlanItem {
   requiredPermission: string;
   risk: "LOW" | "MEDIUM" | "HIGH" | string;
   idempotencyKey: string;
-  approvalStatus: "PENDING" | "APPROVED" | "REJECTED" | string;
-  executionStatus: "NOT_STARTED" | "SUCCEEDED" | "FAILED" | string;
+  approvalStatus: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED" | string;
+  executionStatus: "NOT_STARTED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED" | string;
   result: string | null;
 }
 
@@ -882,8 +882,23 @@ export interface ActionPlanView {
   subjectType: string;
   subjectId: string;
   revision: number;
-  status: "PREVIEW" | "APPLIED" | "FAILED" | "REJECTED" | string;
+  status: "PREVIEW" | "APPLIED" | "FAILED" | "REJECTED" | "CANCELLED" | string;
   actions: ActionPlanItem[];
+}
+
+export interface ArtifactView {
+  id: string;
+  subjectType: string;
+  subjectId: string;
+  type: "DOCUMENT" | "TODO" | "DRAFT" | "FAILURE" | string;
+  name: string;
+  locator: string | null;
+  status: "PREVIEW" | "APPROVED" | "READY" | "FAILED" | "REJECTED" | "CANCELLED" | string;
+  summary: string | null;
+  sourceActionId: string | null;
+  idempotencyKey: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface MeetingPreparationView {
@@ -900,6 +915,7 @@ export interface MeetingPreparationView {
   rejectionReason: string | null;
   error: string | null;
   actionPlan: ActionPlanView | null;
+  artifacts: ArtifactView[];
 }
 
 export interface MeetingPreparationEvidence {
@@ -987,6 +1003,11 @@ export async function rejectMeetingPreparation(id: string, reason?: string): Pro
 
 export async function fetchRecentMeetingPreparations(): Promise<MeetingPreparationView[]> {
   return (await getJson("/api/meeting-preparations")).json();
+}
+
+export async function fetchArtifacts(subjectType: string, subjectId: string): Promise<ArtifactView[]> {
+  const query = new URLSearchParams({ subjectType, subjectId });
+  return (await getJson(`/api/artifacts?${query.toString()}`)).json();
 }
 
 export async function fetchTodos(): Promise<TodoView[]> {

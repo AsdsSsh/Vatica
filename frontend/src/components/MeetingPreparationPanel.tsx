@@ -41,6 +41,7 @@ import {
   refreshMeetingPreparationDraft,
   type MeetingCandidate,
   type MeetingPreparationView,
+  type ArtifactView,
 } from "../api";
 import { useTheme } from "../theme";
 import Markdown from "./Markdown";
@@ -76,6 +77,15 @@ const ACTION_EXECUTION_STATUS: Record<string, { color: string; label: string }> 
   SUCCEEDED: { color: "success", label: "已完成" },
   FAILED: { color: "error", label: "执行失败" },
   RUNNING: { color: "processing", label: "执行中" },
+  CANCELLED: { color: "default", label: "已取消" },
+};
+
+const ARTIFACT_STATUS: Record<string, { color: string; label: string }> = {
+  PREVIEW: { color: "processing", label: "草案" },
+  APPROVED: { color: "gold", label: "已批准" },
+  READY: { color: "success", label: "可用" },
+  FAILED: { color: "error", label: "失败记录" },
+  REJECTED: { color: "default", label: "已拒绝" },
   CANCELLED: { color: "default", label: "已取消" },
 };
 
@@ -455,6 +465,34 @@ export default function MeetingPreparationPanel({ open, onClose }: Props) {
                         </Typography.Text>
                         {action.result && <Typography.Text type="success" style={{ fontSize: 11 }}>结果：{action.result}</Typography.Text>}
                       </Flex>
+                    </Flex>
+                  </List.Item>
+                );
+              }} />
+            </div>
+          )}
+
+          {preparation.artifacts.length > 0 && (
+            <div style={{ borderTop: "1px solid var(--vatica-border)", paddingTop: 10 }}>
+              <Flex justify="space-between" align="center" wrap gap={8}>
+                <Typography.Text strong><FileTextOutlined /> 交付物</Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {preparation.artifacts.length} 项，包含草案与执行记录
+                </Typography.Text>
+              </Flex>
+              <List size="small" dataSource={preparation.artifacts} renderItem={(artifact: ArtifactView) => {
+                const artifactStatus = ARTIFACT_STATUS[artifact.status] ?? { color: "default", label: artifact.status };
+                return (
+                  <List.Item style={{ alignItems: "flex-start", padding: "7px 0" }}>
+                    <Flex justify="space-between" align="center" gap={8} wrap style={{ width: "100%" }}>
+                      <Flex vertical gap={2} style={{ minWidth: 0, flex: 1 }}>
+                        <Typography.Text strong style={{ fontSize: 12 }}>{artifact.name}</Typography.Text>
+                        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                          {artifact.summary || "无附加说明"}
+                        </Typography.Text>
+                        {artifact.locator && <Typography.Text code style={{ fontSize: 11 }}>{artifact.locator}</Typography.Text>}
+                      </Flex>
+                      <Tag color={artifactStatus.color}>{artifactStatus.label}</Tag>
                     </Flex>
                   </List.Item>
                 );
