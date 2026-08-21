@@ -26,6 +26,7 @@ import {
   ExclamationCircleOutlined,
   FileTextOutlined,
   ReloadOutlined,
+  SafetyCertificateOutlined,
   SearchOutlined,
 } from "@ant-design/icons";
 import {
@@ -58,6 +59,18 @@ const PREPARATION_STATUS: Record<string, { color: string; label: string }> = {
   APPLIED: { color: "success", label: "已写入" },
   REJECTED: { color: "default", label: "已拒绝" },
   FAILED: { color: "error", label: "写入失败" },
+};
+
+const ACTION_APPROVAL_STATUS: Record<string, { color: string; label: string }> = {
+  PENDING: { color: "processing", label: "待批准" },
+  APPROVED: { color: "success", label: "已批准" },
+  REJECTED: { color: "default", label: "已拒绝" },
+};
+
+const ACTION_EXECUTION_STATUS: Record<string, { color: string; label: string }> = {
+  NOT_STARTED: { color: "default", label: "未执行" },
+  SUCCEEDED: { color: "success", label: "已完成" },
+  FAILED: { color: "error", label: "执行失败" },
 };
 
 function todayValue(): string {
@@ -365,6 +378,52 @@ export default function MeetingPreparationPanel({ open, onClose }: Props) {
               </List.Item>
             )} />
           </div>
+
+          {preparation.actionPlan && (
+            <div style={{ borderTop: "1px solid var(--vatica-border)", paddingTop: 10 }}>
+              <Flex justify="space-between" align="center" wrap gap={8}>
+                <Typography.Text strong><SafetyCertificateOutlined /> 执行动作</Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  计划版本 {preparation.actionPlan.revision}
+                </Typography.Text>
+              </Flex>
+              <List size="small" dataSource={preparation.actionPlan.actions} renderItem={(action) => {
+                const approval = ACTION_APPROVAL_STATUS[action.approvalStatus] ?? {
+                  color: "default", label: action.approvalStatus,
+                };
+                const execution = ACTION_EXECUTION_STATUS[action.executionStatus] ?? {
+                  color: "default", label: action.executionStatus,
+                };
+                return (
+                  <List.Item style={{ alignItems: "flex-start", padding: "9px 0" }}>
+                    <Flex vertical gap={4} style={{ width: "100%" }}>
+                      <Flex justify="space-between" align="center" wrap gap={6}>
+                        <Typography.Text strong style={{ fontSize: 13 }}>{action.purpose}</Typography.Text>
+                        <Space size={4} wrap>
+                          <Tag color={action.risk === "HIGH" ? "error" : "gold"}>{action.risk === "HIGH" ? "高风险" : "需确认"}</Tag>
+                          <Tag color={approval.color}>{approval.label}</Tag>
+                          <Tag color={execution.color}>{execution.label}</Tag>
+                        </Space>
+                      </Flex>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        {action.target} · {action.expectedChange}
+                      </Typography.Text>
+                      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                        输入：{action.inputSummary}
+                      </Typography.Text>
+                      <Flex gap={8} wrap align="center">
+                        <Typography.Text code style={{ fontSize: 11 }}>{action.requiredPermission}</Typography.Text>
+                        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                          幂等键：{action.idempotencyKey}
+                        </Typography.Text>
+                        {action.result && <Typography.Text type="success" style={{ fontSize: 11 }}>结果：{action.result}</Typography.Text>}
+                      </Flex>
+                    </Flex>
+                  </List.Item>
+                );
+              }} />
+            </div>
+          )}
 
           <div style={{ borderTop: "1px solid var(--vatica-border)", paddingTop: 10 }}>
             <Typography.Text strong>准备文档预览</Typography.Text>

@@ -861,6 +861,31 @@ export interface MeetingCandidate {
 
 export type MeetingPreparationStatus = "DRAFT" | "REJECTED" | "APPLIED" | "FAILED";
 
+/** 迭代 25A：所有副作用在执行前都以可审阅动作计划返回。 */
+export interface ActionPlanItem {
+  id: string;
+  type: "WRITE_DOCUMENT" | "CREATE_TODO" | string;
+  purpose: string;
+  target: string;
+  expectedChange: string;
+  inputSummary: string;
+  requiredPermission: string;
+  risk: "LOW" | "MEDIUM" | "HIGH" | string;
+  idempotencyKey: string;
+  approvalStatus: "PENDING" | "APPROVED" | "REJECTED" | string;
+  executionStatus: "NOT_STARTED" | "SUCCEEDED" | "FAILED" | string;
+  result: string | null;
+}
+
+export interface ActionPlanView {
+  id: string;
+  subjectType: string;
+  subjectId: string;
+  revision: number;
+  status: "PREVIEW" | "APPLIED" | "FAILED" | "REJECTED" | string;
+  actions: ActionPlanItem[];
+}
+
 export interface MeetingPreparationView {
   id: string;
   status: MeetingPreparationStatus;
@@ -874,6 +899,7 @@ export interface MeetingPreparationView {
   todoIds: string[];
   rejectionReason: string | null;
   error: string | null;
+  actionPlan: ActionPlanView | null;
 }
 
 export interface MeetingPreparationEvidence {

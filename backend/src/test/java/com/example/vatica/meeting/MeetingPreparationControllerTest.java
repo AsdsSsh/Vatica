@@ -16,6 +16,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import com.example.vatica.action.ActionPlanView;
 /** 迭代 24A：会议准备 API 的结构化输入与输出契约。 */
 class MeetingPreparationControllerTest {
 
@@ -29,7 +30,9 @@ class MeetingPreparationControllerTest {
                 List.of("确认决策项"), List.of("补充参会者"), List.of(), "# 项目周会");
         MeetingPreparationService.MeetingPreparationView draft = new MeetingPreparationService.MeetingPreparationView(
                 "prep-1", "DRAFT", candidate, "准备决策项", true, "2026-08-20T10:00:00Z",
-                "2026-08-20T10:00:00Z", preview, null, List.of(), null, null);
+                "2026-08-20T10:00:00Z", preview, null, List.of(), null, null,
+                ActionPlanView.meetingPreparation("prep-1", "项目周会", null,
+                        List.of("确认决策项"), List.of(), "DRAFT"));
         when(service.candidates("2026-08-24", "2026-08-24", "周会")).thenReturn(List.of(candidate));
         when(service.create(11L, "准备决策项", true)).thenReturn(draft);
         MockMvc mvc = MockMvcBuilders.standaloneSetup(new MeetingPreparationController(service)).build();
@@ -46,6 +49,8 @@ class MeetingPreparationControllerTest {
                 .andExpect(jsonPath("$.status").value("DRAFT"))
                 .andExpect(jsonPath("$.meeting.eventId").value(11))
                 .andExpect(jsonPath("$.draft.knowledgeStatus").value("NOT_REQUESTED"))
+                .andExpect(jsonPath("$.actionPlan.actions[0].approvalStatus").value("PENDING"))
+                .andExpect(jsonPath("$.actionPlan.actions[0].idempotencyKey").value("meeting-preparation:prep-1:document"))
                 .andExpect(jsonPath("$.todoIds").isArray());
 
         verify(service).candidates("2026-08-24", "2026-08-24", "周会");

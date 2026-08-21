@@ -14,6 +14,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.example.vatica.action.ActionPlanView;
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
 import com.example.vatica.knowledge.KnowledgeBaseService;
@@ -55,7 +56,16 @@ public class MeetingPreparationService {
     public record MeetingPreparationView(String id, String status, MeetingCandidate meeting,
             String goal, boolean knowledgeRequested, String createdAt, String updatedAt,
             MeetingPreparationDraft draft, String documentPath, List<String> todoIds, String rejectionReason,
-            String error) { }
+            String error, ActionPlanView actionPlan) {
+
+        /** 24A/24B 测试与外部调用兼容：没有动作计划时仍可构造旧版视图。 */
+        public MeetingPreparationView(String id, String status, MeetingCandidate meeting, String goal,
+                boolean knowledgeRequested, String createdAt, String updatedAt, MeetingPreparationDraft draft,
+                String documentPath, List<String> todoIds, String rejectionReason, String error) {
+            this(id, status, meeting, goal, knowledgeRequested, createdAt, updatedAt, draft, documentPath, todoIds,
+                    rejectionReason, error, null);
+        }
+    }
 
     private final CalendarEventRecordRepository eventRepository;
     private final MeetingPreparationRecordRepository preparationRepository;
@@ -226,10 +236,15 @@ public class MeetingPreparationService {
     private MeetingPreparationView view(MeetingPreparationRecord record) {
         MeetingCandidate meeting = new MeetingCandidate(record.getCalendarEventId(), record.getMeetingTitle(),
                 record.getMeetingStartAt().toString(), record.getMeetingEndAt().toString());
+        MeetingPreparationDraft draft = decode(record.getDraftJson());
+        List<String> todoTitles = draft == null ? List.of()
+                : draft.todoDrafts().stream().map(TodoDraft::title).toList();
+        List<String> todoIds = decodeTodoIds(record.getTodoIdsJson());
+        ActionPlanView actionPlan = ActionPlanView.meetingPreparation(record.getId(), record.getMeetingTitle(),
+                record.getDocumentPath(), todoTitles, todoIds, record.getStatus().name());
         return new MeetingPreparationView(record.getId(), record.getStatus().name(), meeting, record.getUserGoal(),
                 record.isKnowledgeRequested(), instant(record.getCreatedAt()), instant(record.getUpdatedAt()),
-                decode(record.getDraftJson()), record.getDocumentPath(), decodeTodoIds(record.getTodoIdsJson()), record.getRejectionReason(),
-                record.getErrorMessage());
+                draft, record.getDocumentPath(), todoIds, record.getRejectionReason(), record.getErrorMessage(), actionPlan);
     }
 
     /** 只根据明确来源生成结构；议程和问题都是固定的准备建议，不会被标为会议事实。 */
