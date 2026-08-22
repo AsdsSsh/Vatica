@@ -53,6 +53,7 @@ class KnowledgeBaseServiceTest {
         KnowledgeDocumentRecord hiddenDocument = document(22L, 9L, 8L, KnowledgeVisibility.PRIVATE, "私有.md");
         when(vectors.search(eq(identity), any(float[].class), eq(5))).thenReturn(List.of(
                 new KnowledgeVectorIndex.Match(11L, 0.91), new KnowledgeVectorIndex.Match(12L, 0.99)));
+        when(vectors.indexVersion()).thenReturn("pgvector-v1");
         when(chunks.findAllById(any())).thenReturn(List.of(visibleChunk, hiddenChunk));
         when(documents.findAllById(any())).thenReturn(List.of(visibleDocument, hiddenDocument));
 
@@ -64,7 +65,14 @@ class KnowledgeBaseServiceTest {
             assertThat(citation.sourcePath()).isEqualTo("docs/权限.md");
             assertThat(citation.startOffset()).isEqualTo(10);
             assertThat(citation.quote()).isEqualTo("权限策略原文");
+            assertThat(citation.sourceLocation()).isEqualTo("章节：“权限” · 字符 11-16");
+            assertThat(citation.snippet()).isEqualTo("权限策略原文");
+            assertThat(citation.documentVersion()).isEqualTo(1);
+            assertThat(citation.indexVersion()).isEqualTo("pgvector-v1");
+            assertThat(citation.accessScope()).isEqualTo("CURRENT_USER_OWNER");
         });
+        assertThat(result.indexVersion()).isEqualTo("pgvector-v1");
+        assertThat(result.accessScope()).isEqualTo("CURRENT_USER_PRIVATE_AND_ORG_SHARED");
     }
 
     @Test

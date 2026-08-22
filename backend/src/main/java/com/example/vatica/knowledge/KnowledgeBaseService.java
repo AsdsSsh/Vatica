@@ -59,27 +59,69 @@ public class KnowledgeBaseService {
         KnowledgeVisibility scope = visibility == null ? KnowledgeVisibility.PRIVATE : visibility;
         Path path = sandboxPolicy.resolveForRead(rawPath.trim(), "知识库导入需要读取该文件");
         String sourcePath = normalizedSourcePath(rawPath);
+        KnowledgeDocumentRecord document = documentRepository
+                .findByOrgIdAndUserIdAndSourcePath(identity.orgId(), identity.userId(), sourcePath)
+                .orElseGet(() -> new KnowledgeDocumentRecord(identity.orgId(), identity.userId(), scope,
+                        sourcePath, fileName(path), ""));
+        return indexDocument(document, path, scope, IndexMode.IMPORT);
+    }
+
+    /** 失败或中断的索引从授权原路径重新开始；不会绕过当前用户的工作区权限。 */
+    @Transactional
+    public DocumentView retryDocument(long id) {
+        return reindexOwnedDocument(id, false);
+    }
+
+    /** 显式重建即使 READY 文档也会重新读取、切片和写入向量，版本号递增。 */
+    @Transactional
+    public DocumentView rebuildDocument(long id) {
+        return reindexOwnedDocument(id, true);
+    }
+
+    private DocumentView reindexOwnedDocument(long id, boolean force) {
+        if (!properties.enabled()) {
+            throw new IllegalStateException("操作失败：知识库功能当前未启用。");
+        }
+        RequestIdentity identity = RequestIdentityContext.require();
+        KnowledgeDocumentRecord document = documentRepository.findByIdAndOrgIdAndUserId(id,
+                identity.orgId(), identity.userId())
+                .orElseThrow(() -> new IllegalArgumentException("操作失败：知识库文档不存在或无权操作。"));
+        if (!force && document.getStatus() == KnowledgeDocumentStatus.READY) {
+            throw new IllegalStateException("操作失败：文档已经就绪；如需重新生成索引，请使用重建操作。 ");
+        }
+        Path path = sandboxPolicy.resolveForRead(document.getSourcePath(), "知识库重试需要读取原授权文件");
+        return indexDocument(document, path, document.getVisibility(), force ? IndexMode.REBUILD : IndexMode.RETRY);
+    }
+
+    private DocumentView indexDocument(KnowledgeDocumentRecord document, Path path,
+            KnowledgeVisibility scope, IndexMode mode) {
         String text = readText(path);
         if (text.isBlank()) {
             throw new IllegalArgumentException("操作失败：知识库只支持导入非空文本或 Word 文档。");
         }
         String hash = sha256(text.getBytes(StandardCharsets.UTF_8));
-        KnowledgeDocumentRecord document = documentRepository
-                .findByOrgIdAndUserIdAndSourcePath(identity.orgId(), identity.userId(), sourcePath)
-                .orElseGet(() -> new KnowledgeDocumentRecord(identity.orgId(), identity.userId(), scope,
-                        sourcePath, fileName(path), hash));
-        if (document.getId() != null && document.getContentHash().equals(hash)
-                && document.getVisibility() == scope && document.getStatus() == KnowledgeDocumentStatus.READY) {
+        if (mode == IndexMode.IMPORT && document.getContentHash().equals(hash)
+                && document.getVisibility() == scope
+                && document.getStatus() == KnowledgeDocumentStatus.READY) {
             return view(document, chunkRepository.findByDocumentIdOrderByOrdinal(document.getId()).size());
         }
+        List<KnowledgeTextChunker.Chunk> chunks = chunker.chunk(text, properties);
         if (document.getId() != null) {
+            // 先清理旧向量和切片，保证一次文档只有一套可检索索引。
             vectorIndex.deleteDocument(document.getId());
             chunkRepository.deleteByDocumentId(document.getId());
-            document.beginReindex(hash, scope, fileName(path));
+            if (mode == IndexMode.RETRY) {
+                document.beginRetry(hash, scope, fileName(path));
+            } else {
+                document.beginReindex(hash, scope, fileName(path));
+            }
+        }
+        if (document.getId() == null) {
+            document.beginInitialIndex(hash, scope, fileName(path), chunks.size());
+        } else {
+            document.beginIndexing(chunks.size());
         }
         document = documentRepository.save(document);
-
-        List<KnowledgeTextChunker.Chunk> chunks = chunker.chunk(text, properties);
         if (chunks.isEmpty()) {
             document.failed("文档没有可索引的文本片段");
             documentRepository.save(document);
@@ -91,6 +133,8 @@ public class KnowledgeBaseService {
                 KnowledgeChunkRecord chunk = chunkRepository.save(new KnowledgeChunkRecord(document.getId(), ordinal++,
                         value.text(), value.heading(), value.startOffset(), value.endOffset()));
                 vectorIndex.upsert(document, chunk, embeddingService.embed(value.text()));
+                document.markChunkIndexed(ordinal);
+                documentRepository.save(document);
             }
             document.ready();
             documentRepository.save(document);
@@ -106,6 +150,8 @@ public class KnowledgeBaseService {
         }
         return view(document, document.getStatus() == KnowledgeDocumentStatus.READY ? chunks.size() : 0);
     }
+
+    private enum IndexMode { IMPORT, RETRY, REBUILD }
 
     @Transactional(readOnly = true)
     public List<DocumentView> listDocuments() {
@@ -147,6 +193,7 @@ public class KnowledgeBaseService {
         int used = 0;
         java.util.ArrayList<Citation> citations = new java.util.ArrayList<>();
         int citationNumber = 1;
+        String indexVersion = vectorIndex.indexVersion();
         for (KnowledgeVectorIndex.Match match : matches) {
             KnowledgeChunkRecord chunk = chunks.get(match.chunkId());
             KnowledgeDocumentRecord document = chunk == null ? null : documents.get(chunk.getDocumentId());
@@ -158,10 +205,11 @@ public class KnowledgeBaseService {
             }
             citations.add(new Citation("C" + citationNumber++, document.getId(), document.getSourceName(),
                     document.getSourcePath(), chunk.getId(), chunk.getHeading(), chunk.getStartOffset(),
-                    chunk.getEndOffset(), round(match.score()), chunk.getText()));
+                    chunk.getEndOffset(), round(match.score()), chunk.getText(), sourceLocation(chunk),
+                    snippet(chunk.getText()), document.getVersion(), indexVersion, accessScope(identity, document)));
             used += chunk.getText().length();
         }
-        return new SearchResult(query.trim(), List.copyOf(citations));
+        return new SearchResult(query.trim(), indexVersion, "CURRENT_USER_PRIVATE_AND_ORG_SHARED", List.copyOf(citations));
     }
 
     private static boolean visible(RequestIdentity identity, KnowledgeDocumentRecord document) {
@@ -224,21 +272,82 @@ public class KnowledgeBaseService {
     }
 
     private static DocumentView view(KnowledgeDocumentRecord document, int chunks) {
+        int total = document.getTotalChunks() > 0 ? document.getTotalChunks() : chunks;
+        int indexed = document.getStatus() == KnowledgeDocumentStatus.READY
+                ? total : Math.min(document.getIndexedChunks(), chunks);
+        int progress = total == 0 ? 0 : Math.min(100, Math.max(0, (indexed * 100) / total));
         return new DocumentView(document.getId(), document.getSourceName(), document.getSourcePath(),
                 document.getVisibility(), document.getContentHash(), document.getVersion(), document.getStatus(),
-                chunks, document.getErrorMessage(), document.getUpdatedAt().toString());
+                chunks, total, indexed, progress, document.getIndexAttempt(),
+                document.getErrorMessage(), document.getUpdatedAt().toString());
+    }
+
+    /** 引用位置统一使用一基字符范围；文档解析器无法可靠提供页码时用章节和字符位置替代。 */
+    private static String sourceLocation(KnowledgeChunkRecord chunk) {
+        String section = chunk.getHeading() == null || chunk.getHeading().isBlank()
+                ? "文档正文" : "章节：“" + chunk.getHeading() + "”";
+        return section + " · 字符 " + (chunk.getStartOffset() + 1) + "-" + chunk.getEndOffset();
+    }
+
+    private static String snippet(String text) {
+        String normalized = text == null ? "" : text.replaceAll("\\s+", " ").trim();
+        return normalized.length() <= 280 ? normalized : normalized.substring(0, 280) + "...";
+    }
+
+    /** 不暴露任意用户或组织标识，仅说明本条结果通过何种权限路径被当前请求者读取。 */
+    private static String accessScope(RequestIdentity identity, KnowledgeDocumentRecord document) {
+        return identity.userId().equals(document.getUserId()) ? "CURRENT_USER_OWNER" : "ORGANIZATION_SHARED";
     }
 
     public record DocumentView(Long id, String sourceName, String sourcePath, KnowledgeVisibility visibility,
-            String contentHash, int version, KnowledgeDocumentStatus status, int chunkCount, String errorMessage,
-            String updatedAt) {
+            String contentHash, int version, KnowledgeDocumentStatus status, int chunkCount, int totalChunks,
+            int indexedChunks, int progressPercent, int indexAttempt, String errorMessage, String updatedAt) {
+        /** 保持 19B/26D 测试和调用方的构造兼容；新字段按已完成切片推导。 */
+        public DocumentView(Long id, String sourceName, String sourcePath, KnowledgeVisibility visibility,
+                String contentHash, int version, KnowledgeDocumentStatus status, int chunkCount,
+                String errorMessage, String updatedAt) {
+            this(id, sourceName, sourcePath, visibility, contentHash, version, status, chunkCount, chunkCount,
+                    status == KnowledgeDocumentStatus.READY ? chunkCount : 0,
+                    status == KnowledgeDocumentStatus.READY ? 100 : 0, 1, errorMessage, updatedAt);
+        }
     }
 
-    public record SearchResult(String query, List<Citation> citations) {
+    public record SearchResult(String query, String indexVersion, String accessScope, List<Citation> citations) {
+        public SearchResult(String query, List<Citation> citations) {
+            this(query, "unknown", "CURRENT_USER_PRIVATE_AND_ORG_SHARED", citations);
+        }
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record Citation(String citationId, Long documentId, String documentName, String sourcePath,
-            Long chunkId, String heading, int startOffset, int endOffset, double score, String quote) {
+            Long chunkId, String heading, int startOffset, int endOffset, double score, String quote,
+            String sourceLocation, String snippet, int documentVersion, String indexVersion, String accessScope) {
+        public Citation(String citationId, Long documentId, String documentName, String sourcePath,
+                Long chunkId, String heading, int startOffset, int endOffset, double score, String quote,
+                String sourceLocation, String snippet, int documentVersion, String indexVersion, String accessScope) {
+            this.citationId = citationId;
+            this.documentId = documentId;
+            this.documentName = documentName;
+            this.sourcePath = sourcePath;
+            this.chunkId = chunkId;
+            this.heading = heading;
+            this.startOffset = startOffset;
+            this.endOffset = endOffset;
+            this.score = score;
+            this.quote = quote;
+            this.sourceLocation = sourceLocation;
+            this.snippet = snippet;
+            this.documentVersion = documentVersion;
+            this.indexVersion = indexVersion;
+            this.accessScope = accessScope;
+        }
+
+        public Citation(String citationId, Long documentId, String documentName, String sourcePath,
+                Long chunkId, String heading, int startOffset, int endOffset, double score, String quote) {
+            this(citationId, documentId, documentName, sourcePath, chunkId, heading, startOffset, endOffset, score,
+                    quote, (heading == null || heading.isBlank() ? "文档正文" : "章节：“" + heading + "”")
+                            + " · 字符 " + (startOffset + 1) + "-" + endOffset,
+                    KnowledgeBaseService.snippet(quote), 1, "unknown", "CURRENT_USER_PRIVATE_AND_ORG_SHARED");
+        }
     }
 }

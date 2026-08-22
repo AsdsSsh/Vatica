@@ -30,6 +30,24 @@ class JdbcKnowledgeVectorIndexTest {
                 .containsExactly(11L, 12L);
     }
 
+    @Test
+    void h2ReadinessIsExplicitlyMarkedAsLocalFallback() {
+        DriverManagerDataSource dataSource = new DriverManagerDataSource(
+                "jdbc:h2:mem:knowledge-readiness;MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "sa", "");
+        KnowledgeProperties properties = new KnowledgeProperties(
+                true, "local-hash", 3, 1024 * 1024, 100, 20, 2000, null);
+
+        JdbcKnowledgeVectorIndex index = new JdbcKnowledgeVectorIndex(new JdbcTemplate(dataSource), dataSource, properties);
+
+        assertThat(index.readiness().ready()).isTrue();
+        assertThat(index.readiness().postgres()).isFalse();
+        assertThat(index.readiness().extensionInstalled()).isFalse();
+        assertThat(index.readiness().indexReady()).isFalse();
+        assertThat(index.readiness().schemaVersion()).isEqualTo("h2-fallback-v1");
+        assertThat(index.indexVersion()).isEqualTo("h2-fallback-v1");
+        assertThat(index.readiness().message()).contains("H2");
+    }
+
     private static KnowledgeDocumentRecord document(long id, long orgId, long userId,
             KnowledgeVisibility visibility) {
         KnowledgeDocumentRecord document = mock(KnowledgeDocumentRecord.class);

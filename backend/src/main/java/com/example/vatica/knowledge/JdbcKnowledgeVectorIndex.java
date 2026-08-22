@@ -1,6 +1,9 @@
 package com.example.vatica.knowledge;
 
 import java.sql.Connection;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -27,6 +30,9 @@ public class JdbcKnowledgeVectorIndex implements KnowledgeVectorIndex {
 
     private static final Logger log = LoggerFactory.getLogger(JdbcKnowledgeVectorIndex.class);
     private static final String TABLE = "vatica_knowledge_vector";
+    private static final String METADATA_TABLE = "vatica_knowledge_index_meta";
+    private static final String SCHEMA_VERSION = "pgvector-v1";
+    private static final String INDEX_NAME = "idx_vatica_knowledge_vector_cosine";
 
     private final JdbcTemplate jdbc;
     private final DataSource dataSource;
@@ -34,9 +40,25 @@ public class JdbcKnowledgeVectorIndex implements KnowledgeVectorIndex {
     private final Map<Long, StoredVector> fallback = new ConcurrentHashMap<>();
     private volatile boolean postgres;
     private volatile boolean ready;
+    private volatile String indexVersion = "unknown";
+    private volatile Readiness readiness = Readiness.unavailable(false, "向量索引尚未初始化。");
 
-    /** 迭代 23C：供能力中心和任务工具目录读取的无副作用索引状态。 */
-    public record Readiness(boolean ready, boolean postgres) { }
+    /**
+     * 迭代 27A：把 pgvector 的扩展、索引、Schema 和 Embedding 配置指纹作为可审计就绪状态。
+     * 不返回数据库地址、账号或 API Key；H2 只标记为本地回退，不伪装成生产 pgvector。
+     */
+    public record Readiness(boolean ready, boolean postgres, boolean extensionInstalled, boolean indexReady,
+            String extensionVersion, String schemaVersion, String embeddingProvider, String embeddingModel,
+            int vectorDimensions, String configFingerprint, String message) {
+        public Readiness(boolean ready, boolean postgres) {
+            this(ready, postgres, postgres && ready, postgres && ready, null,
+                    postgres ? SCHEMA_VERSION : "h2-fallback-v1", null, null, 0, null, null);
+        }
+
+        static Readiness unavailable(boolean postgres, String message) {
+            return new Readiness(false, postgres, false, false, null, null, null, null, 0, null, message);
+        }
+    }
 
     public JdbcKnowledgeVectorIndex(JdbcTemplate jdbc, DataSource dataSource, KnowledgeProperties properties) {
         this.jdbc = jdbc;
@@ -46,7 +68,12 @@ public class JdbcKnowledgeVectorIndex implements KnowledgeVectorIndex {
     }
 
     public Readiness readiness() {
-        return new Readiness(ready, postgres);
+        return readiness;
+    }
+
+    @Override
+    public String indexVersion() {
+        return indexVersion;
     }
 
     private void initialize() {
@@ -55,27 +82,110 @@ public class JdbcKnowledgeVectorIndex implements KnowledgeVectorIndex {
             postgres = product.contains("postgres");
             if (product.contains("h2")) {
                 ready = true;
+                indexVersion = "h2-fallback-v1";
+                readiness = new Readiness(true, false, false, false, null, "h2-fallback-v1",
+                        properties.embeddingProvider(), embeddingModel(), properties.vectorDimensions(),
+                        configFingerprint(), "当前使用 H2 进程内向量回退，仅用于测试或离线开发。 ");
                 return;
             }
             if (!postgres) {
+                indexVersion = "unavailable";
                 log.error("知识库向量索引只支持 PostgreSQL/pgvector；当前数据库为 {}。", product);
+                readiness = Readiness.unavailable(false, "当前数据库不是 PostgreSQL，无法启用 pgvector。 ");
                 return;
             }
-            jdbc.execute("CREATE EXTENSION IF NOT EXISTS vector");
-            jdbc.execute("CREATE TABLE IF NOT EXISTS " + TABLE + " ("
-                    + "chunk_id BIGINT PRIMARY KEY, document_id BIGINT NOT NULL, "
-                    + "org_id BIGINT NOT NULL, user_id BIGINT NOT NULL, visibility VARCHAR(20) NOT NULL, "
-                    + "embedding vector(" + properties.vectorDimensions() + ") NOT NULL)");
-            try {
-                jdbc.execute("CREATE INDEX IF NOT EXISTS idx_vatica_knowledge_vector_cosine ON " + TABLE
-                        + " USING hnsw (embedding vector_cosine_ops)");
-            } catch (Exception indexError) {
-                // 旧版 pgvector 可能没有 HNSW；精确排序仍可用，索引优化不阻塞业务。
-                log.warn("知识库 HNSW 索引创建失败，将继续使用精确余弦检索：{}", indexError.getMessage());
+            String extensionVersion = extensionVersion();
+            if (extensionVersion == null) {
+                indexVersion = "unavailable";
+                readiness = Readiness.unavailable(true, "PostgreSQL 未安装 vector 扩展，知识检索保持不可用。 ");
+                return;
+            }
+            if (!tableExists(TABLE) || !tableExists(METADATA_TABLE)) {
+                indexVersion = SCHEMA_VERSION;
+                readiness = new Readiness(false, true, true, false, extensionVersion, SCHEMA_VERSION,
+                        properties.embeddingProvider(), embeddingModel(), properties.vectorDimensions(),
+                        configFingerprint(), "pgvector 扩展已安装，但知识库迁移尚未执行。请先执行 pgvector-index-v1.sql。 ");
+                return;
+            }
+            String fingerprint = configFingerprint();
+            Map<String, Object> metadata = readMetadata();
+            if (metadata.isEmpty()) {
+                indexVersion = SCHEMA_VERSION;
+                readiness = new Readiness(false, true, true, false, extensionVersion, SCHEMA_VERSION,
+                        properties.embeddingProvider(), embeddingModel(), properties.vectorDimensions(), fingerprint,
+                        "知识库索引元数据缺失，请执行迁移并写入实际 Embedding 配置。 ");
+                return;
+            } else if (!metadataMatches(metadata, fingerprint)) {
+                indexVersion = metadataIndexVersion(metadata);
+                readiness = new Readiness(false, true, true, false, extensionVersion, SCHEMA_VERSION,
+                        properties.embeddingProvider(), embeddingModel(), properties.vectorDimensions(), fingerprint,
+                        "Embedding 配置或索引版本已变化，必须重建知识库索引后才能检索。 ");
+                return;
             }
             ready = true;
+            indexVersion = metadataIndexVersion(metadata);
+            boolean indexReady = hasIndex();
+            readiness = new Readiness(true, true, true, indexReady, extensionVersion, SCHEMA_VERSION,
+                    properties.embeddingProvider(), embeddingModel(), properties.vectorDimensions(), fingerprint,
+                    indexReady ? "PostgreSQL pgvector 扩展、Schema 和 HNSW 索引已就绪。"
+                            : "PostgreSQL pgvector 已就绪，但 HNSW 索引不可用，将使用精确余弦检索。 ");
         } catch (Exception e) {
             log.error("pgvector 表初始化失败，知识库检索暂不可用：{}", e.getMessage());
+            ready = false;
+            indexVersion = "unavailable";
+            readiness = Readiness.unavailable(postgres, "pgvector Schema 检查失败，知识检索暂不可用。 ");
+        }
+    }
+
+    private String extensionVersion() {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT extversion FROM pg_extension WHERE extname = 'vector'");
+        return rows.isEmpty() ? null : String.valueOf(rows.get(0).get("extversion"));
+    }
+
+    private Map<String, Object> readMetadata() {
+        List<Map<String, Object>> rows = jdbc.queryForList("SELECT schema_version, embedding_provider, embedding_model, "
+                + "vector_dimensions, index_version, config_fingerprint FROM " + METADATA_TABLE + " WHERE id = 1");
+        return rows.isEmpty() ? Map.of() : rows.get(0);
+    }
+
+    private boolean tableExists(String table) {
+        return !jdbc.queryForList("SELECT table_name FROM information_schema.tables "
+                + "WHERE table_schema = current_schema() AND table_name = ?", table).isEmpty();
+    }
+
+    private boolean metadataMatches(Map<String, Object> metadata, String fingerprint) {
+        return SCHEMA_VERSION.equals(String.valueOf(metadata.get("schema_version")))
+                && SCHEMA_VERSION.equals(String.valueOf(metadata.get("index_version")))
+                && properties.embeddingProvider().equals(String.valueOf(metadata.get("embedding_provider")))
+                && embeddingModel().equals(String.valueOf(metadata.get("embedding_model")))
+                && properties.vectorDimensions() == ((Number) metadata.get("vector_dimensions")).intValue()
+                && fingerprint.equals(String.valueOf(metadata.get("config_fingerprint")));
+    }
+
+    private static String metadataIndexVersion(Map<String, Object> metadata) {
+        Object value = metadata.get("index_version");
+        return value == null || String.valueOf(value).isBlank() ? SCHEMA_VERSION : String.valueOf(value);
+    }
+
+    private boolean hasIndex() {
+        return !jdbc.queryForList("SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() AND indexname = ?",
+                INDEX_NAME).isEmpty();
+    }
+
+    private String embeddingModel() {
+        return "openai".equals(properties.embeddingProvider()) ? properties.openai().model() : "local-hash";
+    }
+
+    private String configFingerprint() {
+        String value = properties.embeddingProvider() + "|" + embeddingModel() + "|"
+                + properties.vectorDimensions() + "|" + properties.chunkSize() + "|" + properties.chunkOverlap()
+                + "|" + SCHEMA_VERSION;
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("操作失败：无法计算知识库配置指纹。", e);
         }
     }
 

@@ -398,7 +398,7 @@ export default function MeetingPreparationPanel({ open, onClose }: Props) {
               <List size="small" dataSource={draft.citations} renderItem={(citation) => (
                 <List.Item style={{ padding: "4px 0" }}>
                   <Typography.Text style={{ fontSize: 12 }}>
-                    [{citation.citationId}] {citation.documentName} · {citation.sourcePath}
+                    [{citation.citationId}] {citation.documentName} · {citation.sourcePath} · {citation.sourceLocation} · 索引 {citation.indexVersion}
                   </Typography.Text>
                 </List.Item>
               )} />

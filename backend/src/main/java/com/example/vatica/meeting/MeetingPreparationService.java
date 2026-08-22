@@ -48,7 +48,8 @@ public class MeetingPreparationService {
     public record Evidence(String type, String label, String sourceId, String detail) { }
 
     public record KnowledgeCitation(String citationId, String documentName, String sourcePath,
-            String heading, int startOffset, int endOffset, double score, String quote) { }
+            String heading, int startOffset, int endOffset, double score, String quote, String sourceLocation,
+            String snippet, int documentVersion, String indexVersion, String accessScope) { }
 
     /** 待办差异只是预览；24C 批准后才把它们写入用户待办。 */
     public record TodoDraft(String title, String due) { }
@@ -451,7 +452,8 @@ public class MeetingPreparationService {
             List<KnowledgeCitation> citations = result.citations().stream()
                     .map(citation -> new KnowledgeCitation(citation.citationId(), citation.documentName(),
                             citation.sourcePath(), citation.heading(), citation.startOffset(), citation.endOffset(),
-                            citation.score(), citation.quote()))
+                            citation.score(), citation.quote(), citation.sourceLocation(), citation.snippet(),
+                            citation.documentVersion(), citation.indexVersion(), citation.accessScope()))
                     .toList();
             String message = citations.isEmpty()
                     ? "已检索授权资料，但没有命中可引用片段；草案未补充资料结论。"

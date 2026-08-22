@@ -25,6 +25,8 @@ class KnowledgeToolsTest {
         assertThat(json).contains("\"citationId\":\"C1\"")
                 .contains("\"sourcePath\":\"docs/制度.md\"")
                 .contains("\"startOffset\":12")
+                .contains("\"sourceLocation\":\"章节：")
+                .contains("\"accessScope\":\"CURRENT_USER_PRIVATE_AND_ORG_SHARED\"")
                 .contains("报销超过一万元需要二级审批");
     }
 }
