@@ -1,0 +1,22 @@
+# ═══ 云端部署 profile：云 PostgreSQL + JWT 鉴权 + pgvector 知识库 ═══
+# 启动方式：$env:SPRING_PROFILES_ACTIVE = "cloud"; mvn spring-boot:run
+# 连接信息只从环境变量读取，不把云凭据写入仓库。
+spring:
+  config:
+    activate:
+      on-profile: cloud
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST}:${POSTGRES_PORT:5432}/${POSTGRES_DATABASE:vatica}
+    username: ${POSTGRES_USERNAME}
+    password: ${POSTGRES_PASSWORD}
+  jpa:
+    hibernate:
+      # 云库禁止启动时自动改表；业务表与 pgvector 表由受控迁移负责。
+      ddl-auto: validate
+    open-in-view: false
+
+vatica:
+  auth:
+    enabled: ${VATICA_AUTH_ENABLED:true}
+  knowledge:
+    enabled: ${VATICA_KNOWLEDGE_ENABLED:true}
