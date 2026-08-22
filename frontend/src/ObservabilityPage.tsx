@@ -28,6 +28,7 @@ import {
   ArrowLeftOutlined,
   BranchesOutlined,
   ClockCircleOutlined,
+  DownloadOutlined,
   ReloadOutlined,
   ThunderboltOutlined,
   WarningOutlined,
@@ -35,6 +36,7 @@ import {
 import {
   fetchObservabilityOverview,
   fetchObservabilityDiagnostics,
+  exportObservabilityDiagnostics,
   fetchObservabilityRunQuery,
   fetchObservabilityTrace,
   subscribeTaskEvents,
@@ -277,6 +279,15 @@ function TraceView({ spans, selectedSpan, diagnostics, onSelect }: {
 }) {
   const [viewMode, setViewMode] = useState<"waterfall" | "tree">("waterfall");
   const root = spans[0];
+  async function exportReport() {
+    if (!root?.traceId) return;
+    try {
+      const blob = await exportObservabilityDiagnostics(root.traceId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a"); link.href = url; link.download = "vatica-diagnostics.md"; link.click();
+      URL.revokeObjectURL(url);
+    } catch { /* 统一错误提示由全局鉴权事件处理，导出失败不影响观测浏览 */ }
+  }
   const spanColumns = [
     {
       title: "阶段", dataIndex: "spanType", width: 126,
@@ -297,7 +308,7 @@ function TraceView({ spans, selectedSpan, diagnostics, onSelect }: {
         <div><Button type="text" icon={<ArrowLeftOutlined />} onClick={() => { window.location.hash = "#/observability"; }}>运行列表</Button>
           <Typography.Title level={2}>Trace 详情</Typography.Title>
           <Typography.Text type="secondary" copyable>{root?.traceId ?? "未知 Trace"}</Typography.Text></div>
-        <div className="observability-trace-summary">{root && statusTag(spans.some((s) => s.status === "FAILED") ? "FAILED" : root.status)}
+        <div className="observability-trace-summary"><Button icon={<DownloadOutlined />} onClick={() => void exportReport()}>导出诊断</Button>{root && statusTag(spans.some((s) => s.status === "FAILED") ? "FAILED" : root.status)}
           <span>{spans.length} 个 Span</span><span>{formatMs(spans.reduce((sum, span) => sum + span.durationMs, 0))} 累计</span></div>
       </div>
       {spans.length === 0 ? <Empty description="Trace 不存在或不属于当前账号" /> : (

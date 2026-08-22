@@ -881,6 +881,14 @@ body {
 .observability-diagnosis-item strong { color: var(--vatica-text); font-size: 12px; }
 .observability-diagnosis-item small { color: var(--vatica-text-tertiary); font: 11px/1.5 var(--vatica-mono); }
 
+.observability-diagnosis-card { margin-top: 16px; }
+.observability-diagnosis-list { display: grid; gap: 8px; }
+.observability-diagnosis-item { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 10px 12px; border: 1px solid var(--vatica-border); border-radius: var(--vatica-radius-sm); background: var(--vatica-surface); color: var(--vatica-text-secondary); text-align: left; cursor: pointer; }
+.observability-diagnosis-item:hover { border-color: var(--vatica-warning); background: var(--vatica-warning-bg); }
+.observability-diagnosis-item span { display: grid; gap: 3px; min-width: 0; }
+.observability-diagnosis-item strong { color: var(--vatica-text); font-size: 12px; }
+.observability-diagnosis-item small { color: var(--vatica-text-tertiary); font: 11px/1.5 var(--vatica-mono); }
+
 .observability-detail-card .ant-card-head-title {
   overflow: hidden;
   color: var(--vatica-text);

@@ -1831,6 +1831,12 @@ export async function fetchObservabilityDiagnostics(query: Pick<ObservabilityRun
   return (await getJson("/api/observability/diagnostics?" + params.toString())).json();
 }
 
+export async function exportObservabilityDiagnostics(traceId: string): Promise<Blob> {
+  const res = await fetch(`${getApiBase()}/api/observability/diagnostics/export?traceId=${encodeURIComponent(traceId)}`, { headers: authHeaders() });
+  if (!res.ok) throw await toRequestError(res, `诊断报告导出失败（HTTP ${res.status}）`);
+  return res.blob();
+}
+
 export async function fetchObservabilityTrace(traceId: string): Promise<ObservabilitySpan[]> {
   return (await getJson("/api/observability/traces/" + encodeURIComponent(traceId))).json();
 }

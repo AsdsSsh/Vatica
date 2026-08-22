@@ -2,7 +2,12 @@ package com.example.vatica.observability;
 
 import java.util.List;
 import java.time.Instant;
+import java.nio.charset.StandardCharsets;
 
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -85,6 +90,41 @@ public class ObservabilityController {
                 parseInstant(from, "from"), parseInstant(to, "to"), traceId, taskId, status, spanType, null,
                 runtime, agentId, modelSlotId, skillId, errorCode, judgeVerdict, null, null, null,
                 0, 100, "startedAt", "asc"));
+    }
+
+    @GetMapping("/diagnostics/export")
+    public ResponseEntity<byte[]> exportDiagnostics(
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to,
+            @RequestParam(required = false) String traceId,
+            @RequestParam(required = false) String taskId,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String spanType,
+            @RequestParam(required = false) String runtime,
+            @RequestParam(required = false) String agentId,
+            @RequestParam(required = false) String modelSlotId,
+            @RequestParam(required = false) String skillId,
+            @RequestParam(required = false) String errorCode,
+            @RequestParam(required = false) String judgeVerdict) {
+        AgentObservabilityService.DiagnosisReport report = diagnostics(from, to, traceId, taskId, status, spanType,
+                runtime, agentId, modelSlotId, skillId, errorCode, judgeVerdict);
+        StringBuilder markdown = new StringBuilder("# Vatica Agent 事实诊断报告\n\n");
+        markdown.append("- 范围：").append(report.scope()).append("\n")
+                .append("- Span：").append(report.spanCount()).append("\n")
+                .append("- Run：").append(report.runCount()).append("\n")
+                .append("- 生成时间：").append(Instant.now()).append("\n\n")
+                .append("> 本报告只包含脱敏摘要和可定位标识，不包含原始 Prompt、模型响应或思维链。\n\n")
+                .append("## 事实证据\n\n");
+        if (report.findings().isEmpty()) markdown.append("未发现规则命中的慢点、失败、重试或质量风险。\n");
+        report.findings().forEach(finding -> markdown.append("- **").append(finding.severity()).append(" / ")
+                .append(finding.kind()).append("** ").append(finding.title()).append("：")
+                .append(finding.evidence()).append("（trace=").append(finding.traceId())
+                .append(finding.spanId() == null ? "" : ", span=" + finding.spanId()).append("）\n"));
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentDisposition(ContentDisposition.attachment().filename("vatica-diagnostics.md").build());
+        return ResponseEntity.ok().headers(headers)
+                .contentType(MediaType.parseMediaType("text/markdown;charset=UTF-8"))
+                .body(markdown.toString().getBytes(StandardCharsets.UTF_8));
     }
 
     @GetMapping("/traces/{traceId}")
