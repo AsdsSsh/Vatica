@@ -53,7 +53,7 @@ vatica:
   # enabled=false 为过渡期开关：前端登录页上线后云端部署置 true；
   # token-ttl 为 JWT 有效期，签名密钥由 .vatica/master.key 派生
   auth:
-    enabled: false
+    enabled: ${VATICA_AUTH_ENABLED:false}
     token-ttl: 12h
   tool:
     # 迭代 2.5：单次请求工具调用次数上限（AgentScope 工具策略护栏），防模型死循环烧 token
