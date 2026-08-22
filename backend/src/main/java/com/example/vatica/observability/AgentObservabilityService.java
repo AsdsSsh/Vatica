@@ -73,6 +73,14 @@ public class AgentObservabilityService {
             int totalPages, QueryAggregate aggregate, String sortBy, String direction) {
     }
 
+    public record DiagnosisFinding(String kind, String severity, String title, String evidence,
+            String traceId, String spanId, String taskId) {
+    }
+
+    public record DiagnosisReport(String scope, long spanCount, long runCount,
+            List<DiagnosisFinding> findings) {
+    }
+
     private final AgentSpanRecordRepository repository;
     private final AgentObservabilityRecorder recorder;
 
@@ -133,6 +141,45 @@ public class AgentObservabilityService {
         return new RunQueryPage(items, query.page(), query.size(), allRuns.size(),
                 allRuns.isEmpty() ? 0 : (int) Math.ceil((double) allRuns.size() / query.size()),
                 aggregate, query.sortBy(), query.direction());
+    }
+
+    /** 迭代 28C：只根据已记录的 Span 事实生成规则化诊断，不调用模型。 */
+    public DiagnosisReport diagnose(RequestIdentity identity, SpanQuery query) {
+        List<AgentSpanRecord> spans = repository.findAll(specification(identity, query),
+                Sort.by(Sort.Direction.ASC, "startedAt").and(Sort.by(Sort.Direction.ASC, "spanId")));
+        List<RunSummary> runs = summarizeAll(spans);
+        List<Long> durations = runs.stream().map(RunSummary::durationMs).sorted().toList();
+        long slowThreshold = Math.max(5_000, percentile(durations, .95));
+        List<DiagnosisFinding> findings = new java.util.ArrayList<>();
+        spans.stream().filter(s -> AgentSpanRecord.STATUS_FAILED.equals(s.getStatus())).forEach(span ->
+                findings.add(new DiagnosisFinding("FAILURE", "ERROR", "Span 执行失败",
+                        text(span.getErrorCode(), span.getErrorSummary(), "状态为 FAILED"), span.getTraceId(), span.getSpanId(), span.getTaskId())));
+        spans.stream().filter(s -> s.getDurationMs() >= slowThreshold).forEach(span ->
+                findings.add(new DiagnosisFinding("SLOW", "WARN", "Span 耗时位于慢点区间",
+                        "耗时 " + span.getDurationMs() + " ms，筛选结果 P95 阈值 " + slowThreshold + " ms。",
+                        span.getTraceId(), span.getSpanId(), span.getTaskId())));
+        spans.stream().filter(s -> s.getAttempt() > 1).forEach(span ->
+                findings.add(new DiagnosisFinding("RETRY", "WARN", "检测到重试或返工尝试",
+                        "attempt=" + span.getAttempt() + "，该事实来自 Span 执行次数。",
+                        span.getTraceId(), span.getSpanId(), span.getTaskId())));
+        spans.stream().filter(s -> s.getJudgeScore() != null && s.getJudgeScore() < 70).forEach(span ->
+                findings.add(new DiagnosisFinding("QUALITY", "WARN", "Judge 评分偏低",
+                        "Judge 分数 " + span.getJudgeScore() + "，结论 " + (span.getJudgeVerdict() == null ? "未记录" : span.getJudgeVerdict()) + "。",
+                        span.getTraceId(), span.getSpanId(), span.getTaskId())));
+        double medianCost = percentileDouble(runs.stream().map(RunSummary::costEstimate)
+                .filter(java.util.Objects::nonNull).sorted().toList(), .50);
+        runs.stream().filter(run -> run.costEstimate() != null && run.costEstimate() > 0
+                && (medianCost == 0 || run.costEstimate() > medianCost * 2)).forEach(run ->
+                findings.add(new DiagnosisFinding("COST", "INFO", "运行成本高于筛选结果中位数",
+                        "成本 " + run.costEstimate() + "，筛选结果中位数约 " + medianCost + "。",
+                        run.traceId(), null, run.taskId())));
+        return new DiagnosisReport(query.traceId() == null ? "FILTER" : "TRACE", spans.size(), runs.size(), List.copyOf(findings));
+    }
+
+    private static String text(String code, String summary, String fallback) {
+        if (code != null && summary != null) return code + "：" + summary;
+        if (code != null) return code;
+        return summary == null || summary.isBlank() ? fallback : summary;
     }
 
     private List<AgentSpanRecord> recentRecords(RequestIdentity identity) {
@@ -263,6 +310,12 @@ public class AgentObservabilityService {
         if (values.isEmpty()) {
             return 0;
         }
+        int index = Math.min(values.size() - 1, (int) Math.ceil(values.size() * percentile) - 1);
+        return values.get(Math.max(0, index));
+    }
+
+    private static double percentileDouble(List<Double> values, double percentile) {
+        if (values.isEmpty()) return 0d;
         int index = Math.min(values.size() - 1, (int) Math.ceil(values.size() * percentile) - 1);
         return values.get(Math.max(0, index));
     }

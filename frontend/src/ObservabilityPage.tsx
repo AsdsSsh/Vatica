@@ -34,10 +34,12 @@ import {
 } from "@ant-design/icons";
 import {
   fetchObservabilityOverview,
+  fetchObservabilityDiagnostics,
   fetchObservabilityRunQuery,
   fetchObservabilityTrace,
   subscribeTaskEvents,
   type ObservabilityOverview,
+  type ObservabilityDiagnosisReport,
   type ObservabilityRun,
   type ObservabilityRunQuery,
   type ObservabilityRunQueryPage,
@@ -87,6 +89,7 @@ export default function ObservabilityPage() {
   const [query, setQuery] = useState<ObservabilityRunQuery>({ page: 0, size: 12, sortBy: "startedAt", direction: "desc" });
   const [spans, setSpans] = useState<ObservabilitySpan[]>([]);
   const [selectedSpan, setSelectedSpan] = useState<ObservabilitySpan | null>(null);
+  const [diagnostics, setDiagnostics] = useState<ObservabilityDiagnosisReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const traceId = useMemo(() => {
@@ -100,15 +103,19 @@ export default function ObservabilityPage() {
     setError(null);
     try {
       if (traceId) {
-        const nextSpans = await fetchObservabilityTrace(traceId);
+        const [nextSpans, nextDiagnostics] = await Promise.all([
+          fetchObservabilityTrace(traceId), fetchObservabilityDiagnostics({ traceId }),
+        ]);
         setSpans(nextSpans);
         setSelectedSpan(nextSpans[0] ?? null);
+        setDiagnostics(nextDiagnostics);
       } else {
         const [nextOverview, nextQueryPage] = await Promise.all([
           fetchObservabilityOverview(20), fetchObservabilityRunQuery(query),
         ]);
         setOverview(nextOverview);
         setQueryPage(nextQueryPage);
+        setDiagnostics(null);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "观测数据加载失败");
@@ -171,7 +178,7 @@ export default function ObservabilityPage() {
           <Content className="observability-content">
             {error && <Alert type="error" showIcon title={error} className="observability-alert" />}
             {loading ? <div className="observability-loading"><Spin size="large" /></div>
-              : traceId ? <TraceView spans={spans} selectedSpan={selectedSpan} onSelect={setSelectedSpan} />
+              : traceId ? <TraceView spans={spans} selectedSpan={selectedSpan} diagnostics={diagnostics} onSelect={setSelectedSpan} />
                 : <OverviewView overview={overview} queryPage={queryPage} query={query}
                   onQueryChange={(next) => setQuery({ ...next, page: 0 })}
                   onPageChange={(page, size) => setQuery((current) => ({ ...current, page, size }))}
@@ -265,8 +272,8 @@ function MetricCard({ icon, label, value, suffix, progress, danger }: {
   );
 }
 
-function TraceView({ spans, selectedSpan, onSelect }: {
-  spans: ObservabilitySpan[]; selectedSpan: ObservabilitySpan | null; onSelect: (span: ObservabilitySpan) => void;
+function TraceView({ spans, selectedSpan, diagnostics, onSelect }: {
+  spans: ObservabilitySpan[]; selectedSpan: ObservabilitySpan | null; diagnostics: ObservabilityDiagnosisReport | null; onSelect: (span: ObservabilitySpan) => void;
 }) {
   const [viewMode, setViewMode] = useState<"waterfall" | "tree">("waterfall");
   const root = spans[0];
@@ -321,10 +328,22 @@ function TraceView({ spans, selectedSpan, onSelect }: {
             </Space> : <Empty description="暂无 Span" />}
           </Card></Col>
           </Row>
+          <DiagnosisPanel report={diagnostics} onSelect={(spanId) => { const span = spans.find((item) => item.spanId === spanId); if (span) onSelect(span); }} />
         </>
       )}
     </div>
   );
+}
+
+function DiagnosisPanel({ report, onSelect }: { report: ObservabilityDiagnosisReport | null; onSelect: (spanId: string) => void }) {
+  if (!report) return null;
+  return <Card className="observability-diagnosis-card" title="事实诊断" extra={<Typography.Text type="secondary">{report.findings.length} 条证据</Typography.Text>}>
+    {report.findings.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前 Trace 未发现规则命中的慢点、失败或质量风险" />
+      : <div className="observability-diagnosis-list">{report.findings.map((finding, index) => <button key={finding.spanId + finding.kind + index} className="observability-diagnosis-item" onClick={() => finding.spanId && onSelect(finding.spanId)}>
+        <Tag color={finding.severity === "ERROR" ? "error" : finding.severity === "WARN" ? "warning" : "blue"}>{finding.kind}</Tag>
+        <span><strong>{finding.title}</strong><small>{finding.evidence}</small></span>
+      </button>)}</div>}
+  </Card>;
 }
 
 function TraceWaterfall({ spans, selectedSpan, onSelect }: {

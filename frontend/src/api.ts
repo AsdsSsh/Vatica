@@ -1790,6 +1790,23 @@ export interface ObservabilityRunQueryPage {
   direction: string;
 }
 
+export interface ObservabilityDiagnosisFinding {
+  kind: "FAILURE" | "SLOW" | "RETRY" | "QUALITY" | "COST" | string;
+  severity: "ERROR" | "WARN" | "INFO" | string;
+  title: string;
+  evidence: string;
+  traceId: string;
+  spanId: string | null;
+  taskId: string | null;
+}
+
+export interface ObservabilityDiagnosisReport {
+  scope: string;
+  spanCount: number;
+  runCount: number;
+  findings: ObservabilityDiagnosisFinding[];
+}
+
 export async function fetchObservabilityOverview(limit = 20): Promise<ObservabilityOverview> {
   return (await getJson("/api/observability/overview?limit=" + limit)).json();
 }
@@ -1804,6 +1821,14 @@ export async function fetchObservabilityRunQuery(query: ObservabilityRunQuery = 
     if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
   }
   return (await getJson("/api/observability/spans?" + params.toString())).json();
+}
+
+export async function fetchObservabilityDiagnostics(query: Pick<ObservabilityRunQuery, "from" | "to" | "traceId" | "taskId" | "status" | "spanType" | "runtime" | "agentId" | "modelSlotId" | "skillId" | "errorCode" | "judgeVerdict"> = {}): Promise<ObservabilityDiagnosisReport> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
+  }
+  return (await getJson("/api/observability/diagnostics?" + params.toString())).json();
 }
 
 export async function fetchObservabilityTrace(traceId: string): Promise<ObservabilitySpan[]> {

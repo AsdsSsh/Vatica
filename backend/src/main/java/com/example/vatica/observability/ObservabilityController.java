@@ -66,6 +66,27 @@ public class ObservabilityController {
                 minJudgeScore, page, size, sortBy, direction));
     }
 
+    /** 迭代 28C：诊断只接受筛选事实，不接收或返回模型内部推理内容。 */
+    @GetMapping("/diagnostics")
+    public AgentObservabilityService.DiagnosisReport diagnostics(
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to,
+            @RequestParam(required = false) String traceId,
+            @RequestParam(required = false) String taskId,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String spanType,
+            @RequestParam(required = false) String runtime,
+            @RequestParam(required = false) String agentId,
+            @RequestParam(required = false) String modelSlotId,
+            @RequestParam(required = false) String skillId,
+            @RequestParam(required = false) String errorCode,
+            @RequestParam(required = false) String judgeVerdict) {
+        return service.diagnose(RequestIdentityContext.require(), new AgentObservabilityService.SpanQuery(
+                parseInstant(from, "from"), parseInstant(to, "to"), traceId, taskId, status, spanType, null,
+                runtime, agentId, modelSlotId, skillId, errorCode, judgeVerdict, null, null, null,
+                0, 100, "startedAt", "asc"));
+    }
+
     @GetMapping("/traces/{traceId}")
     public List<AgentObservabilityService.SpanView> trace(@PathVariable String traceId) {
         return service.trace(RequestIdentityContext.require(), traceId);

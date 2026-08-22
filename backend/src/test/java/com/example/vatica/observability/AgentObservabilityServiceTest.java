@@ -73,4 +73,25 @@ class AgentObservabilityServiceTest {
         assertThat(query.sortBy()).isEqualTo("startedAt");
         assertThat(query.direction()).isEqualTo("desc");
     }
+
+    @Test
+    void diagnosisExplainsRecordedFailureAndRetryFacts() {
+        AgentSpanRecordRepository repository = mock(AgentSpanRecordRepository.class);
+        AgentObservabilityRecorder recorder = mock(AgentObservabilityRecorder.class);
+        AgentObservabilityService service = new AgentObservabilityService(repository, recorder);
+        AgentSpanRecord failed = new AgentSpanRecord("span-f", "trace-f", null, "run-f", 17L, 21L, "task-f",
+                null, 2, "TOOL", "calendar", "AGENTSCOPE", "planner", "worker", null, "calendar", "1", "摘要");
+        failed.finish(AgentSpanRecord.STATUS_FAILED, Instant.parse("2026-08-22T08:01:00Z"), 8_000,
+                "失败", "TIMEOUT", "工具超时", 1, 2, 3, null, null, 0.2d, 55, "FAIL");
+        when(repository.findAll(org.mockito.ArgumentMatchers.<Specification<AgentSpanRecord>>any(),
+                org.mockito.ArgumentMatchers.<Sort>any())).thenReturn(List.of(failed));
+
+        AgentObservabilityService.DiagnosisReport report = service.diagnose(
+                new RequestIdentity(17L, 21L, "MEMBER", "learner"),
+                new AgentObservabilityService.SpanQuery(null, null, "trace-f", null, null, null, null,
+                        null, null, null, null, null, null, null, null, null, 0, 20, "startedAt", "desc"));
+
+        assertThat(report.findings()).extracting(AgentObservabilityService.DiagnosisFinding::kind)
+                .contains("FAILURE", "SLOW", "RETRY", "QUALITY");
+    }
 }
