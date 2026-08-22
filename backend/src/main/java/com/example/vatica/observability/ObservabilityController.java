@@ -1,6 +1,7 @@
 package com.example.vatica.observability;
 
 import java.util.List;
+import java.time.Instant;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -36,6 +37,35 @@ public class ObservabilityController {
         return service.runs(RequestIdentityContext.require(), limit);
     }
 
+    /** 迭代 28A：组合筛选和服务端分页；排序字段由服务端白名单收口。 */
+    @GetMapping("/spans")
+    public AgentObservabilityService.RunQueryPage spans(
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to,
+            @RequestParam(required = false) String traceId,
+            @RequestParam(required = false) String taskId,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String spanType,
+            @RequestParam(required = false) String name,
+            @RequestParam(required = false) String runtime,
+            @RequestParam(required = false) String agentId,
+            @RequestParam(required = false) String modelSlotId,
+            @RequestParam(required = false) String skillId,
+            @RequestParam(required = false) String errorCode,
+            @RequestParam(required = false) String judgeVerdict,
+            @RequestParam(required = false) Long minDurationMs,
+            @RequestParam(required = false) Long maxDurationMs,
+            @RequestParam(required = false) Integer minJudgeScore,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "startedAt") String sortBy,
+            @RequestParam(defaultValue = "desc") String direction) {
+        return service.queryRuns(RequestIdentityContext.require(), new AgentObservabilityService.SpanQuery(
+                parseInstant(from, "from"), parseInstant(to, "to"), traceId, taskId, status, spanType, name,
+                runtime, agentId, modelSlotId, skillId, errorCode, judgeVerdict, minDurationMs, maxDurationMs,
+                minJudgeScore, page, size, sortBy, direction));
+    }
+
     @GetMapping("/traces/{traceId}")
     public List<AgentObservabilityService.SpanView> trace(@PathVariable String traceId) {
         return service.trace(RequestIdentityContext.require(), traceId);
@@ -45,5 +75,14 @@ public class ObservabilityController {
     public List<AgentObservabilityService.SpanView> task(@PathVariable String taskId) {
         taskService.get(taskId); // 先走任务自身的租户校验，再读取 Span
         return service.task(RequestIdentityContext.require(), taskId);
+    }
+
+    private static Instant parseInstant(String raw, String field) {
+        if (raw == null || raw.isBlank()) return null;
+        try {
+            return Instant.parse(raw.trim());
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("操作失败：" + field + " 必须是 ISO-8601 时间。", e);
+        }
     }
 }

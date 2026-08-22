@@ -7,6 +7,8 @@ import {
   Col,
   ConfigProvider,
   Empty,
+  Input,
+  InputNumber,
   Layout,
   Progress,
   Row,
@@ -17,6 +19,7 @@ import {
   Tag,
   Tooltip,
   Typography,
+  Select,
   theme,
 } from "antd";
 import zhCN from "antd/locale/zh_CN";
@@ -30,11 +33,13 @@ import {
 } from "@ant-design/icons";
 import {
   fetchObservabilityOverview,
-  fetchObservabilityRuns,
+  fetchObservabilityRunQuery,
   fetchObservabilityTrace,
   subscribeTaskEvents,
   type ObservabilityOverview,
   type ObservabilityRun,
+  type ObservabilityRunQuery,
+  type ObservabilityRunQueryPage,
   type ObservabilitySpan,
 } from "./api";
 import { useTheme } from "./theme";
@@ -77,7 +82,8 @@ function spanColor(status: string): string {
 export default function ObservabilityPage() {
   const { isDark } = useTheme();
   const [overview, setOverview] = useState<ObservabilityOverview | null>(null);
-  const [runs, setRuns] = useState<ObservabilityRun[]>([]);
+  const [queryPage, setQueryPage] = useState<ObservabilityRunQueryPage | null>(null);
+  const [query, setQuery] = useState<ObservabilityRunQuery>({ page: 0, size: 12, sortBy: "startedAt", direction: "desc" });
   const [spans, setSpans] = useState<ObservabilitySpan[]>([]);
   const [selectedSpan, setSelectedSpan] = useState<ObservabilitySpan | null>(null);
   const [loading, setLoading] = useState(true);
@@ -97,11 +103,11 @@ export default function ObservabilityPage() {
         setSpans(nextSpans);
         setSelectedSpan(nextSpans[0] ?? null);
       } else {
-        const [nextOverview, nextRuns] = await Promise.all([
-          fetchObservabilityOverview(20), fetchObservabilityRuns(50),
+        const [nextOverview, nextQueryPage] = await Promise.all([
+          fetchObservabilityOverview(20), fetchObservabilityRunQuery(query),
         ]);
         setOverview(nextOverview);
-        setRuns(nextRuns);
+        setQueryPage(nextQueryPage);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "观测数据加载失败");
@@ -110,7 +116,7 @@ export default function ObservabilityPage() {
     }
   }
 
-  useEffect(() => { void load(); }, [traceId]);
+  useEffect(() => { void load(); }, [traceId, query]);
 
   useEffect(() => {
     const taskId = spans.find((span) => span.taskId)?.taskId;
@@ -165,7 +171,11 @@ export default function ObservabilityPage() {
             {error && <Alert type="error" showIcon title={error} className="observability-alert" />}
             {loading ? <div className="observability-loading"><Spin size="large" /></div>
               : traceId ? <TraceView spans={spans} selectedSpan={selectedSpan} onSelect={setSelectedSpan} />
-                : <OverviewView overview={overview} runs={runs} columns={columns} />}
+                : <OverviewView overview={overview} queryPage={queryPage} query={query}
+                  onQueryChange={(next) => setQuery({ ...next, page: 0 })}
+                  onPageChange={(page, size) => setQuery((current) => ({ ...current, page, size }))}
+                  onReset={() => setQuery({ page: 0, size: 12, sortBy: "startedAt", direction: "desc" })}
+                  columns={columns} />}
           </Content>
         </Layout>
       </AntApp>
@@ -173,15 +183,22 @@ export default function ObservabilityPage() {
   );
 }
 
-function OverviewView({ overview, runs, columns }: {
+function OverviewView({ overview, queryPage, query, onQueryChange, onPageChange, onReset, columns }: {
   overview: ObservabilityOverview | null;
-  runs: ObservabilityRun[];
+  queryPage: ObservabilityRunQueryPage | null;
+  query: ObservabilityRunQuery;
+  onQueryChange: (query: ObservabilityRunQuery) => void;
+  onPageChange: (page: number, size: number) => void;
+  onReset: () => void;
   columns: Array<Record<string, unknown>>;
 }) {
+  const runs = queryPage?.items ?? [];
+  const aggregate = queryPage?.aggregate;
   if (!overview && runs.length === 0) return <Empty description="暂无 Agent 执行记录" />;
-  const rate = overview ? Math.round(overview.successRate * 100) : 0;
+  const rate = aggregate ? Math.round(aggregate.successRate * 100) : Math.round((overview?.successRate ?? 0) * 100);
   return (
     <div className="observability-shell">
+      <QueryControls query={query} onChange={onQueryChange} onReset={onReset} />
       <div className="observability-page-title">
         <div><Typography.Title level={2}>运行总览</Typography.Title>
           <Typography.Text type="secondary">从任务 Run 到 Agent、工具和质量门禁的统一执行视图</Typography.Text></div>
@@ -189,21 +206,50 @@ function OverviewView({ overview, runs, columns }: {
           <strong>{formatWindow(overview?.windowStart ?? null, overview?.windowEnd ?? null)}</strong></div>
       </div>
       <Row gutter={[12, 12]} className="observability-metrics">
-        <Col xs={24} sm={12} lg={6}><MetricCard icon={<BranchesOutlined />} label="Runs" value={overview?.runCount ?? runs.length} suffix="次" /></Col>
+        <Col xs={24} sm={12} lg={6}><MetricCard icon={<BranchesOutlined />} label="筛选 Runs" value={aggregate?.runCount ?? overview?.runCount ?? runs.length} suffix="次" /></Col>
         <Col xs={24} sm={12} lg={6}><MetricCard icon={<ThunderboltOutlined />} label="成功率" value={rate} suffix="%" progress={rate} /></Col>
-        <Col xs={24} sm={12} lg={6}><MetricCard icon={<ClockCircleOutlined />} label="P50 / P95" value={formatMs(overview?.p50DurationMs ?? 0) + " / " + formatMs(overview?.p95DurationMs ?? 0)} /></Col>
-        <Col xs={24} sm={12} lg={6}><MetricCard icon={<WarningOutlined />} label="失败 Span" value={overview?.failedSpanCount ?? 0} suffix="个" danger /></Col>
+        <Col xs={24} sm={12} lg={6}><MetricCard icon={<ClockCircleOutlined />} label="P50 / P95" value={formatMs(aggregate?.p50DurationMs ?? overview?.p50DurationMs ?? 0) + " / " + formatMs(aggregate?.p95DurationMs ?? overview?.p95DurationMs ?? 0)} /></Col>
+        <Col xs={24} sm={12} lg={6}><MetricCard icon={<WarningOutlined />} label="失败 Span" value={aggregate?.failedSpanCount ?? overview?.failedSpanCount ?? 0} suffix="个" danger /></Col>
       </Row>
       <div className="observability-section-heading">
         <div><Typography.Title level={4}>最近运行</Typography.Title><Typography.Text type="secondary">点击 Trace 查看完整阶段链路</Typography.Text></div>
-        <Space size={18}><span>Tokens <strong>{(overview?.totalTokens ?? 0).toLocaleString()}</strong></span><span>观测丢弃 <strong>{overview?.droppedSpanWrites ?? 0}</strong></span></Space>
+        <Space size={18}><span>Tokens <strong>{(aggregate?.totalTokens ?? overview?.totalTokens ?? 0).toLocaleString()}</strong></span><span>成本 <strong>{(aggregate?.totalCost ?? overview?.totalCost ?? 0).toFixed(4)}</strong></span><span>观测丢弃 <strong>{overview?.droppedSpanWrites ?? 0}</strong></span></Space>
       </div>
       <Card className="observability-table-card" styles={{ body: { padding: 0 } }}>
         <Table<ObservabilityRun> rowKey="traceId" columns={columns as never} dataSource={runs}
-          pagination={{ pageSize: 12, showSizeChanger: false }} locale={{ emptyText: "暂无运行记录" }} scroll={{ x: 900 }} />
+          pagination={{ current: (queryPage?.page ?? 0) + 1, pageSize: queryPage?.size ?? 12,
+            total: queryPage?.totalRuns ?? runs.length, showSizeChanger: true,
+            onChange: (page, size) => onPageChange(page - 1, size) }}
+          locale={{ emptyText: "暂无运行记录" }} scroll={{ x: 900 }} />
       </Card>
     </div>
   );
+}
+
+function QueryControls({ query, onChange, onReset }: {
+  query: ObservabilityRunQuery;
+  onChange: (query: ObservabilityRunQuery) => void;
+  onReset: () => void;
+}) {
+  const patch = (value: Partial<ObservabilityRunQuery>) => onChange({ ...query, ...value });
+  return <div className="observability-query-toolbar">
+    <Input placeholder="任务 ID" value={query.taskId ?? ""} onChange={(e) => patch({ taskId: e.target.value || undefined })} allowClear style={{ width: 170 }} />
+    <Input placeholder="Agent / 工具名称" value={query.name ?? ""} onChange={(e) => patch({ name: e.target.value || undefined })} allowClear style={{ width: 190 }} />
+    <Select allowClear placeholder="状态" value={query.status} onChange={(value) => patch({ status: value })} style={{ width: 120 }} options={[
+      { value: "SUCCESS", label: "成功" }, { value: "FAILED", label: "失败" }, { value: "CANCELLED", label: "已取消" }, { value: "OPEN", label: "进行中" },
+    ]} />
+    <Select allowClear placeholder="阶段" value={query.spanType} onChange={(value) => patch({ spanType: value })} style={{ width: 130 }} options={[
+      { value: "TASK_RUN", label: "任务运行" }, { value: "AGENT", label: "Agent" }, { value: "MODEL", label: "模型" }, { value: "TOOL", label: "工具" }, { value: "HITL", label: "人工审批" }, { value: "JUDGE", label: "Judge" },
+    ]} />
+    <Input placeholder="Skill" value={query.skillId ?? ""} onChange={(e) => patch({ skillId: e.target.value || undefined })} allowClear style={{ width: 130 }} />
+    <InputNumber min={0} placeholder="最少耗时 ms" value={query.minDurationMs} onChange={(value) => patch({ minDurationMs: value ?? undefined })} style={{ width: 130 }} />
+    <InputNumber min={0} max={100} placeholder="最低 Judge" value={query.minJudgeScore} onChange={(value) => patch({ minJudgeScore: value ?? undefined })} style={{ width: 120 }} />
+    <Select value={query.sortBy ?? "startedAt"} onChange={(value) => patch({ sortBy: value })} style={{ width: 130 }} options={[
+      { value: "startedAt", label: "按开始时间" }, { value: "durationMs", label: "按耗时" }, { value: "totalTokens", label: "按 Tokens" }, { value: "costEstimate", label: "按成本" }, { value: "judgeScore", label: "按 Judge" },
+    ]} />
+    <Select value={query.direction ?? "desc"} onChange={(value) => patch({ direction: value })} style={{ width: 94 }} options={[{ value: "desc", label: "降序" }, { value: "asc", label: "升序" }]} />
+    <Button icon={<ReloadOutlined />} onClick={onReset}>重置</Button>
+  </div>;
 }
 
 function MetricCard({ icon, label, value, suffix, progress, danger }: {

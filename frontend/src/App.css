@@ -704,6 +704,17 @@ body {
   margin: 0 auto;
 }
 
+.observability-query-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  padding: 12px;
+  border: 1px solid var(--vatica-border);
+  background: var(--vatica-surface-raised);
+}
+
 .observability-page-title {
   justify-content: space-between;
   gap: 20px;
