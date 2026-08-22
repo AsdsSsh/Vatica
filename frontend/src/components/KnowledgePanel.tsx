@@ -1,16 +1,19 @@
 import { useEffect, useState } from "react";
 import { Alert, App, Button, Empty, Flex, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from "antd";
-import { DeleteOutlined, ImportOutlined, SearchOutlined } from "@ant-design/icons";
+import { DeleteOutlined, ImportOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import {
   deleteKnowledgeDocument,
   fetchKnowledgeDocuments,
   fetchKnowledgeReadiness,
   importKnowledgeDocument,
   isAuthExpiredError,
+  rebuildKnowledgeDocument,
+  retryKnowledgeDocument,
   searchKnowledgeBase,
   type KnowledgeCitation,
   type KnowledgeDocumentView,
   type KnowledgeReadinessView,
+  type KnowledgeSearchResult,
   type KnowledgeVisibility,
 } from "../api";
 
@@ -22,7 +25,7 @@ const statusColor: Record<KnowledgeDocumentView["status"], string> = {
   FAILED: "error",
 };
 
-/** 迭代 19B：授权工作区文档索引、检索试跑和引用核对。 */
+/** 迭代 19B/27B：授权工作区文档索引、失败恢复、重建和引用核对。 */
 export default function KnowledgePanel({ open, onClose }: Props) {
   const { message } = App.useApp();
   const [documents, setDocuments] = useState<KnowledgeDocumentView[]>([]);
@@ -31,6 +34,7 @@ export default function KnowledgePanel({ open, onClose }: Props) {
   const [visibility, setVisibility] = useState<KnowledgeVisibility>("PRIVATE");
   const [query, setQuery] = useState("");
   const [citations, setCitations] = useState<KnowledgeCitation[]>([]);
+  const [searchResult, setSearchResult] = useState<KnowledgeSearchResult | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function reload() {
@@ -74,7 +78,9 @@ export default function KnowledgePanel({ open, onClose }: Props) {
     if (!query.trim()) return;
     setBusy(true);
     try {
-      setCitations((await searchKnowledgeBase(query.trim())).citations);
+      const result = await searchKnowledgeBase(query.trim());
+      setSearchResult(result);
+      setCitations(result.citations);
     } catch (e) {
       if (!isAuthExpiredError(e)) message.error((e as Error).message);
     } finally {
@@ -89,6 +95,36 @@ export default function KnowledgePanel({ open, onClose }: Props) {
       message.success("知识库文档已删除");
     } catch (e) {
       if (!isAuthExpiredError(e)) message.error((e as Error).message);
+    }
+  }
+
+  async function retryDocument(id: number) {
+    setBusy(true);
+    try {
+      const document = await retryKnowledgeDocument(id);
+      message[document.status === "READY" ? "success" : "warning"](
+        document.status === "READY" ? `已恢复索引 ${document.chunkCount} 个片段` : (document.errorMessage ?? "索引未完成"),
+      );
+      await reload();
+    } catch (e) {
+      if (!isAuthExpiredError(e)) message.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function rebuildDocument(id: number) {
+    setBusy(true);
+    try {
+      const document = await rebuildKnowledgeDocument(id);
+      message[document.status === "READY" ? "success" : "warning"](
+        document.status === "READY" ? `已重建第 ${document.indexAttempt} 次索引` : (document.errorMessage ?? "重建未完成"),
+      );
+      await reload();
+    } catch (e) {
+      if (!isAuthExpiredError(e)) message.error((e as Error).message);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -131,13 +167,24 @@ export default function KnowledgePanel({ open, onClose }: Props) {
         columns={[
           { title: "文档", dataIndex: "sourceName", ellipsis: true },
           { title: "范围", dataIndex: "visibility", width: 92, render: (v) => v === "ORG_SHARED" ? "组织" : "自己" },
-          { title: "状态", dataIndex: "status", width: 92, render: (v) => <Tag color={statusColor[v as KnowledgeDocumentView["status"]]}>{v}</Tag> },
+          { title: "状态", dataIndex: "status", width: 120, render: (v, row) => (
+            <Space size={4}>
+              <Tag color={statusColor[v as KnowledgeDocumentView["status"]]}>{v}</Tag>
+              {row.totalChunks > 0 && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{row.indexedChunks}/{row.totalChunks}</Typography.Text>}
+            </Space>
+          ) },
           { title: "版本", dataIndex: "version", width: 66 },
           { title: "片段", dataIndex: "chunkCount", width: 66 },
-          { title: "", width: 44, render: (_, row) => (
-            <Popconfirm title="删除该文档及全部向量索引？" onConfirm={() => removeDocument(row.id)}>
-              <Button type="text" danger aria-label={`删除 ${row.sourceName}`} icon={<DeleteOutlined />} />
-            </Popconfirm>
+          { title: "操作", width: 142, render: (_, row) => (
+            <Space size={0}>
+              {row.status === "FAILED" && <Button type="text" aria-label={`重试 ${row.sourceName}`} icon={<ReloadOutlined />} onClick={() => void retryDocument(row.id)}>重试</Button>}
+              {row.status === "READY" && <Popconfirm title="重新读取原文件并重建全部向量索引？" onConfirm={() => rebuildDocument(row.id)}>
+                <Button type="text" aria-label={`重建 ${row.sourceName}`} icon={<ReloadOutlined />}>重建</Button>
+              </Popconfirm>}
+              <Popconfirm title="删除该文档及全部向量索引？" onConfirm={() => removeDocument(row.id)}>
+                <Button type="text" danger aria-label={`删除 ${row.sourceName}`} icon={<DeleteOutlined />} />
+              </Popconfirm>
+            </Space>
           ) },
         ]}
       />
@@ -148,14 +195,23 @@ export default function KnowledgePanel({ open, onClose }: Props) {
         <Button icon={<SearchOutlined />} loading={busy} disabled={!query.trim()} onClick={() => void search()}>检索</Button>
       </Flex>
       <Space direction="vertical" size={8} style={{ width: "100%", marginTop: 12 }}>
+        {searchResult && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            仅检索当前用户私有资料与当前组织共享资料 · 向量索引 {searchResult.indexVersion}
+          </Typography.Text>
+        )}
         {citations.map((item) => (
           <div key={item.citationId} style={{ borderTop: "1px solid var(--vatica-border)", paddingTop: 10 }}>
             <Flex justify="space-between" gap={12}>
               <Typography.Text strong>{item.citationId} · {item.documentName}</Typography.Text>
               <Typography.Text type="secondary">{item.score.toFixed(3)}</Typography.Text>
             </Flex>
+            <Typography.Text type="secondary" style={{ display: "block", fontSize: 12, marginTop: 4 }}>
+              {item.sourcePath} · {item.sourceLocation} · 文档 v{item.documentVersion} · 索引 {item.indexVersion} ·
+              {item.accessScope === "ORGANIZATION_SHARED" ? " 组织共享" : " 当前用户授权"}
+            </Typography.Text>
             <Typography.Paragraph type="secondary" ellipsis={{ rows: 3, expandable: true }} style={{ marginBottom: 0, marginTop: 4 }}>
-              {item.quote}
+              {item.snippet}
             </Typography.Paragraph>
           </div>
         ))}

@@ -44,6 +44,7 @@ class JdbcKnowledgeVectorIndexTest {
         assertThat(index.readiness().extensionInstalled()).isFalse();
         assertThat(index.readiness().indexReady()).isFalse();
         assertThat(index.readiness().schemaVersion()).isEqualTo("h2-fallback-v1");
+        assertThat(index.indexVersion()).isEqualTo("h2-fallback-v1");
         assertThat(index.readiness().message()).contains("H2");
     }
 

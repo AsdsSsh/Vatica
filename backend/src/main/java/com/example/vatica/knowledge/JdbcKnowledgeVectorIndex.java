@@ -40,6 +40,7 @@ public class JdbcKnowledgeVectorIndex implements KnowledgeVectorIndex {
     private final Map<Long, StoredVector> fallback = new ConcurrentHashMap<>();
     private volatile boolean postgres;
     private volatile boolean ready;
+    private volatile String indexVersion = "unknown";
     private volatile Readiness readiness = Readiness.unavailable(false, "向量索引尚未初始化。");
 
     /**
@@ -70,28 +71,37 @@ public class JdbcKnowledgeVectorIndex implements KnowledgeVectorIndex {
         return readiness;
     }
 
+    @Override
+    public String indexVersion() {
+        return indexVersion;
+    }
+
     private void initialize() {
         try (Connection connection = dataSource.getConnection()) {
             String product = connection.getMetaData().getDatabaseProductName().toLowerCase();
             postgres = product.contains("postgres");
             if (product.contains("h2")) {
                 ready = true;
+                indexVersion = "h2-fallback-v1";
                 readiness = new Readiness(true, false, false, false, null, "h2-fallback-v1",
                         properties.embeddingProvider(), embeddingModel(), properties.vectorDimensions(),
                         configFingerprint(), "当前使用 H2 进程内向量回退，仅用于测试或离线开发。 ");
                 return;
             }
             if (!postgres) {
+                indexVersion = "unavailable";
                 log.error("知识库向量索引只支持 PostgreSQL/pgvector；当前数据库为 {}。", product);
                 readiness = Readiness.unavailable(false, "当前数据库不是 PostgreSQL，无法启用 pgvector。 ");
                 return;
             }
             String extensionVersion = extensionVersion();
             if (extensionVersion == null) {
+                indexVersion = "unavailable";
                 readiness = Readiness.unavailable(true, "PostgreSQL 未安装 vector 扩展，知识检索保持不可用。 ");
                 return;
             }
             if (!tableExists(TABLE) || !tableExists(METADATA_TABLE)) {
+                indexVersion = SCHEMA_VERSION;
                 readiness = new Readiness(false, true, true, false, extensionVersion, SCHEMA_VERSION,
                         properties.embeddingProvider(), embeddingModel(), properties.vectorDimensions(),
                         configFingerprint(), "pgvector 扩展已安装，但知识库迁移尚未执行。请先执行 pgvector-index-v1.sql。 ");
@@ -100,17 +110,20 @@ public class JdbcKnowledgeVectorIndex implements KnowledgeVectorIndex {
             String fingerprint = configFingerprint();
             Map<String, Object> metadata = readMetadata();
             if (metadata.isEmpty()) {
+                indexVersion = SCHEMA_VERSION;
                 readiness = new Readiness(false, true, true, false, extensionVersion, SCHEMA_VERSION,
                         properties.embeddingProvider(), embeddingModel(), properties.vectorDimensions(), fingerprint,
                         "知识库索引元数据缺失，请执行迁移并写入实际 Embedding 配置。 ");
                 return;
             } else if (!metadataMatches(metadata, fingerprint)) {
+                indexVersion = metadataIndexVersion(metadata);
                 readiness = new Readiness(false, true, true, false, extensionVersion, SCHEMA_VERSION,
                         properties.embeddingProvider(), embeddingModel(), properties.vectorDimensions(), fingerprint,
                         "Embedding 配置或索引版本已变化，必须重建知识库索引后才能检索。 ");
                 return;
             }
             ready = true;
+            indexVersion = metadataIndexVersion(metadata);
             boolean indexReady = hasIndex();
             readiness = new Readiness(true, true, true, indexReady, extensionVersion, SCHEMA_VERSION,
                     properties.embeddingProvider(), embeddingModel(), properties.vectorDimensions(), fingerprint,
@@ -119,6 +132,7 @@ public class JdbcKnowledgeVectorIndex implements KnowledgeVectorIndex {
         } catch (Exception e) {
             log.error("pgvector 表初始化失败，知识库检索暂不可用：{}", e.getMessage());
             ready = false;
+            indexVersion = "unavailable";
             readiness = Readiness.unavailable(postgres, "pgvector Schema 检查失败，知识检索暂不可用。 ");
         }
     }
@@ -147,6 +161,11 @@ public class JdbcKnowledgeVectorIndex implements KnowledgeVectorIndex {
                 && embeddingModel().equals(String.valueOf(metadata.get("embedding_model")))
                 && properties.vectorDimensions() == ((Number) metadata.get("vector_dimensions")).intValue()
                 && fingerprint.equals(String.valueOf(metadata.get("config_fingerprint")));
+    }
+
+    private static String metadataIndexVersion(Map<String, Object> metadata) {
+        Object value = metadata.get("index_version");
+        return value == null || String.valueOf(value).isBlank() ? SCHEMA_VERSION : String.valueOf(value);
     }
 
     private boolean hasIndex() {

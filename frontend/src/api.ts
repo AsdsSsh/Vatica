@@ -780,7 +780,7 @@ export async function deleteWorkspaceFile(path: string): Promise<void> {
   await deleteJson(`/api/workspace/files?path=${encodeURIComponent(path)}`);
 }
 
-// ═══ 知识库（迭代 19B：PostgreSQL pgvector + 可追溯引用）═══
+// ═══ 知识库（迭代 19B/27B/27C：授权索引生命周期、权限检索 + PostgreSQL pgvector）═══
 
 export type KnowledgeVisibility = "PRIVATE" | "ORG_SHARED";
 export type KnowledgeDocumentStatus = "INDEXING" | "READY" | "FAILED";
@@ -794,6 +794,10 @@ export interface KnowledgeDocumentView {
   version: number;
   status: KnowledgeDocumentStatus;
   chunkCount: number;
+  totalChunks: number;
+  indexedChunks: number;
+  progressPercent: number;
+  indexAttempt: number;
   errorMessage: string | null;
   updatedAt: string;
 }
@@ -824,10 +828,17 @@ export interface KnowledgeCitation {
   endOffset: number;
   score: number;
   quote: string;
+  sourceLocation: string;
+  snippet: string;
+  documentVersion: number;
+  indexVersion: string;
+  accessScope: "CURRENT_USER_OWNER" | "ORGANIZATION_SHARED" | "CURRENT_USER_PRIVATE_AND_ORG_SHARED";
 }
 
 export interface KnowledgeSearchResult {
   query: string;
+  indexVersion: string;
+  accessScope: "CURRENT_USER_PRIVATE_AND_ORG_SHARED";
   citations: KnowledgeCitation[];
 }
 
@@ -848,6 +859,14 @@ export async function importKnowledgeDocument(
 
 export async function deleteKnowledgeDocument(id: number): Promise<void> {
   await deleteJson(`/api/knowledge/documents/${id}`);
+}
+
+export async function retryKnowledgeDocument(id: number): Promise<KnowledgeDocumentView> {
+  return (await post(`/api/knowledge/documents/${id}/retry`, {})).json();
+}
+
+export async function rebuildKnowledgeDocument(id: number): Promise<KnowledgeDocumentView> {
+  return (await post(`/api/knowledge/documents/${id}/rebuild`, {})).json();
 }
 
 export async function searchKnowledgeBase(query: string, topK = 5): Promise<KnowledgeSearchResult> {
@@ -1032,6 +1051,11 @@ export interface MeetingPreparationCitation {
   endOffset: number;
   score: number;
   quote: string;
+  sourceLocation: string;
+  snippet: string;
+  documentVersion: number;
+  indexVersion: string;
+  accessScope: "CURRENT_USER_OWNER" | "ORGANIZATION_SHARED" | "CURRENT_USER_PRIVATE_AND_ORG_SHARED";
 }
 
 export interface MeetingTodoDraft {
