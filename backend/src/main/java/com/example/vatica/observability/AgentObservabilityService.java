@@ -7,13 +7,24 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 
 import com.example.vatica.auth.RequestIdentity;
 
+import jakarta.persistence.criteria.Predicate;
+
 /** 迭代 21B：为 Web 诊断工作台聚合 Span，而不是把原始模型内容直接暴露给前端。 */
 @Service
 public class AgentObservabilityService {
+
+    private static final int DEFAULT_PAGE_SIZE = 20;
+    private static final int MAX_PAGE_SIZE = 100;
+    private static final Map<String, String> SPAN_SORT_FIELDS = Map.of(
+            "startedAt", "startedAt", "durationMs", "durationMs", "status", "status",
+            "totalTokens", "totalTokens", "costEstimate", "costEstimate", "judgeScore", "judgeScore");
+    private static final java.util.Set<String> RUN_SORT_FIELDS = java.util.Set.of("spanCount", "failedSpanCount");
 
     public record SpanView(String spanId, String traceId, String parentSpanId, String runId,
             String taskId, Integer stepId, int attempt, String spanType, String name,
@@ -34,6 +45,32 @@ public class AgentObservabilityService {
             int successCount, int failedCount, double successRate, long p50DurationMs,
             long p95DurationMs, long totalTokens, double totalCost, int failedSpanCount,
             long droppedSpanWrites, List<RunSummary> recentRuns) {
+    }
+
+    /** 迭代 28A：服务端组合查询参数。时间使用 ISO-8601，空值表示不限制。 */
+    public record SpanQuery(Instant from, Instant to, String traceId, String taskId, String status,
+            String spanType, String name, String runtime, String agentId, String modelSlotId,
+            String skillId, String errorCode, String judgeVerdict, Long minDurationMs, Long maxDurationMs,
+            Integer minJudgeScore, int page, int size, String sortBy, String direction) {
+
+        public SpanQuery {
+            page = Math.max(0, page);
+            size = size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
+            sortBy = SPAN_SORT_FIELDS.containsKey(sortBy) || RUN_SORT_FIELDS.contains(sortBy) ? sortBy : "startedAt";
+            direction = "asc".equalsIgnoreCase(direction) ? "asc" : "desc";
+            minDurationMs = minDurationMs == null ? null : Math.max(0, minDurationMs);
+            maxDurationMs = maxDurationMs == null ? null : Math.max(0, maxDurationMs);
+            minJudgeScore = minJudgeScore == null ? null : Math.max(0, Math.min(100, minJudgeScore));
+        }
+    }
+
+    public record QueryAggregate(long runCount, long successCount, long failedCount,
+            double successRate, long spanCount, long failedSpanCount, long totalTokens,
+            double totalCost, long p50DurationMs, long p95DurationMs) {
+    }
+
+    public record RunQueryPage(List<RunSummary> items, int page, int size, long totalRuns,
+            int totalPages, QueryAggregate aggregate, String sortBy, String direction) {
     }
 
     private final AgentSpanRecordRepository repository;
@@ -78,17 +115,112 @@ public class AgentObservabilityService {
         return summarize(recentRecords(identity), limit);
     }
 
+    /** 迭代 28A：组合筛选、稳定分页和过滤结果聚合均在服务端完成。 */
+    public RunQueryPage queryRuns(RequestIdentity identity, SpanQuery query) {
+        Specification<AgentSpanRecord> specification = specification(identity, query);
+        Sort.Direction direction = "asc".equals(query.direction()) ? Sort.Direction.ASC : Sort.Direction.DESC;
+        String spanSortField = SPAN_SORT_FIELDS.getOrDefault(query.sortBy(), "startedAt");
+        Sort sort = Sort.by(direction, spanSortField)
+                .and(Sort.by(direction, "traceId"));
+        List<AgentSpanRecord> matched = repository.findAll(specification, sort);
+        List<RunSummary> allRuns = summarizeAll(matched);
+        Comparator<RunSummary> runComparator = runComparator(query.sortBy(), direction);
+        allRuns = allRuns.stream().sorted(runComparator.thenComparing(RunSummary::traceId)).toList();
+        QueryAggregate aggregate = aggregate(matched, allRuns);
+        int from = Math.min(query.page() * query.size(), allRuns.size());
+        int to = Math.min(from + query.size(), allRuns.size());
+        List<RunSummary> items = allRuns.subList(from, to);
+        return new RunQueryPage(items, query.page(), query.size(), allRuns.size(),
+                allRuns.isEmpty() ? 0 : (int) Math.ceil((double) allRuns.size() / query.size()),
+                aggregate, query.sortBy(), query.direction());
+    }
+
     private List<AgentSpanRecord> recentRecords(RequestIdentity identity) {
         return repository.findTop500ByUserIdAndOrgIdOrderByStartedAtDescSpanIdDesc(
                 identity.userId(), identity.orgId());
     }
 
     private static List<RunSummary> summarize(List<AgentSpanRecord> records, int limit) {
+        return summarizeAll(records).stream()
+                .sorted(Comparator.comparing(RunSummary::startedAt, Comparator.nullsLast(Comparator.reverseOrder())))
+                .limit(Math.max(1, Math.min(limit, 100))).toList();
+    }
+
+    private static List<RunSummary> summarizeAll(List<AgentSpanRecord> records) {
         Map<String, List<AgentSpanRecord>> groups = records.stream().collect(Collectors.groupingBy(
                 AgentSpanRecord::getTraceId, LinkedHashMap::new, Collectors.toList()));
-        return groups.values().stream().map(AgentObservabilityService::run).sorted(
-                Comparator.comparing(RunSummary::startedAt, Comparator.nullsLast(Comparator.reverseOrder())))
-                .limit(Math.max(1, Math.min(limit, 100))).toList();
+        return groups.values().stream().map(AgentObservabilityService::run).toList();
+    }
+
+    private static Comparator<RunSummary> runComparator(String sortBy, Sort.Direction direction) {
+        Comparator<RunSummary> comparator = switch (sortBy) {
+            case "durationMs" -> Comparator.comparingLong(RunSummary::durationMs);
+            case "status" -> Comparator.comparing(RunSummary::status, Comparator.nullsLast(String::compareTo));
+            case "totalTokens" -> Comparator.comparingLong(r -> value(r.totalTokens()));
+            case "costEstimate" -> Comparator.comparingDouble(r -> value(r.costEstimate()));
+            case "judgeScore" -> Comparator.comparingInt(r -> valueInt(r.judgeScore()));
+            case "spanCount" -> Comparator.comparingInt(RunSummary::spanCount);
+            case "failedSpanCount" -> Comparator.comparingInt(RunSummary::failedSpanCount);
+            default -> Comparator.comparing(RunSummary::startedAt, Comparator.nullsLast(String::compareTo));
+        };
+        return direction == Sort.Direction.ASC ? comparator : comparator.reversed();
+    }
+
+    private static long value(Integer value) {
+        return value == null ? 0 : value.longValue();
+    }
+
+    private static int valueInt(Integer value) {
+        return value == null ? 0 : value;
+    }
+
+    private static double value(Double value) {
+        return value == null ? 0d : value;
+    }
+
+    private static QueryAggregate aggregate(List<AgentSpanRecord> spans, List<RunSummary> runs) {
+        long success = runs.stream().filter(r -> AgentSpanRecord.STATUS_SUCCESS.equals(r.status())).count();
+        long failed = runs.stream().filter(r -> AgentSpanRecord.STATUS_FAILED.equals(r.status())).count();
+        List<Long> durations = runs.stream().map(RunSummary::durationMs).sorted().toList();
+        long tokens = spans.stream().map(AgentSpanRecord::getTotalTokens).filter(java.util.Objects::nonNull)
+                .mapToLong(Integer::longValue).sum();
+        double cost = spans.stream().map(AgentSpanRecord::getCostEstimate).filter(java.util.Objects::nonNull)
+                .mapToDouble(Double::doubleValue).sum();
+        return new QueryAggregate(runs.size(), success, failed, runs.isEmpty() ? 0 : (double) success / runs.size(),
+                spans.size(), spans.stream().filter(s -> AgentSpanRecord.STATUS_FAILED.equals(s.getStatus())).count(),
+                tokens, cost, percentile(durations, .50), percentile(durations, .95));
+    }
+
+    private static Specification<AgentSpanRecord> specification(RequestIdentity identity, SpanQuery query) {
+        return (root, criteria, builder) -> {
+            List<Predicate> predicates = new java.util.ArrayList<>();
+            predicates.add(builder.equal(root.get("userId"), identity.userId()));
+            predicates.add(builder.equal(root.get("orgId"), identity.orgId()));
+            if (query.from() != null) predicates.add(builder.greaterThanOrEqualTo(root.get("startedAt"), query.from()));
+            if (query.to() != null) predicates.add(builder.lessThan(root.get("startedAt"), query.to()));
+            equal(predicates, builder, root, "traceId", query.traceId());
+            equal(predicates, builder, root, "taskId", query.taskId());
+            equal(predicates, builder, root, "status", query.status());
+            equal(predicates, builder, root, "spanType", query.spanType());
+            equal(predicates, builder, root, "runtime", query.runtime());
+            equal(predicates, builder, root, "agentId", query.agentId());
+            equal(predicates, builder, root, "modelSlotId", query.modelSlotId());
+            equal(predicates, builder, root, "skillId", query.skillId());
+            equal(predicates, builder, root, "errorCode", query.errorCode());
+            equal(predicates, builder, root, "judgeVerdict", query.judgeVerdict());
+            if (query.name() != null && !query.name().isBlank()) {
+                predicates.add(builder.like(builder.lower(root.get("name")), "%" + query.name().trim().toLowerCase() + "%"));
+            }
+            if (query.minDurationMs() != null) predicates.add(builder.greaterThanOrEqualTo(root.get("durationMs"), query.minDurationMs()));
+            if (query.maxDurationMs() != null) predicates.add(builder.lessThanOrEqualTo(root.get("durationMs"), query.maxDurationMs()));
+            if (query.minJudgeScore() != null) predicates.add(builder.greaterThanOrEqualTo(root.get("judgeScore"), query.minJudgeScore()));
+            return builder.and(predicates.toArray(Predicate[]::new));
+        };
+    }
+
+    private static void equal(List<Predicate> predicates, jakarta.persistence.criteria.CriteriaBuilder builder,
+            jakarta.persistence.criteria.Root<AgentSpanRecord> root, String field, String value) {
+        if (value != null && !value.isBlank()) predicates.add(builder.equal(root.get(field), value.trim()));
     }
 
     private static RunSummary run(List<AgentSpanRecord> spans) {

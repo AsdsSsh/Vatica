@@ -1743,12 +1743,67 @@ export interface ObservabilityOverview {
   recentRuns: ObservabilityRun[];
 }
 
+export interface ObservabilityRunQuery {
+  from?: string;
+  to?: string;
+  traceId?: string;
+  taskId?: string;
+  status?: string;
+  spanType?: string;
+  name?: string;
+  runtime?: string;
+  agentId?: string;
+  modelSlotId?: string;
+  skillId?: string;
+  errorCode?: string;
+  judgeVerdict?: string;
+  minDurationMs?: number;
+  maxDurationMs?: number;
+  minJudgeScore?: number;
+  page?: number;
+  size?: number;
+  sortBy?: string;
+  direction?: "asc" | "desc";
+}
+
+export interface ObservabilityQueryAggregate {
+  runCount: number;
+  successCount: number;
+  failedCount: number;
+  successRate: number;
+  spanCount: number;
+  failedSpanCount: number;
+  totalTokens: number;
+  totalCost: number;
+  p50DurationMs: number;
+  p95DurationMs: number;
+}
+
+export interface ObservabilityRunQueryPage {
+  items: ObservabilityRun[];
+  page: number;
+  size: number;
+  totalRuns: number;
+  totalPages: number;
+  aggregate: ObservabilityQueryAggregate;
+  sortBy: string;
+  direction: string;
+}
+
 export async function fetchObservabilityOverview(limit = 20): Promise<ObservabilityOverview> {
   return (await getJson("/api/observability/overview?limit=" + limit)).json();
 }
 
 export async function fetchObservabilityRuns(limit = 50): Promise<ObservabilityRun[]> {
   return (await getJson("/api/observability/runs?limit=" + limit)).json();
+}
+
+export async function fetchObservabilityRunQuery(query: ObservabilityRunQuery = {}): Promise<ObservabilityRunQueryPage> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
+  }
+  return (await getJson("/api/observability/spans?" + params.toString())).json();
 }
 
 export async function fetchObservabilityTrace(traceId: string): Promise<ObservabilitySpan[]> {
