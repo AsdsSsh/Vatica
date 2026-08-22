@@ -12,6 +12,7 @@ import {
   Layout,
   Progress,
   Row,
+  Segmented,
   Space,
   Spin,
   Statistic,
@@ -267,6 +268,7 @@ function MetricCard({ icon, label, value, suffix, progress, danger }: {
 function TraceView({ spans, selectedSpan, onSelect }: {
   spans: ObservabilitySpan[]; selectedSpan: ObservabilitySpan | null; onSelect: (span: ObservabilitySpan) => void;
 }) {
+  const [viewMode, setViewMode] = useState<"waterfall" | "tree">("waterfall");
   const root = spans[0];
   const spanColumns = [
     {
@@ -292,12 +294,19 @@ function TraceView({ spans, selectedSpan, onSelect }: {
           <span>{spans.length} 个 Span</span><span>{formatMs(spans.reduce((sum, span) => sum + span.durationMs, 0))} 累计</span></div>
       </div>
       {spans.length === 0 ? <Empty description="Trace 不存在或不属于当前账号" /> : (
-        <Row gutter={[16, 16]} align="top">
-          <Col xs={24} lg={15}><Card className="observability-table-card" styles={{ body: { padding: 0 } }}>
-            <Table<ObservabilitySpan> rowKey="spanId" columns={spanColumns as never} dataSource={spans} pagination={false}
-              size="middle" onRow={(record) => ({ onClick: () => onSelect(record) })}
-              rowClassName={(record) => selectedSpan?.spanId === record.spanId ? "observability-selected-row" : ""} scroll={{ x: 680 }} />
-          </Card></Col>
+        <>
+          <div className="observability-trace-mode"><Segmented value={viewMode} onChange={(value) => setViewMode(value as "waterfall" | "tree")} options={[
+            { label: "时间瀑布", value: "waterfall" }, { label: "Span 树", value: "tree" },
+          ]} /></div>
+          <Row gutter={[16, 16]} align="top">
+            <Col xs={24} lg={15}><Card className="observability-table-card" styles={{ body: { padding: 0 } }}>
+              {viewMode === "waterfall" ? <TraceWaterfall spans={spans} selectedSpan={selectedSpan} onSelect={onSelect} />
+                : <TraceTree spans={spans} selectedSpan={selectedSpan} onSelect={onSelect} />}
+              <div className="observability-span-table-divider"><Typography.Text type="secondary">明细列表</Typography.Text></div>
+              <Table<ObservabilitySpan> rowKey="spanId" columns={spanColumns as never} dataSource={spans} pagination={false}
+                size="small" onRow={(record) => ({ onClick: () => onSelect(record) })}
+                rowClassName={(record) => selectedSpan?.spanId === record.spanId ? "observability-selected-row" : ""} scroll={{ x: 680 }} />
+            </Card></Col>
           <Col xs={24} lg={9}><Card className="observability-detail-card" title={selectedSpan?.name ?? "选择一个 Span"}>
             {selectedSpan ? <Space direction="vertical" size={16} style={{ width: "100%" }}>
               <div className="observability-detail-grid">
@@ -311,10 +320,47 @@ function TraceView({ spans, selectedSpan, onSelect }: {
               {selectedSpan.outputSummary && <SummaryBlock label="输出摘要" value={selectedSpan.outputSummary} />}
             </Space> : <Empty description="暂无 Span" />}
           </Card></Col>
-        </Row>
+          </Row>
+        </>
       )}
     </div>
   );
+}
+
+function TraceWaterfall({ spans, selectedSpan, onSelect }: {
+  spans: ObservabilitySpan[]; selectedSpan: ObservabilitySpan | null; onSelect: (span: ObservabilitySpan) => void;
+}) {
+  const start = Math.min(...spans.map((span) => new Date(span.startedAt).getTime()));
+  const end = Math.max(...spans.map((span) => new Date(span.startedAt).getTime() + Math.max(1, span.durationMs)));
+  const total = Math.max(1, end - start);
+  return <div className="observability-waterfall" aria-label="Trace 时间瀑布">
+    <div className="observability-waterfall-axis"><span>起点</span><span>{formatMs(total)}</span></div>
+    {spans.slice().sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime()).map((span) => {
+      const offset = Math.max(0, new Date(span.startedAt).getTime() - start) / total * 100;
+      const width = Math.max(1.5, span.durationMs / total * 100);
+      return <button key={span.spanId} className={"observability-waterfall-row" + (selectedSpan?.spanId === span.spanId ? " is-selected" : "")} onClick={() => onSelect(span)}>
+        <span className="observability-waterfall-label"><i style={{ background: spanColor(span.status) }} />{span.spanType}<b>{span.name}</b></span>
+        <span className="observability-waterfall-track"><i className="observability-waterfall-bar" style={{ left: offset + "%", width: width + "%", background: spanColor(span.status) }} /></span>
+        <span className="observability-waterfall-duration">{formatMs(span.durationMs)}</span>
+      </button>;
+    })}
+  </div>;
+}
+
+function TraceTree({ spans, selectedSpan, onSelect }: {
+  spans: ObservabilitySpan[]; selectedSpan: ObservabilitySpan | null; onSelect: (span: ObservabilitySpan) => void;
+}) {
+  const children = new Map<string | null, ObservabilitySpan[]>();
+  spans.forEach((span) => children.set(span.parentSpanId, [...(children.get(span.parentSpanId) ?? []), span]));
+  const renderNode = (span: ObservabilitySpan, depth: number): ReactNode => <div key={span.spanId}>
+    <button className={"observability-tree-node" + (selectedSpan?.spanId === span.spanId ? " is-selected" : "")} style={{ paddingLeft: 16 + depth * 22 }} onClick={() => onSelect(span)}>
+      <span className="observability-tree-branch">{depth ? "↳" : "●"}</span><span className="observability-span-dot" style={{ background: spanColor(span.status) }} />
+      <span className="observability-tree-name">{span.name}</span><span className="observability-tree-type">{span.spanType}</span><span className="observability-tree-duration">{formatMs(span.durationMs)}</span>
+    </button>
+    {(children.get(span.spanId) ?? []).sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime()).map((child) => renderNode(child, depth + 1))}
+  </div>;
+  const roots = spans.filter((span) => !span.parentSpanId || !spans.some((candidate) => candidate.spanId === span.parentSpanId));
+  return <div className="observability-tree" aria-label="Trace Span 树">{roots.map((span) => renderNode(span, 0))}</div>;
 }
 
 function SummaryBlock({ label, value }: { label: string; value: string }) {

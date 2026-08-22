@@ -923,6 +923,74 @@ body {
   font-size: 12px;
 }
 
+.observability-trace-mode {
+  display: flex;
+  justify-content: flex-end;
+  margin: -4px 0 10px;
+}
+
+.observability-span-table-divider {
+  padding: 12px 16px 8px;
+  border-top: 1px solid var(--vatica-border);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  font-size: 10px;
+}
+
+.observability-waterfall {
+  padding: 14px 16px 10px;
+  overflow-x: auto;
+}
+
+.observability-waterfall-axis,
+.observability-waterfall-row {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) minmax(220px, 2fr) 70px;
+  align-items: center;
+  gap: 12px;
+}
+
+.observability-waterfall-axis {
+  margin-bottom: 8px;
+  color: var(--vatica-text-tertiary);
+  font: 10px var(--vatica-mono);
+  text-transform: uppercase;
+}
+
+.observability-waterfall-axis span:last-child { text-align: right; }
+
+.observability-waterfall-row {
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--vatica-text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.observability-waterfall-row:hover,
+.observability-waterfall-row.is-selected { background: var(--vatica-warning-bg); }
+
+.observability-waterfall-label,
+.observability-tree-node { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.observability-waterfall-label i { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+.observability-waterfall-label b { overflow: hidden; color: var(--vatica-text); font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.observability-waterfall-track { position: relative; height: 10px; border-radius: 3px; background: var(--vatica-surface-muted); }
+.observability-waterfall-bar { position: absolute; top: 1px; height: 8px; min-width: 4px; border-radius: 3px; }
+.observability-waterfall-duration { color: var(--vatica-text-tertiary); font: 11px var(--vatica-mono); text-align: right; }
+
+.observability-tree { padding: 12px 8px; }
+.observability-tree-node { width: 100%; min-height: 36px; padding-top: 6px; padding-bottom: 6px; border: 0; border-radius: 0; background: transparent; color: var(--vatica-text-secondary); text-align: left; cursor: pointer; }
+.observability-tree-node:hover,
+.observability-tree-node.is-selected { background: var(--vatica-warning-bg); }
+.observability-tree-branch { width: 14px; color: var(--vatica-text-tertiary); font: 12px var(--vatica-mono); }
+.observability-tree-name { overflow: hidden; color: var(--vatica-text); font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.observability-tree-type { margin-left: auto; color: var(--vatica-text-tertiary); font: 10px var(--vatica-mono); }
+.observability-tree-duration { width: 58px; color: var(--vatica-text-tertiary); font: 11px var(--vatica-mono); text-align: right; }
+
 .observability-loading {
   min-height: 55vh;
   display: grid;
