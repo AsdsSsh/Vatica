@@ -798,6 +798,21 @@ export interface KnowledgeDocumentView {
   updatedAt: string;
 }
 
+/** 迭代 27A：pgvector 扩展、Schema、索引和 Embedding 配置就绪度；不返回连接信息或密钥。 */
+export interface KnowledgeReadinessView {
+  ready: boolean;
+  postgres: boolean;
+  extensionInstalled: boolean;
+  indexReady: boolean;
+  extensionVersion: string | null;
+  schemaVersion: string | null;
+  embeddingProvider: string | null;
+  embeddingModel: string | null;
+  vectorDimensions: number;
+  configFingerprint: string | null;
+  message: string | null;
+}
+
 export interface KnowledgeCitation {
   citationId: string;
   documentId: number;
@@ -818,6 +833,10 @@ export interface KnowledgeSearchResult {
 
 export async function fetchKnowledgeDocuments(): Promise<KnowledgeDocumentView[]> {
   return (await getJson("/api/knowledge/documents")).json();
+}
+
+export async function fetchKnowledgeReadiness(): Promise<KnowledgeReadinessView> {
+  return (await getJson("/api/knowledge/readiness")).json();
 }
 
 export async function importKnowledgeDocument(

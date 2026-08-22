@@ -10,15 +10,17 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/** 迭代 19B：知识库生命周期和人工检索 API。 */
+/** 迭代 19B/27A：知识库生命周期、人工检索和 pgvector 就绪检查 API。 */
 @RestController
 @RequestMapping("/api/knowledge")
 public class KnowledgeController {
 
     private final KnowledgeBaseService service;
+    private final JdbcKnowledgeVectorIndex vectorIndex;
 
-    public KnowledgeController(KnowledgeBaseService service) {
+    public KnowledgeController(KnowledgeBaseService service, JdbcKnowledgeVectorIndex vectorIndex) {
         this.service = service;
+        this.vectorIndex = vectorIndex;
     }
 
     public record ImportRequest(String path, KnowledgeVisibility visibility) {
@@ -38,6 +40,11 @@ public class KnowledgeController {
     @GetMapping("/documents")
     public List<KnowledgeBaseService.DocumentView> listDocuments() {
         return service.listDocuments();
+    }
+
+    @GetMapping("/readiness")
+    public JdbcKnowledgeVectorIndex.Readiness readiness() {
+        return vectorIndex.readiness();
     }
 
     @DeleteMapping("/documents/{id}")

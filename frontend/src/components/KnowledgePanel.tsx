@@ -1,14 +1,16 @@
 import { useEffect, useState } from "react";
-import { App, Button, Empty, Flex, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from "antd";
+import { Alert, App, Button, Empty, Flex, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from "antd";
 import { DeleteOutlined, ImportOutlined, SearchOutlined } from "@ant-design/icons";
 import {
   deleteKnowledgeDocument,
   fetchKnowledgeDocuments,
+  fetchKnowledgeReadiness,
   importKnowledgeDocument,
   isAuthExpiredError,
   searchKnowledgeBase,
   type KnowledgeCitation,
   type KnowledgeDocumentView,
+  type KnowledgeReadinessView,
   type KnowledgeVisibility,
 } from "../api";
 
@@ -24,6 +26,7 @@ const statusColor: Record<KnowledgeDocumentView["status"], string> = {
 export default function KnowledgePanel({ open, onClose }: Props) {
   const { message } = App.useApp();
   const [documents, setDocuments] = useState<KnowledgeDocumentView[]>([]);
+  const [readiness, setReadiness] = useState<KnowledgeReadinessView | null>(null);
   const [path, setPath] = useState("");
   const [visibility, setVisibility] = useState<KnowledgeVisibility>("PRIVATE");
   const [query, setQuery] = useState("");
@@ -32,7 +35,12 @@ export default function KnowledgePanel({ open, onClose }: Props) {
 
   async function reload() {
     try {
-      setDocuments(await fetchKnowledgeDocuments());
+      const [nextDocuments, nextReadiness] = await Promise.all([
+        fetchKnowledgeDocuments(),
+        fetchKnowledgeReadiness(),
+      ]);
+      setDocuments(nextDocuments);
+      setReadiness(nextReadiness);
     } catch (e) {
       if (!isAuthExpiredError(e)) message.error((e as Error).message);
     }
@@ -87,6 +95,24 @@ export default function KnowledgePanel({ open, onClose }: Props) {
   return (
     <Modal title="知识库" open={open} onCancel={onClose} footer={null} width={820} destroyOnHidden>
       <Typography.Text type="secondary">从已授权工作区导入 .txt、.md 或 .docx</Typography.Text>
+      {readiness && (
+        <Alert
+          style={{ marginTop: 12, marginBottom: 12 }}
+          type={!readiness.postgres ? "warning" : readiness.ready ? (readiness.indexReady ? "success" : "info") : "error"}
+          showIcon
+          message={readiness.postgres ? (readiness.ready ? "PostgreSQL 知识索引状态" : "PostgreSQL 知识索引未就绪") : "当前为本地向量回退"}
+          description={(
+            <Space direction="vertical" size={2}>
+              <span>{readiness.message ?? "等待索引状态检查。"}</span>
+              <Typography.Text type="secondary">
+                扩展 {readiness.extensionVersion ?? "未检测"} · Schema {readiness.schemaVersion ?? "未检测"} ·
+                Embedding {readiness.embeddingModel ?? readiness.embeddingProvider ?? "未配置"} · {readiness.vectorDimensions} 维
+              </Typography.Text>
+              {readiness.configFingerprint && <Typography.Text type="secondary" copyable={{ text: readiness.configFingerprint }}>配置指纹 {readiness.configFingerprint.slice(0, 12)}…</Typography.Text>}
+            </Space>
+          )}
+        />
+      )}
       <Flex gap={8} style={{ marginTop: 10, marginBottom: 16 }} wrap>
         <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder="工作区内文件路径，例如 docs/产品方案.md" style={{ flex: "1 1 360px" }} />
         <Select<KnowledgeVisibility> value={visibility} onChange={setVisibility} style={{ width: 136 }} options={[

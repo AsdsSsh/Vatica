@@ -66,4 +66,35 @@ class SystemCapabilityServiceTest {
         assertThat(statuses.get("mail").status()).isEqualTo(SystemCapabilityService.Status.ACTION_REQUIRED);
         assertThat(statuses.get("workspace").status()).isEqualTo(SystemCapabilityService.Status.READY);
     }
+
+    @Test
+    void reportsDegradedWhenPostgresIsUsableButHnswIndexIsMissing() {
+        ModelRegistry models = mock(ModelRegistry.class);
+        when(models.slots()).thenReturn(List.of(new ModelSlot("local", "Local", "openai",
+                "http://localhost:11434/v1", "", "qwen", 0.2, true)));
+        JdbcKnowledgeVectorIndex index = mock(JdbcKnowledgeVectorIndex.class);
+        when(index.readiness()).thenReturn(new JdbcKnowledgeVectorIndex.Readiness(true, true, true, false,
+                "0.8.5", "pgvector-v1", "local-hash", "local-hash", 1536, "fingerprint",
+                "HNSW 不可用，将使用精确余弦检索。"));
+        UserMailService mail = mock(UserMailService.class);
+        when(mail.get()).thenReturn(new UserMailService.View(MailCredentialMode.EPHEMERAL,
+                "", 993, "", 465, "", false, null));
+        WorkspaceStore workspace = mock(WorkspaceStore.class);
+        RequestIdentity identity = new RequestIdentity(7L, 9L, "USER", "alice");
+        when(workspace.root(identity)).thenReturn(workspaceRoot);
+        McpProperties properties = new McpProperties(new McpProperties.Client(false, Duration.ofSeconds(1),
+                Duration.ofSeconds(1), Duration.ofMinutes(1), Map.of()), null);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<AgentToolProvider> remoteTools = mock(ObjectProvider.class);
+
+        SystemCapabilityService service = new SystemCapabilityService(models,
+                new DriverManagerDataSource("jdbc:h2:mem:capability-hnsw;DB_CLOSE_DELAY=-1", "sa", ""),
+                new KnowledgeProperties(true, "local-hash", 3, 1024, 100, 20, 1000, null), index, properties,
+                remoteTools, mail, workspace);
+
+        SystemCapabilityService.CapabilityView knowledge = service.snapshot(identity).capabilities().stream()
+                .filter(value -> value.id().equals("knowledge")).findFirst().orElseThrow();
+        assertThat(knowledge.status()).isEqualTo(SystemCapabilityService.Status.DEGRADED);
+        assertThat(knowledge.message()).contains("精确余弦");
+    }
 }

@@ -106,12 +106,21 @@ public class SystemCapabilityService {
         }
         JdbcKnowledgeVectorIndex.Readiness readiness = knowledgeIndex.readiness();
         if (!readiness.ready()) {
-            return unavailable("knowledge", "知识库", "pgvector 初始化未完成，检索工具已从任务规划中移除。",
-                    "确认 PostgreSQL 已安装 vector 扩展后重启服务。");
+            String message = readiness.message() == null || readiness.message().isBlank()
+                    ? "pgvector 初始化未完成，检索工具已从任务规划中移除。" : readiness.message();
+            String action = readiness.extensionInstalled()
+                    ? "执行知识库索引重建后重启服务。"
+                    : "确认 PostgreSQL 已安装 vector 扩展后重启服务。";
+            return unavailable("knowledge", "知识库", message, action);
         }
         if (!readiness.postgres()) {
-            return degraded("knowledge", "知识库", "当前使用本地 H2 回退索引，不具备 pgvector 检索能力。",
+            return degraded("knowledge", "知识库", readiness.message() == null
+                    ? "当前使用本地 H2 回退索引，不具备 pgvector 检索能力。" : readiness.message(),
                     "切换到已安装 vector 扩展的 PostgreSQL 以启用生产检索。");
+        }
+        if (!readiness.indexReady()) {
+            return degraded("knowledge", "知识库", readiness.message(),
+                    "创建 HNSW 索引或执行知识库迁移脚本以恢复索引性能。");
         }
         return ready("knowledge", "知识库", "PostgreSQL pgvector 索引已就绪。");
     }
