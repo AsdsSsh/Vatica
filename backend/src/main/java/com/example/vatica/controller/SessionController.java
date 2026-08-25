@@ -3,6 +3,7 @@ package com.example.vatica.controller;
 import java.time.Instant;
 import java.util.List;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -14,6 +15,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
+import com.example.vatica.context.ContextFactScopeType;
+import com.example.vatica.context.ContextFactService;
 
 /** 迭代 14：用户会话元数据与消息历史的跨设备同步接口。 */
 @RestController
@@ -22,10 +25,19 @@ public class SessionController {
 
     private final ChatSessionRecordRepository sessions;
     private final ChatMessageRecordRepository messages;
+    private final ContextFactService contextFacts;
 
-    public SessionController(ChatSessionRecordRepository sessions, ChatMessageRecordRepository messages) {
+    @Autowired
+    public SessionController(ChatSessionRecordRepository sessions, ChatMessageRecordRepository messages,
+            ContextFactService contextFacts) {
         this.sessions = sessions;
         this.messages = messages;
+        this.contextFacts = contextFacts;
+    }
+
+    /** 兼容 14A 测试/嵌入式调用方；没有事实层时仍可管理会话。 */
+    public SessionController(ChatSessionRecordRepository sessions, ChatMessageRecordRepository messages) {
+        this(sessions, messages, null);
     }
 
     public record SessionUpsertRequest(String title) { }
@@ -78,6 +90,9 @@ public class SessionController {
         String id = normalizeId(sessionId);
         owned(identity, id);
         messages.deleteByUserIdAndSessionId(identity.userId(), id);
+        if (contextFacts != null) {
+            contextFacts.deleteScope(ContextFactScopeType.CHAT_SESSION, id);
+        }
         sessions.deleteByUserIdAndSessionId(identity.userId(), id);
     }
 

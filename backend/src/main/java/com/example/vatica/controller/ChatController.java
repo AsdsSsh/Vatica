@@ -14,6 +14,7 @@ import com.example.vatica.agentscope.AgentScopeChatService;
 import com.example.vatica.agentscope.AgentScopeChatService.ChatEvent;
 import com.example.vatica.context.ContextAssembler;
 import com.example.vatica.context.ContextBudget;
+import com.example.vatica.context.ContextFactService;
 import com.example.vatica.event.SseEventGateway;
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
@@ -85,6 +86,7 @@ public class ChatController {
     private final ObjectMapper mapper;
     private final ContextBudget contextBudget;
     private final SseEventGateway eventGateway;
+    private final ContextFactService contextFacts;
 
     /** 活跃流式连接注册表：可观测 + 断连清理（迭代 5 任务终止/迭代 7 前端联调可复用）。 */
     private final Set<SseEmitter> activeEmitters = ConcurrentHashMap.newKeySet();
@@ -93,7 +95,7 @@ public class ChatController {
     public ChatController(ModelRegistry registry, ChatProperties chatProperties, SessionMemory sessionMemory,
             AgentToolProvider vaticaTools, PermissionEventPublisher permissionEvents,
             FilePermissionRequestService permissionRequests, ObjectMapper mapper, ContextBudget contextBudget,
-            SseEventGateway eventGateway, AgentScopeChatService chatService) {
+            SseEventGateway eventGateway, AgentScopeChatService chatService, ContextFactService contextFacts) {
         this.registry = registry;
         this.chatProperties = chatProperties;
         this.sessionMemory = sessionMemory;
@@ -104,6 +106,7 @@ public class ChatController {
         this.contextBudget = contextBudget;
         this.eventGateway = eventGateway;
         this.chatService = chatService;
+        this.contextFacts = contextFacts;
     }
 
     /** 迭代 22A 测试构造器：显式注入 AgentScope 聊天服务。 */
@@ -112,7 +115,7 @@ public class ChatController {
             FilePermissionRequestService permissionRequests, ObjectMapper mapper, ContextBudget contextBudget,
             AgentScopeChatService chatService) {
         this(registry, chatProperties, sessionMemory, vaticaTools, permissionEvents, permissionRequests,
-                mapper, contextBudget, new SseEventGateway(mapper), chatService);
+                mapper, contextBudget, new SseEventGateway(mapper), chatService, null);
     }
 
     /** 可用模型清单（迭代 7 模型选择器；迭代 8.5 起来自动态注册表；迭代 9 类型化 DTO）。 */
@@ -170,7 +173,7 @@ public class ChatController {
         try {
             String reply = requireChatService().call(new AgentScopeChatService.ChatRequest(slot,
                     reasoningMode(request), SYSTEM_PROMPT,
-                    ContextAssembler.chatHistory(sessionMemory, request.sessionId(), contextBudget),
+                    historyForChat(request.sessionId()),
                     request.message(), tools,
                     identity, request.sessionId(), false)).content();
             sessionMemory.append(request.sessionId(), request.message(), reply);
@@ -222,7 +225,7 @@ public class ChatController {
 
         subscription[0] = requireChatService().stream(new AgentScopeChatService.ChatRequest(slot,
                 reasoningMode(request), SYSTEM_PROMPT,
-                ContextAssembler.chatHistory(sessionMemory, request.sessionId(), contextBudget),
+                historyForChat(request.sessionId()),
                 request.message(), tools,
                 identity, request.sessionId(), true))
                 .subscribe(
@@ -281,6 +284,19 @@ public class ChatController {
             throw new IllegalStateException("操作失败：AgentScope 聊天服务未装配。");
         }
         return chatService;
+    }
+
+    /** 事实层故障不能阻断聊天；原文摘要/近期滑窗仍按 29A 路径组装。 */
+    private List<com.example.vatica.model.ConversationMessage> historyForChat(String sessionId) {
+        List<ContextFactService.ContextFactSnippet> facts = List.of();
+        if (contextFacts != null) {
+            try {
+                facts = contextFacts.resolveForChat(sessionId);
+            } catch (RuntimeException e) {
+                log.warn("关键事实读取失败，降级为会话历史：session={}", sessionId, e);
+            }
+        }
+        return ContextAssembler.chatHistory(sessionMemory, sessionId, contextBudget, facts);
     }
 
     /** 迭代 15 I15-13：聊天用量上下文——平台模型计配额，自配/临时模型只记录不扣额度。 */

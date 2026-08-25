@@ -571,6 +571,85 @@ export async function deleteRemoteSession(id: string): Promise<void> {
   await deleteJson(`/api/sessions/${encodeURIComponent(id)}`);
 }
 
+// ═══ 受控上下文事实（迭代 29B；接口只返回脱敏视图）═══
+
+export type ContextFactScopeType = "CHAT_SESSION" | "TASK" | "SUBJECT";
+export type ContextFactType =
+  | "USER_CONFIRMATION" | "APPROVAL" | "TASK_GOAL" | "DATE_TIME" | "ARTIFACT_PATH"
+  | "EXTERNAL_OBJECT" | "TOOL_OUTCOME" | "OPEN_QUESTION" | "DELIVERY_CONCLUSION";
+export type ContextFactStatus = "ACTIVE" | "SUPERSEDED" | "REVOKED";
+export type ContextFactTrustLevel = "USER_CONFIRMED" | "SYSTEM_VERIFIED" | "TOOL_OBSERVED" | "AGENT_DERIVED";
+export type ContextFactVerificationState = "CURRENT" | "NEEDS_REFRESH" | "UNVERIFIABLE" | "REVOKED";
+export type ContextFactSourceType =
+  | "USER_INPUT" | "CHAT_MESSAGE" | "TASK" | "TASK_STEP" | "ACTION_EXECUTION" | "ARTIFACT"
+  | "CALENDAR_EVENT" | "TODO" | "KNOWLEDGE_CITATION" | "SYSTEM";
+
+export interface ContextFactView {
+  id: string;
+  scopeType: ContextFactScopeType;
+  scopeId: string;
+  subjectType: string | null;
+  subjectId: string | null;
+  factKey: string;
+  revision: number;
+  factType: ContextFactType;
+  displaySummary: string;
+  status: ContextFactStatus;
+  trustLevel: ContextFactTrustLevel;
+  verificationState: ContextFactVerificationState;
+  sourceType: ContextFactSourceType;
+  sourceId: string;
+  sourceVersion: string | null;
+  sourceFingerprint: string | null;
+  observedAt: string;
+  verifiedAt: string | null;
+  validUntil: string | null;
+  statusReason: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ContextFactCaptureRequest {
+  scopeType: ContextFactScopeType;
+  scopeId: string;
+  subjectType?: string;
+  subjectId?: string;
+  factKey: string;
+  factType: ContextFactType;
+  valueJson: string;
+  displaySummary: string;
+  trustLevel?: ContextFactTrustLevel;
+  verificationState?: ContextFactVerificationState;
+  sourceType: ContextFactSourceType;
+  sourceId: string;
+  sourceVersion?: string;
+  sourceFingerprint?: string;
+  evidenceRefsJson?: string;
+  observedAt?: string;
+  verifiedAt?: string;
+  validUntil?: string;
+}
+
+export async function fetchContextFacts(scopeType: ContextFactScopeType, scopeId: string,
+  current = true): Promise<ContextFactView[]> {
+  const query = new URLSearchParams({ scopeType, scopeId, current: String(current) });
+  return (await getJson(`/api/context/facts?${query.toString()}`)).json();
+}
+
+export async function captureContextFact(request: ContextFactCaptureRequest): Promise<ContextFactView> {
+  return (await post("/api/context/facts", request)).json();
+}
+
+export async function revokeContextFact(id: string, reason?: string): Promise<ContextFactView> {
+  return (await post(`/api/context/facts/${encodeURIComponent(id)}/revoke`, { reason })).json();
+}
+
+export async function refreshContextFactsBySource(sourceType: ContextFactSourceType, sourceId: string,
+  reason?: string): Promise<{ affected: number }> {
+  return (await post("/api/context/facts/source/refresh", { sourceType, sourceId, reason })).json();
+}
+
 // ═══ 模型（与 OpenAPI schema 对齐：/api/chat/models、/api/models）═══
 
 /** 模型清单项（后端 ModelInfoDto）。 */

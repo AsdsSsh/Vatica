@@ -107,4 +107,24 @@ class ContextBudgetTest {
         assertThat(history).anyMatch(message -> message.text().contains("未摘要历史降级边界"));
         assertThat(history.get(history.size() - 1).text()).isEqualTo("近期回答");
     }
+
+    @Test
+    void verifiedFactsAreKeptWhenOptionalHistoryIsTrimmed() {
+        SessionMemory memory = new SessionMemory() {
+            @Override public List<ConversationMessage> history(String sessionId) { return List.of(); }
+            @Override public void append(String sessionId, String userText, String assistantText) { }
+            @Override public List<ConversationMessage> recent(String sessionId) {
+                return List.of(ConversationMessage.user("可丢弃的旧消息"), ConversationMessage.assistant("最新回答"));
+            }
+        };
+
+        List<ConversationMessage> history = ContextAssembler.chatHistory(memory, "s1",
+                new ContextBudget(16, 100, 100, 100, 100),
+                List.of(new ContextFactService.ContextFactSnippet("delivery", "DATE_TIME",
+                        "用户确认周三交付", "USER_CONFIRMED", "CHAT_MESSAGE", "m-1")));
+
+        assertThat(history).anyMatch(message -> message.text().contains("已验证关键事实"));
+        assertThat(history).anyMatch(message -> message.text().contains("用户确认周三交付"));
+        assertThat(history).anyMatch(message -> message.text().equals("最新回答"));
+    }
 }
