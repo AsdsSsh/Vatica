@@ -41,6 +41,7 @@ import {
   fetchSystemCapabilities,
   fetchTaskDetail,
   fetchTaskTraces,
+  fetchContextHealth,
   AUTH_OPEN_EVENT,
   MODEL_CONFIG_UPDATED_EVENT,
   isAuthExpiredError,
@@ -54,6 +55,7 @@ import {
   type TaskSummary,
   type TaskEvent,
   type TaskStep,
+  type ContextHealthView,
 } from "../api";
 import { loadPermissionPolicy } from "../permissions";
 import { useBackendStatus } from "../backendStatus";
@@ -84,6 +86,13 @@ const STATUS_LABEL: Record<string, string> = {
   NEEDS_REVISION: "待人工返工",
   FAILED: "失败",
   CANCELLED: "已终止",
+};
+
+const CONTEXT_HEALTH_LABEL: Record<ContextHealthView["overallStatus"], { color: string; label: string }> = {
+  HEALTHY: { color: "success", label: "上下文正常" },
+  PROCESSING: { color: "processing", label: "上下文处理中" },
+  DEGRADED: { color: "warning", label: "上下文降级" },
+  NEEDS_REFRESH: { color: "error", label: "需刷新来源" },
 };
 
 const BLACKBOARD_LABEL: Record<BlackboardEntry["type"], string> = {
@@ -129,6 +138,7 @@ export default function StepPanel() {
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<TaskDetail | null>(null);
+  const [contextHealth, setContextHealth] = useState<ContextHealthView | null>(null);
   const [goalInput, setGoalInput] = useState("");
   const [benchmarkCases, setBenchmarkCases] = useState<BenchmarkCase[]>([]);
   const [benchmarkCaseId, setBenchmarkCaseId] = useState<string | null>(null);
@@ -279,6 +289,21 @@ export default function StepPanel() {
       disposed = true;
     };
   }, [selectedId]);
+
+  // 迭代 29D：任务面板显示副作用上下文门禁的脱敏状态。
+  useEffect(() => {
+    if (!selectedId || authStatus === "loading" || authStatus === "anonymous" || !online) {
+      setContextHealth(null);
+      return;
+    }
+    let disposed = false;
+    fetchContextHealth("TASK", selectedId)
+      .then((view) => { if (!disposed) setContextHealth(view); })
+      .catch((e) => {
+        if (!disposed && !isAuthExpiredError(e)) setContextHealth(null);
+      });
+    return () => { disposed = true; };
+  }, [selectedId, detail?.status, detail?.pendingStepId, online, authStatus]);
 
   // 进入 PENDING（待审批计划）/ PENDING_APPROVAL（待审批步骤）→ 弹审批窗
   useEffect(() => {
@@ -583,6 +608,13 @@ export default function StepPanel() {
             </Typography.Text>
             <Flex gap={6} wrap style={{ margin: "6px 0" }}>
               <Tag color={STATUS_COLOR[detail.status]}>{STATUS_LABEL[detail.status] ?? detail.status}</Tag>
+              {contextHealth && (
+                <Tooltip title={`上下文：${contextHealth.reason} · 当前事实 ${contextHealth.currentFactCount} · 待刷新 ${contextHealth.staleFactCount}`}>
+                  <Tag color={CONTEXT_HEALTH_LABEL[contextHealth.overallStatus].color}>
+                    {CONTEXT_HEALTH_LABEL[contextHealth.overallStatus].label}
+                  </Tag>
+                </Tooltip>
+              )}
               {detail.score != null && (
                 <Badge
                   count={`准确率 ${detail.score}`}

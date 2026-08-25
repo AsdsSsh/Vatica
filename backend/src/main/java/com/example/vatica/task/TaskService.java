@@ -704,6 +704,7 @@ public class TaskService {
                         heartbeat(record);
                         record.setPlanJson(toJson(plan));
                         repository.save(record);
+                        recordContextGateSpan(record, step, gate.reason());
                         startHitl(record, step.getId(), "上下文门禁：" + gate.reason());
                         eventPublisher.publish(record, "context_gate_required");
                         log.info("任务 {} 步骤 {} 命中上下文门禁：{}", record.getId(), step.getId(), gate.reason());
@@ -1324,6 +1325,16 @@ public class TaskService {
                     "HITL_WAIT", "Human approval", record.getExecutionRuntime(), "human", "Human",
                     null, null, null, reason);
         });
+    }
+
+    /** 29D：把上下文降级/待刷新原因写入脱敏 Span，便于在观测工作台关联副作用暂停。 */
+    private void recordContextGateSpan(TaskRecord record, TaskStep step, String reason) {
+        long started = System.nanoTime();
+        AgentObservabilityRecorder.SpanHandle span = startSpan(identityOf(record), record,
+                runSpans.get(record.getId()), step == null ? null : step.getId(),
+                "CONTEXT_GATE", "Context gate", record.getExecutionRuntime(), "context-gate", "ContextGate",
+                null, null, null, reason);
+        observability.finish(span, AgentObservabilityRecorder.SpanFinish.failed("CONTEXT_DEGRADED", reason), started);
     }
 
     private void finishHitl(TaskRecord record, String status, String output) {

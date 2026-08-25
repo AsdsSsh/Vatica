@@ -82,4 +82,14 @@ class VaticaApplicationTests {
 				.andExpect(content().string(containsString("SpanView")));
 	}
 
+	/** 迭代 29D：上下文健康状态进入 OpenAPI，前端只能依赖脱敏健康 DTO。 */
+	@Test
+	void openApiContainsContextHealthContract() throws Exception {
+		mvc.perform(get("/v3/api-docs"))
+				.andExpect(status().isOk())
+				.andExpect(content().string(containsString("/api/context/health")))
+				.andExpect(content().string(containsString("ContextHealthView")))
+				.andExpect(content().string(containsString("overallStatus")));
+	}
+
 }

@@ -650,6 +650,38 @@ export async function refreshContextFactsBySource(sourceType: ContextFactSourceT
   return (await post("/api/context/facts/source/refresh", { sourceType, sourceId, reason })).json();
 }
 
+// ═══ 上下文健康（迭代 29D；仅状态/水位/计数，不返回原文或事实值）═══
+
+export type ContextHealthStatus = "HEALTHY" | "PROCESSING" | "DEGRADED" | "NEEDS_REFRESH";
+
+export interface ContextHealthView {
+  scopeType: ContextFactScopeType;
+  scopeId: string;
+  overallStatus: ContextHealthStatus;
+  summaryStatus: "PENDING" | "SUCCESS" | "FAILED" | null;
+  summaryFailureCode: "NONE" | "EMPTY_RESPONSE" | "TIMEOUT" | "TRANSIENT" | "CONFIGURATION" | "UNKNOWN" | null;
+  summaryThroughSeq: number;
+  summaryRequestedThroughSeq: number;
+  uncoveredMessageCount: number;
+  fallbackHeadCount: number;
+  fallbackTailCount: number;
+  recentMessageCount: number;
+  summaryAttemptCount: number;
+  summaryLastAttemptAt: string | null;
+  summaryLastSuccessAt: string | null;
+  summaryNextRetryAt: string | null;
+  currentFactCount: number;
+  staleFactCount: number;
+  contextGatePending: boolean;
+  reason: string;
+  checkedAt: string;
+}
+
+export async function fetchContextHealth(scopeType: ContextFactScopeType, scopeId: string): Promise<ContextHealthView> {
+  const query = new URLSearchParams({ scopeType, scopeId });
+  return (await getJson(`/api/context/health?${query.toString()}`)).json();
+}
+
 // ═══ 模型（与 OpenAPI schema 对齐：/api/chat/models、/api/models）═══
 
 /** 模型清单项（后端 ModelInfoDto）。 */

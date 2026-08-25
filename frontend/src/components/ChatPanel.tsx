@@ -44,6 +44,7 @@ import {
   fetchModels,
   fetchSystemCapabilities,
   fetchUserModelSlots,
+  fetchContextHealth,
   getEphemeralUserModelKey,
   streamChat,
   AUTH_EXPIRED_EVENT,
@@ -57,6 +58,7 @@ import {
   type ToolActivity,
   type UsageSummary,
   type UserModelSlotView,
+  type ContextHealthView,
 } from "../api";
 import { loadPermissionPolicy } from "../permissions";
 import { useBackendStatus } from "../backendStatus";
@@ -116,6 +118,13 @@ const CAPABILITY_TAG: Record<SystemCapability["status"], { color: string; label:
   UNAVAILABLE: { color: "error", label: "不可用" },
 };
 
+const CONTEXT_HEALTH_TAG: Record<ContextHealthView["overallStatus"], { color: string; label: string }> = {
+  HEALTHY: { color: "success", label: "上下文正常" },
+  PROCESSING: { color: "processing", label: "摘要处理中" },
+  DEGRADED: { color: "warning", label: "上下文降级" },
+  NEEDS_REFRESH: { color: "error", label: "需要刷新来源" },
+};
+
 function readSavedModel(): string | undefined {
   try {
     return localStorage.getItem(modelStorageKey()) ?? undefined;
@@ -167,6 +176,7 @@ export default function ChatPanel({
   const [reasoning, setReasoning] = useState("");
   // 迭代 15 I15-13：本轮 token 用量（usage SSE 收尾事件）
   const [usage, setUsage] = useState<UsageSummary | null>(null);
+  const [contextHealth, setContextHealth] = useState<ContextHealthView | null>(null);
 
   /** 迭代 13.5：并行流可能同时提出多个权限请求，按 requestId 保存每个等待决定。 */
   const permissionResolveRef = useRef<Map<string, (approved: boolean) => void>>(new Map());
@@ -176,6 +186,21 @@ export default function ChatPanel({
   const autoScrollRef = useRef(true);
   /** 迭代 14.5：账号身份变化时清掉上一账号的用户模型/模型选择等内存态。 */
   const previousAuthKey = useRef<string | null>(null);
+
+  // 迭代 29D：健康查询按会话和消息轮次刷新，只保留脱敏状态标签。
+  useEffect(() => {
+    if (!online || authStatus === "loading" || authStatus === "anonymous") {
+      setContextHealth(null);
+      return;
+    }
+    let disposed = false;
+    fetchContextHealth("CHAT_SESSION", session.id)
+      .then((view) => { if (!disposed) setContextHealth(view); })
+      .catch((e) => {
+        if (!disposed && !isAuthExpiredError(e)) setContextHealth(null);
+      });
+    return () => { disposed = true; };
+  }, [session.id, session.messages.length, online, authStatus]);
 
   const settingsMenuItems: MenuProps["items"] = [
     {
@@ -521,6 +546,13 @@ export default function ChatPanel({
           >
             {session.title}
           </Typography.Text>
+          {contextHealth && (
+            <Tooltip title={`上下文：${contextHealth.reason} · 当前事实 ${contextHealth.currentFactCount} · 待刷新 ${contextHealth.staleFactCount}`}>
+              <Tag color={CONTEXT_HEALTH_TAG[contextHealth.overallStatus].color} style={{ marginInlineEnd: 0, fontSize: 10 }}>
+                {CONTEXT_HEALTH_TAG[contextHealth.overallStatus].label}
+              </Tag>
+            </Tooltip>
+          )}
         </Flex>
         <Flex className="chat-header-actions" gap={6} align="center" style={{ flexShrink: 0 }}>
           <Select

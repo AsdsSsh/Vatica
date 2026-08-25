@@ -11,6 +11,9 @@ public interface TaskRecordRepository extends JpaRepository<TaskRecord, String> 
 
     Optional<TaskRecord> findByIdAndUserId(String id, Long userId);
 
+    /** 迭代 29D：上下文健康查询的双租户归属校验。 */
+    Optional<TaskRecord> findByIdAndUserIdAndOrgId(String id, Long userId, Long orgId);
+
     Optional<TaskRecord> findByUserIdAndIdempotencyKey(Long userId, String idempotencyKey);
 
     List<TaskRecord> findByUserId(Long userId);
