@@ -14,5 +14,23 @@ public interface ChatMessageRecordRepository extends JpaRepository<ChatMessageRe
 
     List<ChatMessageRecord> findByUserIdAndSessionIdOrderBySeqAsc(Long userId, String sessionId);
 
+    long countByUserIdAndSessionIdAndSeqGreaterThan(Long userId, String sessionId, long seq);
+
+    /** 迭代 29A：只取未摘要区间的受控头尾片段，禁止为 Prompt 全量读取历史。 */
+    List<ChatMessageRecord> findByUserIdAndSessionIdAndSeqGreaterThanOrderBySeqAsc(
+            Long userId, String sessionId, long seq, Pageable pageable);
+
+    long countByUserIdAndSessionIdAndSeqGreaterThanAndSeqLessThan(
+            Long userId, String sessionId, long afterSeq, long beforeSeq);
+
+    List<ChatMessageRecord> findByUserIdAndSessionIdAndSeqGreaterThanAndSeqLessThanOrderBySeqAsc(
+            Long userId, String sessionId, long afterSeq, long beforeSeq, Pageable pageable);
+
+    List<ChatMessageRecord> findByUserIdAndSessionIdAndSeqGreaterThanAndSeqLessThanOrderBySeqDesc(
+            Long userId, String sessionId, long afterSeq, long beforeSeq, Pageable pageable);
+
+    List<ChatMessageRecord> findByUserIdAndSessionIdAndSeqGreaterThanAndSeqLessThanEqualOrderBySeqAsc(
+            Long userId, String sessionId, long afterSeq, long throughSeq, Pageable pageable);
+
     void deleteByUserIdAndSessionId(Long userId, String sessionId);
 }

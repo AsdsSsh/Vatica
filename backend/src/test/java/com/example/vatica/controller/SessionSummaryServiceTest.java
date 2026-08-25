@@ -79,6 +79,8 @@ class SessionSummaryServiceTest {
         assertThat(session.getSummaryText()).contains("周报周三交付");
         assertThat(session.getSummaryThroughSeq()).isEqualTo(5);
         assertThat(session.getSummaryTokens()).isGreaterThan(0);
+        assertThat(session.getSummaryStatus()).isEqualTo(SessionSummaryStatus.SUCCESS);
+        assertThat(session.getSummaryFailureCode()).isEqualTo(SessionSummaryFailureCode.NONE);
     }
 
     @Test
@@ -92,6 +94,24 @@ class SessionSummaryServiceTest {
         ChatSessionRecord session = sessions.findByUserIdAndSessionId(1L, "s1").orElseThrow();
         assertThat(session.getSummaryThroughSeq()).isZero();
         assertThat(session.getSummaryText()).isNull();
+        assertThat(session.getSummaryStatus()).isEqualTo(SessionSummaryStatus.FAILED);
+        assertThat(session.getSummaryFailureCode()).isEqualTo(SessionSummaryFailureCode.CONFIGURATION);
+        assertThat(session.getSummaryNextRetryAt()).isNull();
+    }
+
+    @Test
+    void summaryProcessesBoundedBatchAndLeavesPendingWatermark() {
+        seedMessages("s1", 1, 50);
+        when(registry.activeSlotFor(ModelSlot.CAP_SUMMARIZER)).thenReturn(summarySlot());
+        when(modelGateway.call(any())).thenReturn(
+                new ModelResponse("第一批摘要", "", ModelUsage.empty()));
+
+        summaryService.summarize(1L, 1L, "s1", 50);
+
+        ChatSessionRecord session = sessions.findByUserIdAndSessionId(1L, "s1").orElseThrow();
+        assertThat(session.getSummaryThroughSeq()).isEqualTo(20);
+        assertThat(session.getSummaryRequestedThroughSeq()).isEqualTo(50);
+        assertThat(session.getSummaryStatus()).isEqualTo(SessionSummaryStatus.PENDING);
     }
 
     private static ModelSlot summarySlot() {

@@ -81,6 +81,11 @@ vatica:
       max-messages: 20
       max-sessions: 64
       max-chars: 16000     # 单会话历史字符数上限（token 的工程近似）
+    # 迭代 29A：中期摘要按批补偿；失败时只做有限次退避重试，原文仍保留在 PostgreSQL。
+    summary:
+      max-batch-messages: 20
+      max-auto-retries: 2
+      retry-initial-backoff: 5s
   # ===== 质量评测（迭代 5.5，LLM-as-Judge）=====
   judge:
     pass-threshold: 70      # Judge 评分 >= 阈值判 PASS 交付；低分自动返工

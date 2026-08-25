@@ -1,7 +1,10 @@
 package com.example.vatica.controller;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.springframework.data.domain.PageRequest;
 
@@ -21,6 +24,9 @@ import com.example.vatica.model.ConversationMessage;
  * </ul>
  */
 public final class JpaSessionMemory implements SessionMemory {
+
+    private static final int FALLBACK_HEAD_MESSAGES = 2;
+    private static final int FALLBACK_TAIL_MESSAGES = 2;
 
     private final InMemorySessionMemory cache;
     private final ChatMessageRecordRepository repository;
@@ -72,12 +78,13 @@ public final class JpaSessionMemory implements SessionMemory {
         }
         if (assistantText != null && !assistantText.isBlank()) {
             rows.add(new ChatMessageRecord(identity.userId(), identity.orgId(), session,
-                    "ASSISTANT", assistantText, nextSeq));
+                    "ASSISTANT", assistantText, nextSeq++));
         }
         repository.saveAll(rows);
         // 迭代 15 I15-9：窗口溢出后异步触发中期摘要（targetSeq=最新 seq - 窗口大小）
         if (summaryService != null && sessions != null && !rows.isEmpty()) {
-            long targetSeq = Math.max(0, nextSeq - windowSize);
+            long lastWrittenSeq = rows.getLast().getSeq();
+            long targetSeq = Math.max(0, lastWrittenSeq - windowSize);
             summaryService.schedule(identity.userId(), identity.orgId(), session, targetSeq);
         }
     }
@@ -99,6 +106,57 @@ public final class JpaSessionMemory implements SessionMemory {
         return history(sessionId);
     }
 
+    /**
+     * 迭代 29A：摘要失败不等于把较早历史直接从模型上下文中抹去。
+     * 近期滑窗以外的未摘要区间才读取头尾片段，避免为 Prompt 全量读取历史。
+     */
+    @Override
+    public synchronized ContextWindow contextWindow(String sessionId) {
+        RequestIdentity identity = RequestIdentityContext.require();
+        String session = sessionIdOf(sessionId);
+        List<ChatMessageRecord> recentRows = repository.findByUserIdAndSessionIdOrderBySeqDesc(
+                identity.userId(), session, PageRequest.of(0, windowSize));
+        recentRows = new ArrayList<>(recentRows);
+        Collections.reverse(recentRows);
+        List<ConversationMessage> recent = recentRows.stream().map(this::message).toList();
+        if (sessions == null) {
+            return new ContextWindow(null, SessionSummaryStatus.PENDING, 0,
+                    0, recent.size(), List.of(), List.of(), recent);
+        }
+
+        ChatSessionRecord record = sessions.findByUserIdAndSessionId(identity.userId(), session).orElse(null);
+        String summary = record == null ? null : record.getSummaryText();
+        SessionSummaryStatus status = record == null
+                ? SessionSummaryStatus.PENDING : record.getSummaryStatus();
+        long through = record == null ? 0 : record.getSummaryThroughSeq();
+        long requested = record == null ? 0 : record.getSummaryRequestedThroughSeq();
+        long uncovered = repository.countByUserIdAndSessionIdAndSeqGreaterThan(identity.userId(), session, through);
+        List<ConversationMessage> head = List.of();
+        List<ConversationMessage> tail = List.of();
+        if (!recentRows.isEmpty()) {
+            long recentStartSeq = recentRows.getFirst().getSeq();
+            long gapCount = repository.countByUserIdAndSessionIdAndSeqGreaterThanAndSeqLessThan(
+                    identity.userId(), session, through, recentStartSeq);
+            if (gapCount > 0) {
+                List<ChatMessageRecord> headRows = repository
+                        .findByUserIdAndSessionIdAndSeqGreaterThanAndSeqLessThanOrderBySeqAsc(
+                                identity.userId(), session, through, recentStartSeq,
+                                PageRequest.of(0, FALLBACK_HEAD_MESSAGES));
+                List<ChatMessageRecord> tailRows = repository
+                        .findByUserIdAndSessionIdAndSeqGreaterThanAndSeqLessThanOrderBySeqDesc(
+                                identity.userId(), session, through, recentStartSeq,
+                                PageRequest.of(0, FALLBACK_TAIL_MESSAGES));
+                Collections.reverse(tailRows);
+                Set<Long> headSeqs = new HashSet<>();
+                headRows.forEach(row -> headSeqs.add(row.getSeq()));
+                head = headRows.stream().map(this::message).toList();
+                tail = tailRows.stream().filter(row -> !headSeqs.contains(row.getSeq()))
+                        .map(this::message).toList();
+            }
+        }
+        return new ContextWindow(summary, status, through, requested, uncovered, head, tail, recent);
+    }
+
     /** 从库中取最近 windowSize 条重建滑窗（重启恢复路径）。 */
     private void restore(Long userId, String sessionId, String key) {
         List<ChatMessageRecord> recent = repository.findByUserIdAndSessionIdOrderBySeqDesc(userId, sessionId,
@@ -111,6 +169,12 @@ public final class JpaSessionMemory implements SessionMemory {
                     : ConversationMessage.assistant(r.getContent()));
         }
         cache.restore(key, messages);
+    }
+
+    private ConversationMessage message(ChatMessageRecord record) {
+        return "USER".equals(record.getRole())
+                ? ConversationMessage.user(record.getContent())
+                : ConversationMessage.assistant(record.getContent());
     }
 
     private static String sessionIdOf(String sessionId) {

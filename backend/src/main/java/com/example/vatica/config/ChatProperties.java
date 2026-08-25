@@ -10,10 +10,11 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * <p>沿用 {@code vatica.*} 业务自定义前缀，避免与第三方框架配置混淆。
  *
  * @param sse    SSE 流式配置
- * @param memory 会话短期记忆（内存版）配置
+ * @param memory  会话短期记忆（内存版）配置
+ * @param summary 中期滚动摘要的有界补偿配置
  */
 @ConfigurationProperties(prefix = "vatica.chat")
-public record ChatProperties(Sse sse, Memory memory) {
+public record ChatProperties(Sse sse, Memory memory, Summary summary) {
 
     public ChatProperties {
         if (sse == null) {
@@ -21,6 +22,9 @@ public record ChatProperties(Sse sse, Memory memory) {
         }
         if (memory == null) {
             memory = new Memory(0, 0, 0);
+        }
+        if (summary == null) {
+            summary = new Summary(0, -1, null);
         }
     }
 
@@ -53,6 +57,29 @@ public record ChatProperties(Sse sse, Memory memory) {
             }
             if (maxChars <= 0) {
                 maxChars = DEFAULT_MAX_CHARS;
+            }
+        }
+    }
+
+    /**
+     * 迭代 29A：摘要任务每次只处理一个受控批次；失败后的自动补偿必须有上限。
+     * 0 次自动重试是一个有效的保守配置，负数才回退默认值。
+     */
+    public record Summary(int maxBatchMessages, int maxAutoRetries, Duration retryInitialBackoff) {
+
+        public static final int DEFAULT_MAX_BATCH_MESSAGES = 20;
+        public static final int DEFAULT_MAX_AUTO_RETRIES = 2;
+        public static final Duration DEFAULT_RETRY_INITIAL_BACKOFF = Duration.ofSeconds(5);
+
+        public Summary {
+            if (maxBatchMessages <= 0) {
+                maxBatchMessages = DEFAULT_MAX_BATCH_MESSAGES;
+            }
+            if (maxAutoRetries < 0) {
+                maxAutoRetries = DEFAULT_MAX_AUTO_RETRIES;
+            }
+            if (retryInitialBackoff == null || retryInitialBackoff.isZero() || retryInitialBackoff.isNegative()) {
+                retryInitialBackoff = DEFAULT_RETRY_INITIAL_BACKOFF;
             }
         }
     }

@@ -4,6 +4,8 @@ import java.time.Instant;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -48,6 +50,31 @@ public class ChatSessionRecord {
     @Column(nullable = false)
     private int summaryTokens = 0;
 
+    /** 迭代 29A：摘要是缓存，状态与水位必须可独立审计。 */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 16)
+    private SessionSummaryStatus summaryStatus = SessionSummaryStatus.PENDING;
+
+    /** 已请求但尚未必然成功覆盖的最大消息序号。 */
+    @Column(nullable = false)
+    private long summaryRequestedThroughSeq = 0;
+
+    /** 摘要调用次数；失败同样计入，避免后台异常被静默掩盖。 */
+    @Column(nullable = false)
+    private int summaryAttemptCount = 0;
+
+    private Instant summaryLastAttemptAt;
+
+    private Instant summaryLastSuccessAt;
+
+    /** 自动补偿再次运行的时间；为空代表等待下一条消息或配置变化触发。 */
+    private Instant summaryNextRetryAt;
+
+    /** 仅保存脱敏错误分类，禁止把上游错误正文写入会话元数据。 */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 32)
+    private SessionSummaryFailureCode summaryFailureCode = SessionSummaryFailureCode.NONE;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -87,4 +114,28 @@ public class ChatSessionRecord {
     public void setSummaryThroughSeq(long summaryThroughSeq) { this.summaryThroughSeq = summaryThroughSeq; }
     public int getSummaryTokens() { return summaryTokens; }
     public void setSummaryTokens(int summaryTokens) { this.summaryTokens = summaryTokens; }
+    public SessionSummaryStatus getSummaryStatus() {
+        return summaryStatus == null ? SessionSummaryStatus.PENDING : summaryStatus;
+    }
+    public void setSummaryStatus(SessionSummaryStatus summaryStatus) {
+        this.summaryStatus = summaryStatus == null ? SessionSummaryStatus.PENDING : summaryStatus;
+    }
+    public long getSummaryRequestedThroughSeq() { return summaryRequestedThroughSeq; }
+    public void setSummaryRequestedThroughSeq(long summaryRequestedThroughSeq) {
+        this.summaryRequestedThroughSeq = summaryRequestedThroughSeq;
+    }
+    public int getSummaryAttemptCount() { return summaryAttemptCount; }
+    public void setSummaryAttemptCount(int summaryAttemptCount) { this.summaryAttemptCount = summaryAttemptCount; }
+    public Instant getSummaryLastAttemptAt() { return summaryLastAttemptAt; }
+    public void setSummaryLastAttemptAt(Instant summaryLastAttemptAt) { this.summaryLastAttemptAt = summaryLastAttemptAt; }
+    public Instant getSummaryLastSuccessAt() { return summaryLastSuccessAt; }
+    public void setSummaryLastSuccessAt(Instant summaryLastSuccessAt) { this.summaryLastSuccessAt = summaryLastSuccessAt; }
+    public Instant getSummaryNextRetryAt() { return summaryNextRetryAt; }
+    public void setSummaryNextRetryAt(Instant summaryNextRetryAt) { this.summaryNextRetryAt = summaryNextRetryAt; }
+    public SessionSummaryFailureCode getSummaryFailureCode() {
+        return summaryFailureCode == null ? SessionSummaryFailureCode.NONE : summaryFailureCode;
+    }
+    public void setSummaryFailureCode(SessionSummaryFailureCode summaryFailureCode) {
+        this.summaryFailureCode = summaryFailureCode == null ? SessionSummaryFailureCode.NONE : summaryFailureCode;
+    }
 }
