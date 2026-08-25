@@ -64,13 +64,23 @@ public class TaskPlan {
     public void setBlackboard(List<BlackboardEntry> blackboard) {
         this.blackboard = new ArrayList<>();
         if (blackboard != null) {
-            blackboard.forEach(this::addBlackboardEntry);
+            for (BlackboardEntry entry : blackboard) {
+                if (!addBlackboardEntry(entry)) {
+                    throw new IllegalArgumentException("操作失败：任务黑板超过容量且无法安全淘汰待裁决条目。");
+                }
+            }
         }
     }
 
-    public void addBlackboardEntry(BlackboardEntry entry) {
+    /**
+     * 添加黑板条目。容量达到上限且全部条目都处于 OPEN 时拒绝新增，
+     * 不能为了容纳新条目而删除仍待人工/Planner 裁决的旧条目。
+     *
+     * @return true 表示条目已写入；false 表示没有可安全淘汰的条目
+     */
+    public boolean addBlackboardEntry(BlackboardEntry entry) {
         if (entry == null) {
-            return;
+            return false;
         }
         if (blackboard == null) {
             blackboard = new ArrayList<>();
@@ -84,8 +94,14 @@ public class TaskPlan {
                     break;
                 }
             }
-            blackboard.remove(removable >= 0 ? removable : 0);
+            if (removable < 0) {
+                // 新条目不能挤掉已有 OPEN 仲裁项；撤销刚刚尝试的追加。
+                blackboard.removeLast();
+                return false;
+            }
+            blackboard.remove(removable);
         }
+        return true;
     }
 
     public int getCollaborationRevisionCount() {
@@ -126,6 +142,10 @@ public class TaskPlan {
         private String result;
         /** 迭代 15 I15-11：≤200 字的结果要点（供后续依赖步骤注入；无摘要时用 500 字截断兜底）。 */
         private String resultDigest;
+        /** 迭代 29C：结果摘要来源，避免把确定性截断误认为模型摘要。 */
+        private String resultDigestSource;
+        /** 迭代 29C：用户已确认本次降级/待刷新上下文可用于该副作用步骤。 */
+        private boolean contextGateApproved;
         /** 迭代 6：依赖的前序步骤编号（1 起）。null=依赖上一步（顺序执行）；空列表=与步骤 1 并行。 */
         private List<Integer> dependsOn;
         /** 迭代 17B：显式共享写资源键，例如 file:C:/work/report.docx；同波重复声明会在执行前冲突检测。 */
@@ -226,6 +246,22 @@ public class TaskPlan {
 
         public void setResultDigest(String resultDigest) {
             this.resultDigest = resultDigest;
+        }
+
+        public String getResultDigestSource() {
+            return resultDigestSource;
+        }
+
+        public void setResultDigestSource(String resultDigestSource) {
+            this.resultDigestSource = resultDigestSource;
+        }
+
+        public boolean isContextGateApproved() {
+            return contextGateApproved;
+        }
+
+        public void setContextGateApproved(boolean contextGateApproved) {
+            this.contextGateApproved = contextGateApproved;
         }
 
         public List<Integer> getDependsOn() {

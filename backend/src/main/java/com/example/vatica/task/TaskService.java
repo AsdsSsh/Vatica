@@ -46,6 +46,7 @@ import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.config.ModelSlot;
 import com.example.vatica.config.TaskReliabilityProperties;
 import com.example.vatica.context.ContextBudget;
+import com.example.vatica.context.ContextFactService;
 import com.example.vatica.evaluation.BenchmarkCase;
 import com.example.vatica.evaluation.BenchmarkCatalog;
 import com.example.vatica.mail.MailConnectionSettings;
@@ -113,6 +114,7 @@ public class TaskService {
     private final TaskExecutionFaultInjector faultInjector;
     private final BenchmarkCatalog benchmarkCatalog;
     private final SkillCatalogService skillCatalog;
+    private final ContextFactService contextFacts;
 
     /** 终止标志（迭代 7 I7-4）：取消接口与执行线程的协作式协调点（波次粒度生效）。 */
     private final Map<String, AtomicBoolean> cancelFlags = new ConcurrentHashMap<>();
@@ -147,7 +149,7 @@ public class TaskService {
             ContextBudget contextBudget, AgentRuntimeFactory runtimeFactory, AgentRegistry agentRegistry,
             DirectModelUsageRecorder directUsage, HumanAgent humanAgent, AgentModelBindingService agentModelBindings,
             TaskReliabilityProperties reliability, TaskExecutionFaultInjector faultInjector,
-            BenchmarkCatalog benchmarkCatalog, SkillCatalogService skillCatalog) {
+            BenchmarkCatalog benchmarkCatalog, SkillCatalogService skillCatalog, ContextFactService contextFacts) {
         this.plannerAgent = plannerAgent;
         this.judgeAgent = judgeAgent;
         this.judgeProps = judgeProps;
@@ -171,6 +173,7 @@ public class TaskService {
         this.faultInjector = faultInjector;
         this.benchmarkCatalog = benchmarkCatalog;
         this.skillCatalog = skillCatalog;
+        this.contextFacts = contextFacts;
     }
 
     /** 创建任务：Planner 拆解 → PENDING 待审批计划。 */
@@ -520,6 +523,7 @@ public class TaskService {
                 if (record.getPendingStepId() >= 0) {
                     TaskStep pending = findStep(plan, record.getPendingStepId());
                     pending.setApproved(true); // 批准后跳过该审批点
+                    pending.setContextGateApproved(true);
                 } else {
                     if (blackboard.openArbitrations(plan).isEmpty()) {
                         throw new IllegalArgumentException("操作失败：当前没有待处理的协作仲裁。");
@@ -682,6 +686,27 @@ public class TaskService {
                         startHitl(record, step.getId(), "等待敏感步骤审批");
                         eventPublisher.publish(record, "approval_required");
                         log.info("任务 {} 步骤 {} 命中审批点，挂起等待人工审批", record.getId(), step.getId());
+                        return;
+                    }
+                }
+
+                // 29C：写操作必须经过上下文门禁；只读步骤不受降级摘要影响。
+                boolean staleFacts = hasStaleTaskFacts(record);
+                for (int idx : todo) {
+                    TaskStep step = plan.getSteps().get(idx);
+                    ContextGate.Decision gate = ContextGate.evaluate(plan, step, staleFacts);
+                    if (!gate.allowed()) {
+                        TaskStateMachine.requireTransition(record.getStatus(), TaskStatus.PENDING_APPROVAL);
+                        record.setStatus(TaskStatus.PENDING_APPROVAL);
+                        record.setPendingStepId(step.getId());
+                        record.setCurrentStep(idx);
+                        record.setError("上下文门禁：" + gate.reason());
+                        heartbeat(record);
+                        record.setPlanJson(toJson(plan));
+                        repository.save(record);
+                        startHitl(record, step.getId(), "上下文门禁：" + gate.reason());
+                        eventPublisher.publish(record, "context_gate_required");
+                        log.info("任务 {} 步骤 {} 命中上下文门禁：{}", record.getId(), step.getId(), gate.reason());
                         return;
                     }
                 }
@@ -876,6 +901,24 @@ public class TaskService {
             }
         }
         return plan.getSteps().size();
+    }
+
+    /** 只有存在事实但其中一部分已过期/待刷新时才视为 stale；没有事实的旧任务保持向后兼容。 */
+    private boolean hasStaleTaskFacts(TaskRecord record) {
+        if (contextFacts == null) return false;
+        try {
+            return RequestIdentityContext.callWith(identityOf(record), () -> {
+                var active = contextFacts.listActive(com.example.vatica.context.ContextFactScopeType.TASK,
+                        record.getId());
+                if (active.isEmpty()) return false;
+                return contextFacts.resolveCurrent(com.example.vatica.context.ContextFactScopeType.TASK,
+                        record.getId()).size() < active.size();
+            });
+        } catch (RuntimeException e) {
+            // 事实存储不可用时不把只读任务全部打成失败；副作用步骤仍会经过现有 HITL。
+            log.warn("任务 {} 读取上下文事实状态失败，保守要求副作用步骤人工确认", record.getId(), e);
+            return true;
+        }
     }
 
     private enum CollaborationRoute {
@@ -1336,6 +1379,8 @@ public class TaskService {
         for (TaskStep step : plan.getSteps()) {
             step.setResult(null);
             step.setResultDigest(null);
+            step.setResultDigestSource(null);
+            step.setContextGateApproved(false);
             step.setApproved(false);
         }
         plan.setGlobalNotes(null);

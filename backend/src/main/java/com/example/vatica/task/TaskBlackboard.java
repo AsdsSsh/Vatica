@@ -47,6 +47,12 @@ public class TaskBlackboard {
     private static final int MAX_CONTEXT_ENTRIES = 12;
     private static final Pattern JSON_BLOCK = Pattern.compile("\\{[\\s\\S]*\\}");
 
+    /** TaskStep.resultDigestSource 的稳定协议值。 */
+    public static final String DIGEST_SOURCE_ORIGINAL = "ORIGINAL";
+    public static final String DIGEST_SOURCE_MODEL_SUMMARY = "MODEL_SUMMARY";
+    public static final String DIGEST_SOURCE_DETERMINISTIC_FALLBACK = "DETERMINISTIC_FALLBACK";
+    public static final String DIGEST_SOURCE_LEGACY = "LEGACY";
+
     private static final String DIGEST_SYSTEM = """
             你是任务结果摘要 Agent。把执行结果压缩成不超过 200 字的关键事实摘要，
             保留数字、时间、路径、结论；禁止编造与评价。""";
@@ -94,7 +100,7 @@ public class TaskBlackboard {
             String digest = dependency.getResultDigest();
             if (digest == null || digest.isBlank()) {
                 String result = dependency.getResult();
-                digest = result == null ? "" : truncate(result, FALLBACK_CHARS);
+                digest = result == null ? "" : deterministicDigest(result, FALLBACK_CHARS);
             }
             messages.add(ConversationMessage.user("步骤 " + dep + " 摘要：" + digest));
         }
@@ -136,6 +142,7 @@ public class TaskBlackboard {
         if (!needHelp.isBlank()) {
             step.setResult(null);
             step.setResultDigest(null);
+            step.setResultDigestSource(null);
             helpEntry = BlackboardEntry.agent(BlackboardEntry.NEED_HELP, step, needHelp, BlackboardEntry.OPEN);
             append(plan, helpEntry);
             added.add(helpEntry);
@@ -150,20 +157,28 @@ public class TaskBlackboard {
         step.setResult(result);
         if (result == null || result.isBlank()) {
             step.setResultDigest(null);
+            step.setResultDigestSource(null);
             return;
         }
         if (result.length() <= DIGEST_THRESHOLD_CHARS) {
             step.setResultDigest(result);
+            step.setResultDigestSource(DIGEST_SOURCE_ORIGINAL);
             return;
         }
         try {
             String input = result.length() > 4_000 ? result.substring(0, 4_000) + "…" : result;
             String digest = summarize(DIGEST_SYSTEM, "步骤结果：\n" + input);
-            step.setResultDigest(digest == null || digest.isBlank()
-                    ? truncate(result, DIGEST_MAX_CHARS) : truncate(digest, DIGEST_MAX_CHARS));
+            if (digest == null || digest.isBlank()) {
+                step.setResultDigest(deterministicDigest(result, DIGEST_MAX_CHARS));
+                step.setResultDigestSource(DIGEST_SOURCE_DETERMINISTIC_FALLBACK);
+            } else {
+                step.setResultDigest(truncate(digest, DIGEST_MAX_CHARS));
+                step.setResultDigestSource(DIGEST_SOURCE_MODEL_SUMMARY);
+            }
         } catch (Exception e) {
             log.warn("步骤 {} digest 生成失败，使用截断兜底", step.getId());
-            step.setResultDigest(truncate(result, DIGEST_MAX_CHARS));
+            step.setResultDigest(deterministicDigest(result, DIGEST_MAX_CHARS));
+            step.setResultDigestSource(DIGEST_SOURCE_DETERMINISTIC_FALLBACK);
         }
     }
 
@@ -394,8 +409,7 @@ public class TaskBlackboard {
 
     /** 每波完成后合并滚动笔记；失败水位不动。 */
     public void mergeWaveNotes(TaskPlan plan) {
-        int newThrough = plan.getSteps().stream().filter(TaskBlackboard::hasResult)
-                .mapToInt(TaskStep::getId).max().orElse(0);
+        int newThrough = contiguousDigestThrough(plan);
         if (newThrough <= plan.getNoteThroughStepId()) {
             return;
         }
@@ -404,6 +418,7 @@ public class TaskBlackboard {
             if (step.getId() <= plan.getNoteThroughStepId() || step.getId() > newThrough) {
                 continue;
             }
+            ensureDigest(step);
             if (step.getResultDigest() != null && !step.getResultDigest().isBlank()) {
                 newDigests.append(step.getId()).append(". ").append(step.getResultDigest()).append('\n');
             }
@@ -457,7 +472,58 @@ public class TaskBlackboard {
     }
 
     private void append(TaskPlan plan, BlackboardEntry entry) {
-        plan.addBlackboardEntry(entry);
+        if (!plan.addBlackboardEntry(entry)) {
+            log.warn("任务黑板容量已满且全部为 OPEN，拒绝新增条目：type={} step={}",
+                    entry == null ? null : entry.type(), entry == null ? null : entry.stepId());
+        }
+    }
+
+    /**
+     * 只有从当前水位开始连续完成且已有可用摘要的步骤，才能推进滚动笔记水位。
+     * 并行波后面的步骤先完成时，必须等待前面的缺口，不能让水位越过它。
+     */
+    private static int contiguousDigestThrough(TaskPlan plan) {
+        int through = plan.getNoteThroughStepId();
+        while (true) {
+            TaskStep next = findStepOrNull(plan, through + 1);
+            if (next == null || !hasResult(next)) {
+                return through;
+            }
+            if (next.getResultDigest() == null || next.getResultDigest().isBlank()) {
+                ensureDigest(next);
+            }
+            if (next.getResultDigest() == null || next.getResultDigest().isBlank()) {
+                return through;
+            }
+            through = next.getId();
+        }
+    }
+
+    /** 旧计划可能只有 result 没有 digest；用本地确定性摘要补齐，避免永久卡住水位。 */
+    private static void ensureDigest(TaskStep step) {
+        if (!hasResult(step) || (step.getResultDigest() != null && !step.getResultDigest().isBlank())) {
+            if (step.getResultDigest() != null && !step.getResultDigest().isBlank()
+                    && (step.getResultDigestSource() == null || step.getResultDigestSource().isBlank())) {
+                step.setResultDigestSource(DIGEST_SOURCE_LEGACY);
+            }
+            return;
+        }
+        step.setResultDigest(deterministicDigest(step.getResult(), DIGEST_MAX_CHARS));
+        step.setResultDigestSource(DIGEST_SOURCE_DETERMINISTIC_FALLBACK);
+    }
+
+    /** 保留结果头尾，避免路径/ID在开头、结论在结尾时被单侧截断。 */
+    private static String deterministicDigest(String value, int max) {
+        if (value == null || value.length() <= max) {
+            return value == null ? "" : value;
+        }
+        if (max <= 1) {
+            return value.substring(0, Math.max(max, 0));
+        }
+        int markerLength = 1;
+        int head = Math.max(1, (max - markerLength) / 2);
+        int tail = Math.max(0, max - markerLength - head);
+        return value.substring(0, head) + "…" + (tail == 0 ? "" : value.substring(value.length() - tail));
     }
 
     private static BlackboardEntry replaceStatus(TaskPlan plan, String id, String status) {
@@ -547,7 +613,8 @@ public class TaskBlackboard {
     private static String stepFingerprint(TaskStep step) {
         return step.getDescription() + "|" + step.getAgent() + "|" + step.isNeedsApproval() + "|"
                 + step.getSkillId() + "@" + step.getSkillVersion() + "|"
-                + step.getDependsOn() + "|" + step.getWriteResources();
+                + step.getRequiredTools() + "|" + step.getCapabilityResolution() + "|"
+                + step.getDependsOn() + "|" + step.getWriteResources() + "|" + step.isContextGateApproved();
     }
 
     private static List<TaskStep> copySteps(List<TaskStep> steps) {
@@ -560,6 +627,10 @@ public class TaskBlackboard {
             copy.setApproved(step.isApproved());
             copy.setResult(step.getResult());
             copy.setResultDigest(step.getResultDigest());
+            copy.setResultDigestSource(step.getResultDigestSource());
+            copy.setContextGateApproved(step.isContextGateApproved());
+            copy.setRequiredTools(step.getRequiredTools());
+            copy.setCapabilityResolution(step.getCapabilityResolution());
             copy.setDependsOn(step.getDependsOn() == null ? null : List.copyOf(step.getDependsOn()));
             copy.setWriteResources(step.getWriteResources());
             copies.add(copy);

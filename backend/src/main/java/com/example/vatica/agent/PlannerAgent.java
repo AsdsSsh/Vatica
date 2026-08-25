@@ -255,6 +255,8 @@ public class PlannerAgent {
             step.setId(i);
             step.setResult(null);
             step.setResultDigest(null);
+            step.setResultDigestSource(null);
+            step.setContextGateApproved(false);
             step.setAgent(agentRegistry.normalizeId(step.getAgent()));
             // Skill 版本由 Vatica 注册中心绑定，拒绝信任 Planner 幻觉字段。
             step.setSkillId(null);

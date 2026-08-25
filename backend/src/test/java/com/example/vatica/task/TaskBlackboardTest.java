@@ -126,6 +126,68 @@ class TaskBlackboardTest {
         assertThat(plan.getGlobalNotes()).contains("摘要1").contains("摘要2").contains("摘要3");
     }
 
+    /** 29C：并行步骤乱序完成时，滚动笔记水位只能推进到连续完成的步骤。 */
+    @Test
+    void mergeWaveNotesOnlyAdvancesAcrossContiguousResults() {
+        TaskPlan plan = planWithSteps(3);
+        TaskStep second = plan.getSteps().get(1);
+        second.setResult("结果2");
+        second.setResultDigest("摘要2");
+
+        blackboard.mergeWaveNotes(plan);
+
+        assertThat(plan.getNoteThroughStepId()).isZero();
+        assertThat(plan.getGlobalNotes()).isNull();
+
+        TaskStep first = plan.getSteps().getFirst();
+        first.setResult("结果1");
+        first.setResultDigest("摘要1");
+        blackboard.mergeWaveNotes(plan);
+
+        assertThat(plan.getNoteThroughStepId()).isEqualTo(2);
+        assertThat(plan.getGlobalNotes()).contains("摘要1").contains("摘要2").doesNotContain("摘要3");
+
+        TaskStep third = plan.getSteps().get(2);
+        third.setResult("结果3");
+        third.setResultDigest("摘要3");
+        blackboard.mergeWaveNotes(plan);
+
+        assertThat(plan.getNoteThroughStepId()).isEqualTo(3);
+        assertThat(plan.getGlobalNotes()).contains("摘要3");
+    }
+
+    /** 29C：旧计划只有 result 时，用本地头尾截断补齐 digest，并标记来源。 */
+    @Test
+    void legacyResultGetsDeterministicDigestAndSource() {
+        TaskPlan plan = planWithSteps(1);
+        TaskStep step = plan.getSteps().getFirst();
+        step.setResult("HEAD-" + "中间内容".repeat(100) + "-TAIL");
+
+        blackboard.mergeWaveNotes(plan);
+
+        assertThat(plan.getNoteThroughStepId()).isEqualTo(1);
+        assertThat(step.getResultDigestSource()).isEqualTo(TaskBlackboard.DIGEST_SOURCE_DETERMINISTIC_FALLBACK);
+        assertThat(step.getResultDigest()).contains("HEAD-").contains("-TAIL");
+    }
+
+    /** 29C：摘要模型返回空内容时，确定性回退同样保留头尾并标记来源。 */
+    @Test
+    void emptyModelDigestUsesDeterministicFallbackSource() {
+        String longResult = "HEAD-" + "中间内容".repeat(100) + "-TAIL";
+        when(registry.activeSlotFor(ModelSlot.CAP_SUMMARIZER)).thenReturn(
+                new ModelSlot("summary", "Summary", "openai", "https://example.test",
+                        "k", "summary-model", 0.2, true));
+        when(modelGateway.call(org.mockito.ArgumentMatchers.any())).thenReturn(
+                new ModelResponse("", "", ModelUsage.empty()));
+
+        TaskPlan plan = planWithSteps(1);
+        TaskStep step = plan.getSteps().getFirst();
+        blackboard.recordStepResult(plan, step, longResult);
+
+        assertThat(step.getResultDigestSource()).isEqualTo(TaskBlackboard.DIGEST_SOURCE_DETERMINISTIC_FALLBACK);
+        assertThat(step.getResultDigest()).contains("HEAD-").contains("-TAIL");
+    }
+
     /** 17B：结构化 Worker 输出形成 result/note/need-help，求助步骤保持未完成等待调度裁决。 */
     @Test
     void parsesRestrictedWorkerOutputIntoBlackboardPrimitives() {
@@ -191,6 +253,8 @@ class TaskBlackboardTest {
             step.setDependsOn(List.of());
             step.setWriteResources(List.of("file:report.docx"));
         });
+        plan.getSteps().get(1).setRequiredTools(List.of("write_file"));
+        plan.getSteps().get(1).setCapabilityResolution("能力回退说明");
         List<BlackboardEntry> conflicts = blackboard.detectWriteConflicts(plan, List.of(0, 1));
         CollaborationDecision ineffective = new CollaborationDecision(true, "只改描述但未解决并发写",
                 List.of(new CollaborationDecision.StepPatch(2, "改过但仍并发的步骤", null,
@@ -201,6 +265,8 @@ class TaskBlackboardTest {
 
         assertThat(applied.changed()).isFalse();
         assertThat(plan.getSteps().get(1).getDescription()).isEqualTo("步骤2");
+        assertThat(plan.getSteps().get(1).getRequiredTools()).containsExactly("write_file");
+        assertThat(plan.getSteps().get(1).getCapabilityResolution()).isEqualTo("能力回退说明");
         assertThat(plan.getBlackboard()).filteredOn(entry -> BlackboardEntry.CONFLICT.equals(entry.type()))
                 .extracting(BlackboardEntry::status).containsExactly(BlackboardEntry.OPEN);
     }
@@ -283,5 +349,28 @@ class TaskBlackboardTest {
         assertThat(plan.getBlackboard()).hasSize(TaskBlackboard.MAX_ENTRIES);
         assertThat(plan.getBlackboard()).contains(open);
         assertThat(plan.getBlackboard().getLast().content()).isEqualTo("备注 71");
+    }
+
+    /** 29C：黑板全是 OPEN 仲裁项时，新增条目被拒绝，已有 OPEN 不得被淘汰。 */
+    @Test
+    void blackboardFullOfOpenEntriesNeverEvictsExistingArbitration() {
+        TaskPlan plan = planWithSteps(1);
+        BlackboardEntry first = null;
+        for (int i = 0; i < TaskBlackboard.MAX_ENTRIES; i++) {
+            BlackboardEntry entry = new BlackboardEntry(null, BlackboardEntry.NEED_HELP, 1, "agent", "AGENT",
+                    "等待裁决 " + i, null, List.of(1), BlackboardEntry.OPEN, null);
+            if (first == null) {
+                first = entry;
+            }
+            assertThat(plan.addBlackboardEntry(entry)).isTrue();
+        }
+
+        boolean added = plan.addBlackboardEntry(new BlackboardEntry(null, BlackboardEntry.CONFLICT, 1, "planner",
+                "SYSTEM", "新的冲突", "file:other.docx", List.of(1), BlackboardEntry.OPEN, null));
+
+        assertThat(added).isFalse();
+        assertThat(plan.getBlackboard()).hasSize(TaskBlackboard.MAX_ENTRIES);
+        assertThat(plan.getBlackboard()).contains(first);
+        assertThat(plan.getBlackboard()).allMatch(entry -> BlackboardEntry.OPEN.equals(entry.status()));
     }
 }
