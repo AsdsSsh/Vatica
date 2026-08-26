@@ -81,6 +81,11 @@ public final class InMemorySessionMemory implements SessionMemory {
         return sessions.containsKey(keyOf(sessionId));
     }
 
+    @Override
+    public synchronized void evict(String sessionId) {
+        sessions.remove(keyOf(sessionId));
+    }
+
     private void add(Bucket bucket, ConversationMessage message) {
         String text = message.text();
         if (text == null || text.isBlank()) {

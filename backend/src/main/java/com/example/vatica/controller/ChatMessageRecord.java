@@ -11,14 +11,15 @@ import jakarta.persistence.Index;
 import jakarta.persistence.Table;
 
 /**
- * 会话消息持久化实体（迭代 5 I5-4）：短期记忆落 MySQL（重启不丢）。
+ * 会话消息持久化实体（迭代 5 I5-4）：短期记忆持久化（重启不丢）。
  *
  * <p>只存 user / 最终 assistant 纯文本（工具调用中间过程不落库——迭代 2.5 的
  * 既定结论：避免 dangling tool-call 消息污染下一轮上下文）。
  */
 @Entity
 @Table(name = "vatica_chat_message", indexes = {
-        @Index(name = "idx_msg_owner_session_seq", columnList = "userId,sessionId,seq") })
+        @Index(name = "idx_msg_owner_session_seq", columnList = "userId,sessionId,seq"),
+        @Index(name = "idx_msg_tenant_session_seq", columnList = "orgId,userId,sessionId,seq") })
 public class ChatMessageRecord {
 
     @Id

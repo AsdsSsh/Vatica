@@ -89,6 +89,8 @@ vatica:
       max-messages: 20
       max-sessions: 64
       max-chars: 16000     # 单会话历史字符数上限（token 的工程近似）
+      # 迭代 31B：大窗口模型按本次预算从 PostgreSQL 读取原文的硬行数上限；不是 JVM 缓存大小。
+      long-context-max-messages: ${VATICA_CHAT_LONG_CONTEXT_MAX_MESSAGES:512}
     # 迭代 29A：中期摘要按批补偿；失败时只做有限次退避重试，原文仍保留在 PostgreSQL。
     summary:
       max-batch-messages: 20

@@ -18,8 +18,9 @@ import jakarta.persistence.UniqueConstraint;
 /** 迭代 14：跨设备同步的用户会话元数据。 */
 @Entity
 @Table(name = "vatica_chat_session",
-        uniqueConstraints = @UniqueConstraint(name = "uk_session_owner_id", columnNames = { "userId", "sessionId" }),
-        indexes = @Index(name = "idx_session_owner_updated", columnList = "userId,updatedAt"))
+        uniqueConstraints = @UniqueConstraint(name = "uk_session_tenant_owner_id",
+                columnNames = { "orgId", "userId", "sessionId" }),
+        indexes = @Index(name = "idx_session_tenant_owner_updated", columnList = "orgId,userId,updatedAt"))
 public class ChatSessionRecord {
 
     @Id

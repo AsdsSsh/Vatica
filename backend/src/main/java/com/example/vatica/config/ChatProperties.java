@@ -21,7 +21,7 @@ public record ChatProperties(Sse sse, Memory memory, Summary summary) {
             sse = new Sse(null);
         }
         if (memory == null) {
-            memory = new Memory(0, 0, 0);
+            memory = new Memory(0, 0, 0, 0);
         }
         if (summary == null) {
             summary = new Summary(0, -1, null);
@@ -42,11 +42,17 @@ public record ChatProperties(Sse sse, Memory memory, Summary summary) {
 
     /** 会话短期记忆：滑动窗口上限与会话数上限（防内存无限增长）。
      *  maxChars 为单会话历史字符数上限（token 的工程近似：中文约 1 字 ≈ 1 token）。 */
-    public record Memory(int maxMessages, int maxSessions, int maxChars) {
+    public record Memory(int maxMessages, int maxSessions, int maxChars, int longContextMaxMessages) {
 
         public static final int DEFAULT_MAX_MESSAGES = 20;
         public static final int DEFAULT_MAX_SESSIONS = 64;
         public static final int DEFAULT_MAX_CHARS = 16000;
+        public static final int DEFAULT_LONG_CONTEXT_MAX_MESSAGES = 512;
+
+        /** 兼容迭代 30 及更早的程序化构造器。 */
+        public Memory(int maxMessages, int maxSessions, int maxChars) {
+            this(maxMessages, maxSessions, maxChars, 0);
+        }
 
         public Memory {
             if (maxMessages <= 0) {
@@ -58,6 +64,10 @@ public record ChatProperties(Sse sse, Memory memory, Summary summary) {
             if (maxChars <= 0) {
                 maxChars = DEFAULT_MAX_CHARS;
             }
+            if (longContextMaxMessages <= 0) {
+                longContextMaxMessages = DEFAULT_LONG_CONTEXT_MAX_MESSAGES;
+            }
+            longContextMaxMessages = Math.max(maxMessages, longContextMaxMessages);
         }
     }
 

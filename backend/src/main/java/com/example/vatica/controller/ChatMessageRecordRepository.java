@@ -12,7 +12,31 @@ public interface ChatMessageRecordRepository extends JpaRepository<ChatMessageRe
     List<ChatMessageRecord> findByUserIdAndSessionIdOrderBySeqDesc(Long userId, String sessionId,
             Pageable pageable);
 
+    /** 迭代 31B：模型按需读原文必须同时绑定组织、用户与会话。 */
+    List<ChatMessageRecord> findByOrgIdAndUserIdAndSessionIdOrderBySeqDesc(Long orgId, Long userId,
+            String sessionId, Pageable pageable);
+
+    List<ChatMessageRecord> findByOrgIdAndUserIdAndSessionIdOrderBySeqAsc(Long orgId, Long userId,
+            String sessionId);
+
     List<ChatMessageRecord> findByUserIdAndSessionIdOrderBySeqAsc(Long userId, String sessionId);
+
+    List<ChatMessageRecord> findByOrgIdAndUserIdAndSessionIdAndSeqGreaterThanOrderBySeqAsc(Long orgId,
+            Long userId, String sessionId, long seq, Pageable pageable);
+
+    List<ChatMessageRecord> findByOrgIdAndUserIdAndSessionIdAndSeqGreaterThanAndSeqLessThanEqualOrderBySeqAsc(
+            Long orgId, Long userId, String sessionId, long afterSeq, long throughSeq, Pageable pageable);
+
+    long countByOrgIdAndUserIdAndSessionIdAndSeqGreaterThan(Long orgId, Long userId, String sessionId, long seq);
+
+    long countByOrgIdAndUserIdAndSessionIdAndSeqGreaterThanAndSeqLessThan(Long orgId, Long userId,
+            String sessionId, long afterSeq, long beforeSeq);
+
+    List<ChatMessageRecord> findByOrgIdAndUserIdAndSessionIdAndSeqGreaterThanAndSeqLessThanOrderBySeqAsc(
+            Long orgId, Long userId, String sessionId, long afterSeq, long beforeSeq, Pageable pageable);
+
+    List<ChatMessageRecord> findByOrgIdAndUserIdAndSessionIdAndSeqGreaterThanAndSeqLessThanOrderBySeqDesc(
+            Long orgId, Long userId, String sessionId, long afterSeq, long beforeSeq, Pageable pageable);
 
     long countByUserIdAndSessionIdAndSeqGreaterThan(Long userId, String sessionId, long seq);
 
@@ -33,4 +57,6 @@ public interface ChatMessageRecordRepository extends JpaRepository<ChatMessageRe
             Long userId, String sessionId, long afterSeq, long throughSeq, Pageable pageable);
 
     void deleteByUserIdAndSessionId(Long userId, String sessionId);
+
+    void deleteByOrgIdAndUserIdAndSessionId(Long orgId, Long userId, String sessionId);
 }
