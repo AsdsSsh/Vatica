@@ -23,6 +23,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
         ChatProperties.class, JudgeProperties.class, ModelProperties.class, OpenAiDefaultsProperties.class,
         TaskReliabilityProperties.class,
         AgentScopeContextProperties.class,
+        ContextAllocationProperties.class,
         com.example.vatica.evaluation.EvaluationProperties.class,
         com.example.vatica.usage.UsageProperties.class })
 public class ChatConfig {
