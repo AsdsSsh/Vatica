@@ -35,6 +35,21 @@ public record ContextBudget(int chatTokens, int plannerTokens, int executorToken
         };
     }
 
+    /**
+     * 迭代 30A：只替换一个调用点的有效历史预算，保留其它角色预算不变。
+     * 这样 AgentScope 的窗口计算不会把 Planner/Judge 的策略意外改小。
+     */
+    public ContextBudget with(CallSite callSite, int tokens) {
+        int value = Math.max(1, tokens);
+        return switch (callSite) {
+            case CHAT -> new ContextBudget(value, plannerTokens, executorTokens, judgeTokens, summarizerTokens);
+            case PLANNER -> new ContextBudget(chatTokens, value, executorTokens, judgeTokens, summarizerTokens);
+            case EXECUTOR -> new ContextBudget(chatTokens, plannerTokens, value, judgeTokens, summarizerTokens);
+            case JUDGE -> new ContextBudget(chatTokens, plannerTokens, executorTokens, value, summarizerTokens);
+            case SUMMARIZER -> new ContextBudget(chatTokens, plannerTokens, executorTokens, judgeTokens, value);
+        };
+    }
+
     private static int positive(int value, int fallback) {
         return value <= 0 ? fallback : value;
     }

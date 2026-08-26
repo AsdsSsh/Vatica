@@ -4,8 +4,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
 
+import com.example.vatica.agentscope.AgentScopeContextBudgetPlanner;
 import com.example.vatica.config.ChatProperties;
 import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.config.ModelSlot;
@@ -28,6 +30,8 @@ import com.example.vatica.tool.RetryableToolCallbacks;
 import com.example.vatica.tool.AgentToolProvider;
 import com.example.vatica.usage.UsageContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import io.agentscope.core.tool.AgentTool;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -87,6 +91,7 @@ public class ChatController {
     private final ContextBudget contextBudget;
     private final SseEventGateway eventGateway;
     private final ContextFactService contextFacts;
+    private final AgentScopeContextBudgetPlanner contextBudgetPlanner;
 
     /** 活跃流式连接注册表：可观测 + 断连清理（迭代 5 任务终止/迭代 7 前端联调可复用）。 */
     private final Set<SseEmitter> activeEmitters = ConcurrentHashMap.newKeySet();
@@ -95,7 +100,8 @@ public class ChatController {
     public ChatController(ModelRegistry registry, ChatProperties chatProperties, SessionMemory sessionMemory,
             AgentToolProvider vaticaTools, PermissionEventPublisher permissionEvents,
             FilePermissionRequestService permissionRequests, ObjectMapper mapper, ContextBudget contextBudget,
-            SseEventGateway eventGateway, AgentScopeChatService chatService, ContextFactService contextFacts) {
+            SseEventGateway eventGateway, AgentScopeChatService chatService, ContextFactService contextFacts,
+            AgentScopeContextBudgetPlanner contextBudgetPlanner) {
         this.registry = registry;
         this.chatProperties = chatProperties;
         this.sessionMemory = sessionMemory;
@@ -107,6 +113,7 @@ public class ChatController {
         this.eventGateway = eventGateway;
         this.chatService = chatService;
         this.contextFacts = contextFacts;
+        this.contextBudgetPlanner = contextBudgetPlanner;
     }
 
     /** 迭代 22A 测试构造器：显式注入 AgentScope 聊天服务。 */
@@ -115,7 +122,9 @@ public class ChatController {
             FilePermissionRequestService permissionRequests, ObjectMapper mapper, ContextBudget contextBudget,
             AgentScopeChatService chatService) {
         this(registry, chatProperties, sessionMemory, vaticaTools, permissionEvents, permissionRequests,
-                mapper, contextBudget, new SseEventGateway(mapper), chatService, null);
+                mapper, contextBudget, new SseEventGateway(mapper), chatService, null,
+                new AgentScopeContextBudgetPlanner(new com.example.vatica.config.AgentScopeContextProperties(
+                        true, 0, 0, 0)));
     }
 
     /** 可用模型清单（迭代 7 模型选择器；迭代 8.5 起来自动态注册表；迭代 9 类型化 DTO）。 */
@@ -173,7 +182,7 @@ public class ChatController {
         try {
             String reply = requireChatService().call(new AgentScopeChatService.ChatRequest(slot,
                     reasoningMode(request), SYSTEM_PROMPT,
-                    historyForChat(request.sessionId()),
+                    historyForChat(request.sessionId(), slot, SYSTEM_PROMPT, request.message(), tools),
                     request.message(), tools,
                     identity, request.sessionId(), false)).content();
             sessionMemory.append(request.sessionId(), request.message(), reply);
@@ -225,7 +234,7 @@ public class ChatController {
 
         subscription[0] = requireChatService().stream(new AgentScopeChatService.ChatRequest(slot,
                 reasoningMode(request), SYSTEM_PROMPT,
-                historyForChat(request.sessionId()),
+                historyForChat(request.sessionId(), slot, SYSTEM_PROMPT, request.message(), tools),
                 request.message(), tools,
                 identity, request.sessionId(), true))
                 .subscribe(
@@ -287,7 +296,8 @@ public class ChatController {
     }
 
     /** 事实层故障不能阻断聊天；原文摘要/近期滑窗仍按 29A 路径组装。 */
-    private List<com.example.vatica.model.ConversationMessage> historyForChat(String sessionId) {
+    private List<com.example.vatica.model.ConversationMessage> historyForChat(String sessionId, ModelSlot slot,
+            String systemPrompt, String userPrompt, AgentTool[] tools) {
         List<ContextFactService.ContextFactSnippet> facts = List.of();
         if (contextFacts != null) {
             try {
@@ -296,7 +306,24 @@ public class ChatController {
                 log.warn("关键事实读取失败，降级为会话历史：session={}", sessionId, e);
             }
         }
-        return ContextAssembler.chatHistory(sessionMemory, sessionId, contextBudget, facts);
+        ContextBudget effectiveBudget = contextBudget;
+        if (contextBudgetPlanner != null && contextBudget != null) {
+            try {
+                AgentScopeContextBudgetPlanner.Plan plan = contextBudgetPlanner.plan(
+                        registry.agentScopeModel(slot), ContextBudget.CallSite.CHAT, contextBudget,
+                        systemPrompt, tools == null ? List.of() : Arrays.asList(tools), userPrompt);
+                effectiveBudget = plan.applyTo(contextBudget);
+                if (plan.ledger().constrained()) {
+                    log.debug("AgentScope 上下文预算收紧：session={} window={} history={} fixed={} toolSchema={}",
+                            sessionId, plan.ledger().modelWindowTokens(), plan.historyBudgetTokens(),
+                            plan.ledger().fixedInputTokens(), plan.ledger().toolSchemaTokens());
+                }
+            } catch (RuntimeException e) {
+                // 模型窗口探测属于预算优化，失败时继续使用 29D 的确定性历史降级路径。
+                log.warn("AgentScope 上下文预算计算失败，回退会话预算：session={}", sessionId, e);
+            }
+        }
+        return ContextAssembler.chatHistory(sessionMemory, sessionId, effectiveBudget, facts);
     }
 
     /** 迭代 15 I15-13：聊天用量上下文——平台模型计配额，自配/临时模型只记录不扣额度。 */

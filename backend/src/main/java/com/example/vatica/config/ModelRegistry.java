@@ -15,6 +15,7 @@ import io.agentscope.core.model.Model;
 import io.agentscope.core.tool.Toolkit;
 import io.agentscope.extensions.model.openai.formatter.DeepSeekFormatter;
 import io.agentscope.extensions.model.openai.formatter.OpenAIChatFormatter;
+import com.example.vatica.agentscope.AgentScopeContextWindowResolver;
 
 /**
  * 迭代 22D：Vatica 的动态模型注册表。
@@ -124,12 +125,14 @@ public class ModelRegistry {
                     .apiKey(slot.apiKey() == null ? "" : slot.apiKey()).baseUrl(slot.baseUrl()).modelName(slot.model())
                     .stream(false).generateOptions(options)
                     .formatter(deepseek ? new DeepSeekFormatter() : new OpenAIChatFormatter())
-                    .contextWindowSize(16_000).build();
+                    // 迭代 30A：AgentScope 的已知模型窗口，未知端点由 resolver 保守回退。
+                    .contextWindowSize(AgentScopeContextWindowResolver.resolve(slot)).build();
         }
         if (ModelSlot.PROTOCOL_ANTHROPIC.equals(slot.protocol())) {
             return io.agentscope.extensions.model.anthropic.AnthropicChatModel.builder()
                     .apiKey(slot.apiKey() == null ? "" : slot.apiKey()).baseUrl(slot.baseUrl()).modelName(slot.model())
-                    .stream(false).defaultOptions(options).contextWindowSize(16_000).build();
+                    .stream(false).defaultOptions(options)
+                    .contextWindowSize(AgentScopeContextWindowResolver.resolve(slot)).build();
         }
         throw new IllegalArgumentException("操作失败：不支持的协议（" + slot.protocol() + "）。");
     }

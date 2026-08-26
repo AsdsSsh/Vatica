@@ -25,6 +25,14 @@ vatica:
   # 迭代 21D：Agent Span 明细默认保留 30 天；启动时 best-effort 清理过期记录。
   observability:
     retention: ${VATICA_OBSERVABILITY_RETENTION:30d}
+  # 迭代 30A：AgentScope 原生模型窗口 + Vatica 总预算账本。
+  # 输出预留和安全余量不属于历史消息，避免工具 Schema 或回答空间挤穿窗口。
+  agent:
+    context:
+      enabled: ${VATICA_AGENT_CONTEXT_ENABLED:true}
+      output-reserve-tokens: ${VATICA_AGENT_OUTPUT_RESERVE_TOKENS:2048}
+      safety-margin-tokens: ${VATICA_AGENT_CONTEXT_SAFETY_TOKENS:512}
+      fallback-model-window-tokens: ${VATICA_AGENT_FALLBACK_CONTEXT_TOKENS:16000}
   # 迭代 23B：额外开发 origin 用逗号分隔；桌面壳和默认 Vite 来源始终保留。
   cors:
     allowed-origins: ${VATICA_CORS_ALLOWED_ORIGINS:}
