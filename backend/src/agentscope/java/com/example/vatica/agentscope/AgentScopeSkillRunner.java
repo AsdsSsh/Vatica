@@ -10,7 +10,9 @@ import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.example.vatica.config.AgentScopeContextProperties;
 import com.example.vatica.config.ModelSlot;
+import com.example.vatica.context.ContextBudget;
 import com.example.vatica.runtime.AgentRegistry.AgentDefinition;
 import com.example.vatica.runtime.AgentRuntime.StepRequest;
 import com.example.vatica.runtime.AgentRuntime.StepResult;
@@ -39,10 +41,21 @@ final class AgentScopeSkillRunner {
 
     private final ObjectMapper mapper;
     private final Function<ModelSlot, Model> modelFactory;
+    private final ContextBudget contextBudget;
+    private final AgentScopeContextProperties contextProperties;
 
     AgentScopeSkillRunner(ObjectMapper mapper, Function<ModelSlot, Model> modelFactory) {
+        this(mapper, modelFactory, new ContextBudget(0, 0, 0, 0, 0),
+                new AgentScopeContextProperties(true, 0, 0, 0));
+    }
+
+    AgentScopeSkillRunner(ObjectMapper mapper, Function<ModelSlot, Model> modelFactory,
+            ContextBudget contextBudget, AgentScopeContextProperties contextProperties) {
         this.mapper = mapper;
         this.modelFactory = modelFactory;
+        this.contextBudget = contextBudget == null ? new ContextBudget(0, 0, 0, 0, 0) : contextBudget;
+        this.contextProperties = contextProperties == null
+                ? new AgentScopeContextProperties(true, 0, 0, 0) : contextProperties;
     }
 
     StepResult execute(StepRequest request, AgentDefinition role) {
@@ -67,11 +80,18 @@ final class AgentScopeSkillRunner {
         for (AgentTool tool : tools) {
             toolkit.registerAgentTool(tool);
         }
+        Model model = modelFactory.apply(request.modelSlot());
+        String prompt = systemPrompt(role, skill);
+        AgentScopeContextBudgetMiddleware budgetMiddleware = new AgentScopeContextBudgetMiddleware(model,
+                prompt, ContextBudget.CallSite.EXECUTOR,
+                contextBudget.tokensFor(ContextBudget.CallSite.EXECUTOR), contextProperties);
         ReActAgent agent = ReActAgent.builder()
                 .name(agentName)
-                .sysPrompt(systemPrompt(role, skill))
-                .model(modelFactory.apply(request.modelSlot()))
+                .sysPrompt(prompt)
+                .model(model)
                 .toolkit(toolkit)
+                // 迭代 30B：Skill 的每次模型调用都经过 AgentScope 预算 middleware。
+                .middleware(budgetMiddleware)
                 .maxIters(skill.limits().maxIterations())
                 .defaultSessionId(request.sessionId())
                 .generateOptions(GenerateOptions.builder().reasoningEffort("none")

@@ -11,8 +11,10 @@ import java.util.function.Function;
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
 import com.example.vatica.auth.TenantChannels;
+import com.example.vatica.config.AgentScopeContextProperties;
 import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.config.ModelSlot;
+import com.example.vatica.context.ContextBudget;
 import com.example.vatica.permission.FilePermissionPolicy;
 import com.example.vatica.permission.PermissionBoundToolCallbacks;
 import com.example.vatica.tool.AgentToolProvider;
@@ -52,25 +54,50 @@ public class AgentScopeRuntime implements AgentRuntime {
     private final ObjectMapper mapper;
     private final AgentRegistry agentRegistry;
     private final Function<ModelSlot, Model> modelFactory;
+    private final ContextBudget contextBudget;
+    private final AgentScopeContextProperties contextProperties;
     private final AgentScopeSkillRunner skillRunner;
 
     public AgentScopeRuntime(ModelRegistry registry, AgentToolProvider vaticaTools, ObjectMapper mapper) {
-        this(registry, vaticaTools, mapper, new AgentRegistry());
+        this(registry, vaticaTools, mapper, new AgentRegistry(),
+                new ContextBudget(0, 0, 0, 0, 0), new AgentScopeContextProperties(true, 0, 0, 0));
     }
 
     public AgentScopeRuntime(ModelRegistry registry, AgentToolProvider vaticaTools, ObjectMapper mapper,
             AgentRegistry agentRegistry) {
-        this(registry, vaticaTools, mapper, agentRegistry, registry::agentScopeModel);
+        this(registry, vaticaTools, mapper, agentRegistry, registry::agentScopeModel,
+                new ContextBudget(0, 0, 0, 0, 0), new AgentScopeContextProperties(true, 0, 0, 0));
     }
 
     AgentScopeRuntime(ModelRegistry registry, AgentToolProvider vaticaTools, ObjectMapper mapper,
             AgentRegistry agentRegistry, Function<ModelSlot, Model> modelFactory) {
+        this(registry, vaticaTools, mapper, agentRegistry, modelFactory,
+                new ContextBudget(0, 0, 0, 0, 0), new AgentScopeContextProperties(true, 0, 0, 0));
+    }
+
+    /**
+     * 迭代 30B：生产运行时接收统一上下文预算配置；保留旧构造器供历史构建产物和单测使用。
+     */
+    public AgentScopeRuntime(ModelRegistry registry, AgentToolProvider vaticaTools, ObjectMapper mapper,
+            AgentRegistry agentRegistry, ContextBudget contextBudget,
+            AgentScopeContextProperties contextProperties) {
+        this(registry, vaticaTools, mapper, agentRegistry, registry::agentScopeModel,
+                contextBudget, contextProperties);
+    }
+
+    AgentScopeRuntime(ModelRegistry registry, AgentToolProvider vaticaTools, ObjectMapper mapper,
+            AgentRegistry agentRegistry, Function<ModelSlot, Model> modelFactory,
+            ContextBudget contextBudget, AgentScopeContextProperties contextProperties) {
         this.registry = registry;
         this.vaticaTools = vaticaTools;
         this.mapper = mapper;
         this.agentRegistry = agentRegistry;
         this.modelFactory = modelFactory;
-        this.skillRunner = new AgentScopeSkillRunner(mapper, modelFactory);
+        this.contextBudget = contextBudget == null ? new ContextBudget(0, 0, 0, 0, 0) : contextBudget;
+        this.contextProperties = contextProperties == null
+                ? new AgentScopeContextProperties(true, 0, 0, 0) : contextProperties;
+        this.skillRunner = new AgentScopeSkillRunner(mapper, modelFactory,
+                this.contextBudget, this.contextProperties);
     }
 
     @Override
@@ -90,11 +117,18 @@ public class AgentScopeRuntime implements AgentRuntime {
             Toolkit toolkit = new Toolkit();
             String agentName = "vatica-advisory-"
                     + request.kind().name().toLowerCase(java.util.Locale.ROOT).replace('_', '-');
+            Model model = modelFactory.apply(slot);
+            ContextBudget.CallSite callSite = request.kind() == AdvisoryKind.JUDGE
+                    ? ContextBudget.CallSite.JUDGE : ContextBudget.CallSite.PLANNER;
+            AgentScopeContextBudgetMiddleware budgetMiddleware = contextMiddleware(
+                    model, request.systemPrompt(), callSite);
             ReActAgent agent = ReActAgent.builder()
                     .name(agentName)
                     .sysPrompt(request.systemPrompt())
-                    .model(modelFactory.apply(slot))
+                    .model(model)
                     .toolkit(toolkit)
+                    // 迭代 30B：Planner/Judge 建议调用也受模型窗口预算保护。
+                    .middleware(budgetMiddleware)
                     .maxIters(1)
                     .defaultSessionId(request.sessionId())
                     .generateOptions(GenerateOptions.builder().reasoningEffort("high")
@@ -255,6 +289,8 @@ public class AgentScopeRuntime implements AgentRuntime {
             toolkit.registerAgentTool(tool);
             registered.add(toolName);
         }
+        AgentScopeContextBudgetMiddleware budgetMiddleware = contextMiddleware(
+                model, sysPrompt, ContextBudget.CallSite.EXECUTOR);
         GenerateOptions.Builder options = GenerateOptions.builder().reasoningEffort("none")
                 .toolChoice(new ToolChoice.Auto());
         ReActAgent agent = ReActAgent.builder()
@@ -262,6 +298,8 @@ public class AgentScopeRuntime implements AgentRuntime {
                 .sysPrompt(sysPrompt)
                 .model(model)
                 .toolkit(toolkit)
+                // 迭代 30B：任务步骤和 POC Agent 的每轮模型调用统一走预算 middleware。
+                .middleware(budgetMiddleware)
                 .maxIters(8)
                 .defaultSessionId(sessionId)
                 .generateOptions(options.build())
@@ -269,6 +307,12 @@ public class AgentScopeRuntime implements AgentRuntime {
         log.info("AgentScope agent={} toolkit={} schemas={}",
                 agentName, registered, toolkit.getToolSchemas().size());
         return new ToolKitContext(toolkit, agent);
+    }
+
+    private AgentScopeContextBudgetMiddleware contextMiddleware(Model model, String systemPrompt,
+            ContextBudget.CallSite callSite) {
+        return new AgentScopeContextBudgetMiddleware(model, systemPrompt, callSite,
+                contextBudget.tokensFor(callSite), contextProperties);
     }
 
     static String stepPrompt(StepRequest request) {

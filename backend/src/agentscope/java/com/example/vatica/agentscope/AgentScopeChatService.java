@@ -5,12 +5,15 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.config.ModelSlot;
 import com.example.vatica.config.ReasoningMode;
+import com.example.vatica.config.AgentScopeContextProperties;
+import com.example.vatica.context.ContextBudget;
 import com.example.vatica.model.ConversationMessage;
 import com.example.vatica.model.ModelUsage;
 import com.example.vatica.runtime.AgentRuntime.StepUsage;
@@ -40,12 +43,25 @@ public class AgentScopeChatService {
     private final ModelRegistry registry;
     private final ObjectMapper mapper;
     private final DirectModelUsageRecorder usageRecorder;
+    private final ContextBudget contextBudget;
+    private final AgentScopeContextProperties contextProperties;
 
     public AgentScopeChatService(ModelRegistry registry, ObjectMapper mapper,
             DirectModelUsageRecorder usageRecorder) {
+        this(registry, mapper, usageRecorder, new ContextBudget(0, 0, 0, 0, 0),
+                new AgentScopeContextProperties(true, 0, 0, 0));
+    }
+
+    @Autowired
+    public AgentScopeChatService(ModelRegistry registry, ObjectMapper mapper,
+            DirectModelUsageRecorder usageRecorder, ContextBudget contextBudget,
+            AgentScopeContextProperties contextProperties) {
         this.registry = registry;
         this.mapper = mapper;
         this.usageRecorder = usageRecorder;
+        this.contextBudget = contextBudget == null ? new ContextBudget(0, 0, 0, 0, 0) : contextBudget;
+        this.contextProperties = contextProperties == null
+                ? new AgentScopeContextProperties(true, 0, 0, 0) : contextProperties;
     }
 
     public ChatResult call(ChatRequest request) {
@@ -97,11 +113,17 @@ public class AgentScopeChatService {
                 .temperature(request.slot().temperature())
                 .reasoningEffort(AgentScopeModelGateway.reasoningEffort(request.reasoningMode()))
                 .build();
+        var model = registry.agentScopeModel(request.slot());
+        AgentScopeContextBudgetMiddleware budgetMiddleware = new AgentScopeContextBudgetMiddleware(model,
+                request.systemPrompt(), ContextBudget.CallSite.CHAT,
+                contextBudget.tokensFor(ContextBudget.CallSite.CHAT), contextProperties);
         return ReActAgent.builder()
                 .name("vatica-chat")
                 .sysPrompt(request.systemPrompt())
-                .model(registry.agentScopeModel(request.slot()))
+                .model(model)
                 .toolkit(toolkit)
+                // 迭代 30B：每次 AgentScope 模型调用（含 ReAct 后续回合）都重新执行预算裁剪。
+                .middleware(budgetMiddleware)
                 .maxIters(8)
                 .defaultSessionId(request.sessionId())
                 .generateOptions(options)
