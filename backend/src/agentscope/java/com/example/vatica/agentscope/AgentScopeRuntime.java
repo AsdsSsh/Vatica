@@ -127,7 +127,7 @@ public class AgentScopeRuntime implements AgentRuntime {
                     .sysPrompt(request.systemPrompt())
                     .model(model)
                     .toolkit(toolkit)
-                    // 迭代 30B：Planner/Judge 建议调用也受模型窗口预算保护。
+                    // 迭代 30B/30D：Planner/Judge 建议调用也受模型窗口和工具执行预算保护。
                     .middleware(budgetMiddleware)
                     .maxIters(1)
                     .defaultSessionId(request.sessionId())
@@ -280,7 +280,7 @@ public class AgentScopeRuntime implements AgentRuntime {
             traces.add(agentName + ":" + use.getName() + " -> "
                     + TraceSanitizer.outputSummary(output, null) + " [" + result.getState() + "]");
         });
-        AgentScopeToolGroupAdapter.Registration registration = AgentScopeToolGroupAdapter.register(
+        AgentScopeToolGroupAdapter.Registration registration = AgentScopeToolGroupAdapter.registerRequestScoped(
                 toolkit, tools, allowedTools);
         List<String> registered = new ArrayList<>(registration.selectedToolNames());
         if (!registration.missingAllowedToolNames().isEmpty()) {
@@ -296,7 +296,7 @@ public class AgentScopeRuntime implements AgentRuntime {
                 .sysPrompt(sysPrompt)
                 .model(model)
                 .toolkit(toolkit)
-                // 迭代 30B：任务步骤和 POC Agent 的每轮模型调用统一走预算 middleware。
+                // 迭代 30B/30D：任务步骤和 POC Agent 的每轮模型调用统一走预算 middleware。
                 .middleware(budgetMiddleware)
                 .maxIters(8)
                 .defaultSessionId(sessionId)

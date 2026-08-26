@@ -37,8 +37,8 @@ public final class AgentScopeContextBudgetPlanner {
         int systemTokens = TokenEstimator.estimate(systemPrompt);
         int toolTokens = estimateToolSchemas(tools);
         int currentTokens = TokenEstimator.estimate(currentRequest);
-        int available = Math.max(0, modelWindow - properties.outputReserveTokens()
-                - properties.safetyMarginTokens() - systemTokens - toolTokens - currentTokens);
+        int available = remainingCapacity(modelWindow, properties.outputReserveTokens(),
+                properties.safetyMarginTokens(), systemTokens, toolTokens, currentTokens);
         int historyBudget = Math.min(requestedHistory, available);
         ContextBudgetLedger ledger = new ContextBudgetLedger(site, modelWindow, requestedHistory,
                 properties.outputReserveTokens(), properties.safetyMarginTokens(), systemTokens,
@@ -60,7 +60,27 @@ public final class AgentScopeContextBudgetPlanner {
             descriptions.add(String.valueOf(tool.getParameters()));
             descriptions.add(String.valueOf(tool.getOutputSchema()));
         }
-        return TokenEstimator.estimate(descriptions);
+        int total = 0;
+        for (String description : descriptions) {
+            total = saturatedAdd(total, TokenEstimator.estimate(description));
+        }
+        return total;
+    }
+
+    private static int remainingCapacity(int window, int... consumed) {
+        long remaining = Math.max(0, window);
+        for (int value : consumed) {
+            remaining -= Math.max(0, value);
+        }
+        if (remaining <= 0) {
+            return 0;
+        }
+        return remaining >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) remaining;
+    }
+
+    private static int saturatedAdd(int left, int right) {
+        long sum = (long) Math.max(0, left) + Math.max(0, right);
+        return sum >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) sum;
     }
 
     public record Plan(ContextBudgetLedger ledger, boolean enabled) {

@@ -113,6 +113,32 @@ class AgentScopeToolGroupAdapterTest {
     }
 
     @Test
+    void whitespaceOnlyAllowlistUsesTheSameEmptySemantics() {
+        Toolkit toolkit = new Toolkit();
+        AgentScopeToolGroupAdapter.Registration registration = AgentScopeToolGroupAdapter.register(
+                toolkit, new AgentTool[] { tool("calculator", new AtomicInteger()) }, Set.of(" "));
+
+        assertThat(registration.restricted()).isFalse();
+        assertThat(toolkit.getToolSchemas()).extracting(schema -> schema.getName())
+                .containsExactly("calculator");
+    }
+
+    @Test
+    void scopedActivationKeepsPreexistingUngroupedToolsRegistered() {
+        Toolkit toolkit = new Toolkit();
+        AgentTool calculator = tool("calculator", new AtomicInteger());
+        toolkit.registerAgentTool(calculator);
+
+        AgentScopeToolGroupAdapter.ScopedActivation activation =
+                AgentScopeToolGroupAdapter.activate(toolkit, Set.of("calculator"));
+        activation.close();
+
+        assertThat(toolkit.getTool("calculator")).isSameAs(calculator);
+        assertThat(toolkit.getToolSchemas()).extracting(schema -> schema.getName())
+                .containsExactly("calculator");
+    }
+
+    @Test
     void reportsAllowedNamesThatAreNotAvailableWithoutExpandingAccess() {
         Toolkit toolkit = new Toolkit();
         AgentScopeToolGroupAdapter.Registration registration = AgentScopeToolGroupAdapter.register(
@@ -123,6 +149,18 @@ class AgentScopeToolGroupAdapterTest {
         assertThat(registration.missingAllowedToolNames()).containsExactly("mail_send");
         assertThat(toolkit.getToolSchemas()).extracting(schema -> schema.getName())
                 .containsExactly("calculator");
+    }
+
+    @Test
+    void explicitEmptyRestrictedSetExposesNoTools() {
+        Toolkit toolkit = new Toolkit();
+
+        AgentScopeToolGroupAdapter.Registration registration = AgentScopeToolGroupAdapter.register(
+                toolkit, new AgentTool[] { tool("calculator", new AtomicInteger()) }, Set.of(), true);
+
+        assertThat(registration.restricted()).isTrue();
+        assertThat(registration.selectedToolNames()).isEmpty();
+        assertThat(toolkit.getToolSchemas()).isEmpty();
     }
 
     @Test

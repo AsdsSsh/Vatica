@@ -33,4 +33,17 @@ class ContextBudgetLedgerTest {
                 8_000, 12_000, 1_000, 500, 4_000, 2_500, 2_500, 0);
         assertThat(overflow.fixedPartExceedsWindow()).isTrue();
     }
+
+    @Test
+    void saturatesExtremeBudgetValuesInsteadOfWrappingAround() {
+        ContextBudgetLedger ledger = new ContextBudgetLedger(ContextBudget.CallSite.CHAT,
+                1, Integer.MAX_VALUE, Integer.MAX_VALUE,
+                Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE,
+                Integer.MAX_VALUE, 0);
+
+        assertThat(ledger.fixedInputTokens()).isEqualTo(Integer.MAX_VALUE);
+        assertThat(ledger.reservedTokens()).isEqualTo(Integer.MAX_VALUE);
+        assertThat(ledger.estimatedInputTokens(1)).isEqualTo(Integer.MAX_VALUE);
+        assertThat(ledger.fixedPartExceedsWindow()).isTrue();
+    }
 }

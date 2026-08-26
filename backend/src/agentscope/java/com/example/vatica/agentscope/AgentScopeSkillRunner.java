@@ -75,7 +75,7 @@ final class AgentScopeSkillRunner {
         });
         Set<String> declaredTools = Set.copyOf(skill.tools());
         AgentScopeToolGroupAdapter.Registration registration = AgentScopeToolGroupAdapter.register(
-                toolkit, request.tools(), declaredTools);
+                toolkit, request.tools(), declaredTools, true);
         if (!registration.missingAllowedToolNames().isEmpty()) {
             throw new IllegalStateException("操作失败：Skill " + skill.id() + "@" + skill.version()
                     + " 的授权工具不可用（" + String.join(", ", registration.missingAllowedToolNames()) + "）。");
@@ -90,7 +90,7 @@ final class AgentScopeSkillRunner {
                 .sysPrompt(prompt)
                 .model(model)
                 .toolkit(toolkit)
-                // 迭代 30B：Skill 的每次模型调用都经过 AgentScope 预算 middleware。
+                // 迭代 30B/30D：Skill 的每次模型调用都经过预算和执行门禁 middleware。
                 .middleware(budgetMiddleware)
                 .maxIters(skill.limits().maxIterations())
                 .defaultSessionId(request.sessionId())

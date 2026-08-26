@@ -24,15 +24,15 @@ public record ContextBudgetLedger(ContextBudget.CallSite callSite, int modelWind
     }
 
     public int fixedInputTokens() {
-        return systemPromptTokens + toolSchemaTokens + currentRequestTokens;
+        return saturatedAdd(saturatedAdd(systemPromptTokens, toolSchemaTokens), currentRequestTokens);
     }
 
     public int estimatedInputTokens(int historyTokens) {
-        return fixedInputTokens() + Math.max(0, historyTokens);
+        return saturatedAdd(fixedInputTokens(), Math.max(0, historyTokens));
     }
 
     public int reservedTokens() {
-        return outputReserveTokens + safetyMarginTokens;
+        return saturatedAdd(outputReserveTokens, safetyMarginTokens);
     }
 
     public boolean constrained() {
@@ -40,10 +40,15 @@ public record ContextBudgetLedger(ContextBudget.CallSite callSite, int modelWind
     }
 
     public boolean fixedPartExceedsWindow() {
-        return fixedInputTokens() + reservedTokens() > modelWindowTokens;
+        return (long) fixedInputTokens() + reservedTokens() > modelWindowTokens;
     }
 
     private static int nonNegative(int value) {
         return Math.max(0, value);
+    }
+
+    private static int saturatedAdd(int left, int right) {
+        long sum = (long) Math.max(0, left) + Math.max(0, right);
+        return sum >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) sum;
     }
 }

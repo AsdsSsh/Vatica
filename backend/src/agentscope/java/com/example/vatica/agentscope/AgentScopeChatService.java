@@ -2,7 +2,6 @@ package com.example.vatica.agentscope;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -106,9 +105,9 @@ public class AgentScopeChatService {
 
     private ReActAgent buildAgent(ChatRequest request) {
         Toolkit toolkit = new Toolkit();
-        // 聊天工具已经过 Vatica 权限/重试/Trace 包装；空白名单保留全部候选工具，
-        // 但统一经适配器去重，避免同名 MCP 工具让模型看到不稳定的 Schema。
-        AgentScopeToolGroupAdapter.register(toolkit, request.tools(), Set.of());
+        // 聊天工具已经过 Vatica 权限/重试/Trace 包装；建立永久请求基线组，
+        // 便于每轮上下文预算收缩时临时切换 allow/deny 而不丢失原工具。
+        AgentScopeToolGroupAdapter.registerAll(toolkit, request.tools());
         GenerateOptions options = GenerateOptions.builder()
                 .stream(request.streaming())
                 .temperature(request.slot().temperature())
@@ -123,7 +122,8 @@ public class AgentScopeChatService {
                 .sysPrompt(request.systemPrompt())
                 .model(model)
                 .toolkit(toolkit)
-                // 迭代 30B：每次 AgentScope 模型调用（含 ReAct 后续回合）都重新执行预算裁剪。
+                // 迭代 30B/30D：每次 AgentScope 模型调用（含 ReAct 后续回合）都重新执行预算裁剪，
+                // 并在 acting 阶段同步工具执行门禁。
                 .middleware(budgetMiddleware)
                 .maxIters(8)
                 .defaultSessionId(request.sessionId())
