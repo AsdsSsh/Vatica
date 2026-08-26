@@ -1,8 +1,6 @@
 package com.example.vatica.agentscope;
 
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
@@ -29,7 +27,6 @@ import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.ToolChoice;
 import io.agentscope.core.tool.Toolkit;
-import io.agentscope.core.tool.AgentTool;
 
 /**
  * 迭代 20B：版本化 Skill 的 AgentScope 执行器。
@@ -68,7 +65,6 @@ final class AgentScopeSkillRunner {
             throw new IllegalStateException("操作失败：Skill " + skill.id() + "@" + skill.version()
                     + " 与 Agent 角色 " + role.id() + " 不匹配。");
         }
-        AgentTool[] tools = allowedTools(request.tools(), skill);
         List<String> traces = new ArrayList<>();
         Toolkit toolkit = new Toolkit();
         String agentName = "vatica-skill-" + skill.id() + "-" + skill.version().replace('.', '-');
@@ -77,8 +73,12 @@ final class AgentScopeSkillRunner {
             traces.add(skill.id() + "@" + skill.version() + ":" + use.getName() + " -> "
                     + TraceSanitizer.outputSummary(output, null) + " [" + result.getState() + "]");
         });
-        for (AgentTool tool : tools) {
-            toolkit.registerAgentTool(tool);
+        Set<String> declaredTools = Set.copyOf(skill.tools());
+        AgentScopeToolGroupAdapter.Registration registration = AgentScopeToolGroupAdapter.register(
+                toolkit, request.tools(), declaredTools);
+        if (!registration.missingAllowedToolNames().isEmpty()) {
+            throw new IllegalStateException("操作失败：Skill " + skill.id() + "@" + skill.version()
+                    + " 的授权工具不可用（" + String.join(", ", registration.missingAllowedToolNames()) + "）。");
         }
         Model model = modelFactory.apply(request.modelSlot());
         String prompt = systemPrompt(role, skill);
@@ -113,22 +113,6 @@ final class AgentScopeSkillRunner {
         } finally {
             agent.close();
         }
-    }
-
-    private static AgentTool[] allowedTools(AgentTool[] tools, ExecutionProfile skill) {
-        Set<String> declared = Set.copyOf(skill.tools());
-        AgentTool[] selected = Arrays.stream(tools)
-                .filter(tool -> declared.contains(tool.getName()))
-                .toArray(AgentTool[]::new);
-        Set<String> available = Arrays.stream(selected).map(AgentTool::getName)
-                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-        Set<String> missing = new LinkedHashSet<>(declared);
-        missing.removeAll(available);
-        if (!missing.isEmpty()) {
-            throw new IllegalStateException("操作失败：Skill " + skill.id() + "@" + skill.version()
-                    + " 的授权工具不可用（" + String.join(", ", missing) + "）。");
-        }
-        return selected;
     }
 
     private static String systemPrompt(AgentDefinition role, ExecutionProfile skill) {

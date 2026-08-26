@@ -280,14 +280,12 @@ public class AgentScopeRuntime implements AgentRuntime {
             traces.add(agentName + ":" + use.getName() + " -> "
                     + TraceSanitizer.outputSummary(output, null) + " [" + result.getState() + "]");
         });
-        List<String> registered = new ArrayList<>();
-        for (io.agentscope.core.tool.AgentTool tool : tools) {
-            String toolName = tool.getName();
-            if (!allowedTools.isEmpty() && !allowedTools.contains(toolName)) {
-                continue;
-            }
-            toolkit.registerAgentTool(tool);
-            registered.add(toolName);
+        AgentScopeToolGroupAdapter.Registration registration = AgentScopeToolGroupAdapter.register(
+                toolkit, tools, allowedTools);
+        List<String> registered = new ArrayList<>(registration.selectedToolNames());
+        if (!registration.missingAllowedToolNames().isEmpty()) {
+            log.warn("AgentScope agent={} requested unavailable tools={}",
+                    agentName, registration.missingAllowedToolNames());
         }
         AgentScopeContextBudgetMiddleware budgetMiddleware = contextMiddleware(
                 model, sysPrompt, ContextBudget.CallSite.EXECUTOR);

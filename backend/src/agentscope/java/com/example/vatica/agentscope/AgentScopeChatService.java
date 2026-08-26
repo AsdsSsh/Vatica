@@ -2,6 +2,7 @@ package com.example.vatica.agentscope;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -105,9 +106,9 @@ public class AgentScopeChatService {
 
     private ReActAgent buildAgent(ChatRequest request) {
         Toolkit toolkit = new Toolkit();
-        for (AgentTool tool : request.tools()) {
-            toolkit.registerAgentTool(tool);
-        }
+        // 聊天工具已经过 Vatica 权限/重试/Trace 包装；空白名单保留全部候选工具，
+        // 但统一经适配器去重，避免同名 MCP 工具让模型看到不稳定的 Schema。
+        AgentScopeToolGroupAdapter.register(toolkit, request.tools(), Set.of());
         GenerateOptions options = GenerateOptions.builder()
                 .stream(request.streaming())
                 .temperature(request.slot().temperature())
