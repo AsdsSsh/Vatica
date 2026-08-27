@@ -59,6 +59,8 @@ import {
   type UsageSummary,
   type UserModelSlotView,
   type ContextHealthView,
+  type ContextMode,
+  type ChatContextEvent,
 } from "../api";
 import { loadPermissionPolicy } from "../permissions";
 import { useBackendStatus } from "../backendStatus";
@@ -99,9 +101,14 @@ interface Props {
 }
 
 const MODEL_STORAGE_KEY = "vatica.model";
+const CONTEXT_MODE_STORAGE_KEY = "vatica.contextMode";
 
 function modelStorageKey(): string {
   return `${MODEL_STORAGE_KEY}.${accountStorageScope()}`;
+}
+
+function contextModeStorageKey(): string {
+  return `${CONTEXT_MODE_STORAGE_KEY}.${accountStorageScope()}`;
 }
 
 const SUGGESTIONS: { title: string; prompt: string }[] = [
@@ -125,11 +132,44 @@ const CONTEXT_HEALTH_TAG: Record<ContextHealthView["overallStatus"], { color: st
   NEEDS_REFRESH: { color: "error", label: "需要刷新来源" },
 };
 
+const CONTEXT_EVENT_TAG: Record<string, { color: string; label: string }> = {
+  MATCHED: { color: "success", label: "已取历史证据" },
+  NO_MATCH: { color: "default", label: "未命中历史证据" },
+  DISABLED: { color: "default", label: "历史证据已关闭" },
+  SKIPPED_MODE: { color: "default", label: "普通模式未检索历史" },
+  SKIPPED_NO_HISTORY: { color: "default", label: "无更早历史" },
+  SKIPPED_BUDGET: { color: "warning", label: "证据预算不足" },
+  NOT_OWNED: { color: "error", label: "证据不可用" },
+  UNAVAILABLE: { color: "error", label: "证据读取失败" },
+};
+
+const CONTEXT_HISTORY_TAG: Record<string, { color: string; label: string }> = {
+  LOADED: { color: "success", label: "近期历史已加载" },
+  FALLBACK: { color: "warning", label: "近期历史已降级" },
+  UNAVAILABLE: { color: "error", label: "近期历史不可用" },
+  UNKNOWN: { color: "default", label: "近期历史状态未知" },
+};
+
+const CONTEXT_MODE_OPTIONS: { value: ContextMode; label: string; title: string }[] = [
+  { value: "NORMAL", label: "普通", title: "普通问答：优先当前事实、摘要和近期消息。" },
+  { value: "LONG_TASK", label: "长任务", title: "长任务：适合会议准备、周报和跨多轮办公闭环。" },
+  { value: "DEEP_REVIEW", label: "深度审阅", title: "深度审阅：适合明确要求的长材料核查或复盘。" },
+];
+
 function readSavedModel(): string | undefined {
   try {
     return localStorage.getItem(modelStorageKey()) ?? undefined;
   } catch {
     return undefined;
+  }
+}
+
+function readSavedContextMode(): ContextMode {
+  try {
+    const saved = localStorage.getItem(contextModeStorageKey());
+    return saved === "LONG_TASK" || saved === "DEEP_REVIEW" ? saved : "NORMAL";
+  } catch {
+    return "NORMAL";
   }
 }
 
@@ -153,6 +193,7 @@ export default function ChatPanel({
   const [input, setInput] = useState("");
   const [model, setModel] = useState<string | undefined>(readSavedModel);
   const [deepThinking, setDeepThinking] = useState(false);
+  const [contextMode, setContextMode] = useState<ContextMode>(readSavedContextMode);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [userSlots, setUserSlots] = useState<UserModelSlotView[]>([]);
   const [capabilities, setCapabilities] = useState<SystemCapability[]>([]);
@@ -177,6 +218,7 @@ export default function ChatPanel({
   // 迭代 15 I15-13：本轮 token 用量（usage SSE 收尾事件）
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [contextHealth, setContextHealth] = useState<ContextHealthView | null>(null);
+  const [contextEvent, setContextEvent] = useState<ChatContextEvent | null>(null);
 
   /** 迭代 13.5：并行流可能同时提出多个权限请求，按 requestId 保存每个等待决定。 */
   const permissionResolveRef = useRef<Map<string, (approved: boolean) => void>>(new Map());
@@ -201,6 +243,11 @@ export default function ChatPanel({
       });
     return () => { disposed = true; };
   }, [session.id, session.messages.length, online, authStatus]);
+
+  // 每轮预算摘要只属于当前会话；切换会话后不能沿用上一会话的可观测数据。
+  useEffect(() => {
+    setContextEvent(null);
+  }, [session.id]);
 
   const settingsMenuItems: MenuProps["items"] = [
     {
@@ -325,6 +372,8 @@ export default function ChatPanel({
       setUserSlots([]);
       setCapabilities([]);
       setModel((prev) => (prev?.startsWith("user:") ? undefined : prev));
+      setContextMode(readSavedContextMode());
+      setContextEvent(null);
     }
     previousAuthKey.current = authKey;
     if (online && authStatus !== "loading" && authStatus !== "anonymous") {
@@ -449,6 +498,7 @@ export default function ChatPanel({
     setToolActivity(null);
     setReasoning("");
     setUsage(null);
+    setContextEvent(null);
     onAppendMessage({ id: crypto.randomUUID(), role: "user", content: text });
     const assistantId = crypto.randomUUID();
     onAppendMessage({ id: assistantId, role: "assistant", content: "" });
@@ -467,6 +517,7 @@ export default function ChatPanel({
         controller.signal,
         credential,
         deepThinking,
+        contextMode,
       )) {
         if (event.kind === "text") {
           if (typing) setTyping(false);
@@ -480,6 +531,8 @@ export default function ChatPanel({
           setReasoning((prev) => prev + event.content);
         } else if (event.kind === "usage") {
           setUsage(event.usage);
+        } else if (event.kind === "context") {
+          setContextEvent(event.context);
         } else {
           // 权限请求：等待用户决定；后端工具调用保持阻塞，批准/拒绝后模型继续
           const approved = await askPermission(event.request);
@@ -555,6 +608,26 @@ export default function ChatPanel({
           )}
         </Flex>
         <Flex className="chat-header-actions" gap={6} align="center" style={{ flexShrink: 0 }}>
+          <Tooltip title={CONTEXT_MODE_OPTIONS.find((option) => option.value === contextMode)?.title}>
+            <Select
+              size="small"
+              className="chat-header-context-mode"
+              aria-label="上下文模式"
+              style={{ width: 116 }}
+              disabled={streaming}
+              value={contextMode}
+              onChange={(value) => {
+                const next = value as ContextMode;
+                setContextMode(next);
+                try {
+                  localStorage.setItem(contextModeStorageKey(), next);
+                } catch {
+                  // 忽略
+                }
+              }}
+              options={CONTEXT_MODE_OPTIONS}
+            />
+          </Tooltip>
           <Select
             size="small"
             className="chat-header-model"
@@ -855,6 +928,47 @@ export default function ChatPanel({
               {usage.contextFillRatio != null ? ` · 上下文 ${usage.contextFillRatio}%` : ""}
               {usage.reasoningTokens > 0 ? ` · 思考 ${usage.reasoningTokens.toLocaleString()}` : ""}
             </Typography.Text>
+          </div>
+        )}
+        {contextEvent && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "flex-start", marginBottom: 12 }}>
+            <Tooltip
+              title={`请求模式：${CONTEXT_MODE_OPTIONS.find((option) => option.value === contextEvent.requestedMode)?.label ?? contextEvent.requestedMode}`
+                + `；实际模式：${CONTEXT_MODE_OPTIONS.find((option) => option.value === contextEvent.effectiveMode)?.label ?? contextEvent.effectiveMode}`
+                + `；模型窗口 ${contextEvent.modelWindowTokens.toLocaleString()} tokens`
+                + `；规划输入 ${contextEvent.plannedInputTokens.toLocaleString()} tokens`
+                + `；已组装历史 ${contextEvent.assembledHistoryTokens.toLocaleString()} tokens`
+                + `；近期历史：${(CONTEXT_HISTORY_TAG[contextEvent.historyStatus] ?? { label: contextEvent.historyStatus }).label}`
+                + (contextEvent.middlewareCallCount > 0
+                  ? `；中间件 ${contextEvent.middlewareCallCount} 次，历史预算 ${contextEvent.middlewareHistoryBudgetTokens.toLocaleString()} tokens，固定输入 ${contextEvent.middlewareFixedInputTokens.toLocaleString()} tokens`
+                  : "")
+                + `；动态预算：事实 ${contextEvent.dynamicBudget.verifiedFactsTokens.toLocaleString()}、摘要 ${contextEvent.dynamicBudget.summaryTokens.toLocaleString()}、近期 ${contextEvent.dynamicBudget.recentHistoryTokens.toLocaleString()}、历史证据 ${contextEvent.dynamicBudget.historicalEvidenceTokens.toLocaleString()}、RAG ${contextEvent.dynamicBudget.ragEvidenceTokens.toLocaleString()} tokens`}
+            >
+              <Tag color={contextEvent.modeDowngraded || contextEvent.dynamicConstrained ? "warning" : "processing"} style={{ marginInlineEnd: 0, fontSize: 11 }}>
+                上下文 · {CONTEXT_MODE_OPTIONS.find((option) => option.value === contextEvent.effectiveMode)?.label ?? contextEvent.effectiveMode}
+                {contextEvent.modeDowngraded ? "（已降级）" : ""}
+                {!contextEvent.modeDowngraded && (contextEvent.dynamicConstrained || contextEvent.middlewareConstrained)
+                  ? "（预算受限）" : ""}
+              </Tag>
+            </Tooltip>
+            {contextEvent.evidenceStatus && (
+              <Tag
+                color={(CONTEXT_EVENT_TAG[contextEvent.evidenceStatus] ?? { color: "default" }).color}
+                style={{ marginInlineEnd: 0, fontSize: 11 }}
+              >
+                {(CONTEXT_EVENT_TAG[contextEvent.evidenceStatus] ?? { label: contextEvent.evidenceStatus }).label}
+                {contextEvent.evidenceCandidateCount > 0 ? ` · ${contextEvent.evidenceCandidateCount} 条候选` : ""}
+                {contextEvent.evidenceTokens > 0 ? ` · ${contextEvent.evidenceTokens.toLocaleString()} tokens` : ""}
+              </Tag>
+            )}
+            {contextEvent.historyStatus !== "LOADED" && (
+              <Tag
+                color={(CONTEXT_HISTORY_TAG[contextEvent.historyStatus] ?? { color: "default" }).color}
+                style={{ marginInlineEnd: 0, fontSize: 11 }}
+              >
+                {(CONTEXT_HISTORY_TAG[contextEvent.historyStatus] ?? { label: contextEvent.historyStatus }).label}
+              </Tag>
+            )}
           </div>
         )}
         {streaming && typing && (

@@ -101,6 +101,25 @@ class AgentScopeContextBudgetMiddlewareTest {
     }
 
     @Test
+    void explicitCapabilityWindowOverridesConservativeModelMetadataAndIsObserved() {
+        Model model = mock(Model.class);
+        when(model.getContextWindowSize()).thenReturn(16_000);
+        AtomicReference<ContextBudgetLedger> observed = new AtomicReference<>();
+        AgentScopeContextBudgetMiddleware middleware = new AgentScopeContextBudgetMiddleware(model,
+                "system", ContextBudget.CallSite.CHAT, 50_000,
+                new AgentScopeContextProperties(true, 2_048, 512, 16_000), observed::set, null, 128_000);
+        ModelCallInput input = new ModelCallInput(List.of(
+                new UserMessage("旧历史".repeat(1_000)), new AssistantMessage("旧回答".repeat(1_000)),
+                new UserMessage("当前请求")), List.of(), GenerateOptions.builder().build(), model);
+
+        middleware.onModelCall(null, null, input, ignored -> Flux.empty()).blockLast();
+
+        assertThat(observed.get()).isNotNull();
+        assertThat(observed.get().modelWindowTokens()).isEqualTo(128_000);
+        assertThat(observed.get().requestedHistoryTokens()).isEqualTo(50_000);
+    }
+
+    @Test
     void keepsRelevantToolSchemasWhenAllSchemasDoNotFit() {
         Model model = mock(Model.class);
         when(model.getContextWindowSize()).thenReturn(800);

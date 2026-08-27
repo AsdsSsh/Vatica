@@ -44,6 +44,7 @@ public final class AgentScopeContextBudgetMiddleware implements MiddlewareBase {
     private final int requestedHistoryTokens;
     private final AgentScopeContextProperties properties;
     private final Consumer<ContextBudgetLedger> observer;
+    private final int modelWindowOverrideTokens;
     private final AtomicReference<ContextBudgetLedger> lastLedger = new AtomicReference<>();
     private final AtomicReference<java.util.Set<String>> visibleToolNames = new AtomicReference<>();
 
@@ -63,6 +64,15 @@ public final class AgentScopeContextBudgetMiddleware implements MiddlewareBase {
             ContextBudget.CallSite callSite, int requestedHistoryTokens,
             AgentScopeContextProperties properties, Consumer<ContextBudgetLedger> observer,
             java.util.Set<String> initialVisibleToolNames) {
+        this(model, systemPrompt, callSite, requestedHistoryTokens, properties, observer,
+                initialVisibleToolNames, 0);
+    }
+
+    /** 迭代 31D：显式能力档案可覆盖未知兼容端点的保守 AgentScope 窗口。 */
+    public AgentScopeContextBudgetMiddleware(Model model, String systemPrompt,
+            ContextBudget.CallSite callSite, int requestedHistoryTokens,
+            AgentScopeContextProperties properties, Consumer<ContextBudgetLedger> observer,
+            java.util.Set<String> initialVisibleToolNames, int modelWindowOverrideTokens) {
         this.model = model;
         this.systemPrompt = systemPrompt == null ? "" : systemPrompt;
         this.callSite = callSite == null ? ContextBudget.CallSite.CHAT : callSite;
@@ -70,6 +80,7 @@ public final class AgentScopeContextBudgetMiddleware implements MiddlewareBase {
         this.properties = properties == null
                 ? new AgentScopeContextProperties(true, 0, 0, 0) : properties;
         this.observer = observer == null ? ignored -> { } : observer;
+        this.modelWindowOverrideTokens = Math.max(0, modelWindowOverrideTokens);
         if (initialVisibleToolNames != null) {
             this.visibleToolNames.set(java.util.Set.copyOf(initialVisibleToolNames));
         }
@@ -85,8 +96,9 @@ public final class AgentScopeContextBudgetMiddleware implements MiddlewareBase {
         }
         List<Msg> messages = input.messages() == null ? List.of() : List.copyOf(input.messages());
         Model effectiveModel = input.model() == null ? model : input.model();
-        int modelWindow = effectiveModel == null || effectiveModel.getContextWindowSize() <= 0
-                ? properties.fallbackModelWindowTokens() : effectiveModel.getContextWindowSize();
+        int modelWindow = modelWindowOverrideTokens > 0 ? modelWindowOverrideTokens
+                : effectiveModel == null || effectiveModel.getContextWindowSize() <= 0
+                        ? properties.fallbackModelWindowTokens() : effectiveModel.getContextWindowSize();
         int systemTokens = estimateSystem(messages);
         int currentIndex = currentMessageIndex(messages);
         int currentTokens = activeTurnTokens(messages, currentIndex);

@@ -45,6 +45,17 @@ public interface SessionMemory {
     }
 
     /**
+     * 仅读取 JVM 热缓存，不触发持久层回源。
+     *
+     * <p>数据库不可用时，上下文编排器使用该视图保留当前进程内已经确认的近期消息；
+     * 未显式支持热缓存的实现返回空视图，不能为了降级再次访问持久层。</p>
+     */
+    default ContextWindow hotContextWindow(String sessionId) {
+        return new ContextWindow(null, SessionSummaryStatus.PENDING, 0, 0,
+                0, List.of(), List.of(), List.of(), 0, 0);
+    }
+
+    /**
      * 迭代 31B：调用方可以按本次模型预算扩大数据库原文读取，而不扩大 JVM 热缓存。
      * 默认实现保持内存版和旧测试替身兼容。
      */

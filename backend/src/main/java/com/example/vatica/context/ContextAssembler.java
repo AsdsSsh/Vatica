@@ -28,7 +28,18 @@ public final class ContextAssembler {
      */
     public static List<ConversationMessage> chatHistory(SessionMemory memory, String sessionId, ContextBudget budget,
             List<ContextFactService.ContextFactSnippet> facts) {
-        ContextWindow window = memory.contextWindow(sessionId);
+        return chatHistory(memory.contextWindow(sessionId), budget, facts);
+    }
+
+    /**
+     * 迭代 31D：调用方已经按请求预算从数据库读取窗口时，避免再次退回 JVM 热缓存。
+     */
+    public static List<ConversationMessage> chatHistory(ContextWindow window, ContextBudget budget,
+            List<ContextFactService.ContextFactSnippet> facts) {
+        window = window == null ? new ContextWindow(null,
+                com.example.vatica.controller.SessionSummaryStatus.PENDING, 0, 0, 0,
+                List.of(), List.of(), List.of()) : window;
+        budget = budget == null ? new ContextBudget(0, 0, 0, 0, 0) : budget;
         List<ConversationMessage> combined = new ArrayList<>(
                 window.recent().size() + window.uncoveredHead().size() + 4);
         List<Boolean> mandatory = new ArrayList<>();
@@ -76,6 +87,10 @@ public final class ContextAssembler {
             return trimWithMandatory(combined, mandatory, budget.tokensFor(ContextBudget.CallSite.CHAT));
         }
         return trimDegraded(combined, mandatory, budget.tokensFor(ContextBudget.CallSite.CHAT));
+    }
+
+    static int estimateFactTokens(List<ContextFactService.ContextFactSnippet> facts) {
+        return facts == null || facts.isEmpty() ? 0 : TokenEstimator.estimate(factMessage(facts).text());
     }
 
     private static ConversationMessage factMessage(List<ContextFactService.ContextFactSnippet> facts) {

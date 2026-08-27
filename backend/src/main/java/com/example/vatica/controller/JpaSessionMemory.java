@@ -135,6 +135,23 @@ public final class JpaSessionMemory implements SessionMemory {
     }
 
     /**
+     * 数据库故障时的纯热缓存视图；绝不尝试 restore 或读取摘要/持久层。
+     */
+    @Override
+    public synchronized ContextWindow hotContextWindow(String sessionId) {
+        RequestIdentity identity = RequestIdentityContext.require();
+        String session = sessionIdOf(sessionId);
+        String key = cacheKey(identity.orgId(), identity.userId(), session);
+        if (!cache.contains(key)) {
+            return new ContextWindow(null, SessionSummaryStatus.PENDING, 0, 0,
+                    0, List.of(), List.of(), List.of(), 0, 0);
+        }
+        List<ConversationMessage> recent = cache.history(key);
+        return new ContextWindow(null, SessionSummaryStatus.PENDING, 0, 0,
+                recent.size(), List.of(), List.of(), recent, 0, 0);
+    }
+
+    /**
      * 迭代 31B：近期原文按本次模型配额回源；JVM 缓存依然只有 {@code windowSize} 条。
      * 大窗口不能绕过行数和 token 两道硬上限，也不读取同用户的其他组织数据。
      */
@@ -258,7 +275,7 @@ public final class JpaSessionMemory implements SessionMemory {
     }
 
     private static String sessionIdOf(String sessionId) {
-        return (sessionId == null || sessionId.isBlank()) ? "default" : sessionId;
+        return (sessionId == null || sessionId.isBlank()) ? "default" : sessionId.trim();
     }
 
     private static String cacheKey(Long orgId, Long userId, String sessionId) {

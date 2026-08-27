@@ -4,19 +4,21 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-import com.example.vatica.agentscope.AgentScopeContextBudgetPlanner;
 import com.example.vatica.config.ChatProperties;
 import com.example.vatica.config.ModelRegistry;
 import com.example.vatica.config.ModelSlot;
 import com.example.vatica.config.ReasoningMode;
 import com.example.vatica.agentscope.AgentScopeChatService;
 import com.example.vatica.agentscope.AgentScopeChatService.ChatEvent;
-import com.example.vatica.context.ContextAssembler;
 import com.example.vatica.context.ContextBudget;
 import com.example.vatica.context.ContextFactService;
+import com.example.vatica.context.ChatContextService;
+import com.example.vatica.context.ChatContextService.PreparedChatContext;
+import com.example.vatica.context.ChatContextService.PreparationRequest;
+import com.example.vatica.context.ModelCapabilityProfile;
 import com.example.vatica.event.SseEventGateway;
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
@@ -90,8 +92,7 @@ public class ChatController {
     private final ObjectMapper mapper;
     private final ContextBudget contextBudget;
     private final SseEventGateway eventGateway;
-    private final ContextFactService contextFacts;
-    private final AgentScopeContextBudgetPlanner contextBudgetPlanner;
+    private final ChatContextService chatContextService;
 
     /** 活跃流式连接注册表：可观测 + 断连清理（迭代 5 任务终止/迭代 7 前端联调可复用）。 */
     private final Set<SseEmitter> activeEmitters = ConcurrentHashMap.newKeySet();
@@ -101,7 +102,8 @@ public class ChatController {
             AgentToolProvider vaticaTools, PermissionEventPublisher permissionEvents,
             FilePermissionRequestService permissionRequests, ObjectMapper mapper, ContextBudget contextBudget,
             SseEventGateway eventGateway, AgentScopeChatService chatService, ContextFactService contextFacts,
-            AgentScopeContextBudgetPlanner contextBudgetPlanner) {
+            com.example.vatica.agentscope.AgentScopeContextBudgetPlanner contextBudgetPlanner,
+            ChatContextService chatContextService) {
         this.registry = registry;
         this.chatProperties = chatProperties;
         this.sessionMemory = sessionMemory;
@@ -112,8 +114,7 @@ public class ChatController {
         this.contextBudget = contextBudget;
         this.eventGateway = eventGateway;
         this.chatService = chatService;
-        this.contextFacts = contextFacts;
-        this.contextBudgetPlanner = contextBudgetPlanner;
+        this.chatContextService = chatContextService;
     }
 
     /** 迭代 22A 测试构造器：显式注入 AgentScope 聊天服务。 */
@@ -123,8 +124,9 @@ public class ChatController {
             AgentScopeChatService chatService) {
         this(registry, chatProperties, sessionMemory, vaticaTools, permissionEvents, permissionRequests,
                 mapper, contextBudget, new SseEventGateway(mapper), chatService, null,
-                new AgentScopeContextBudgetPlanner(new com.example.vatica.config.AgentScopeContextProperties(
-                        true, 0, 0, 0)));
+                new com.example.vatica.agentscope.AgentScopeContextBudgetPlanner(
+                        new com.example.vatica.config.AgentScopeContextProperties(
+                        true, 0, 0, 0)), null);
     }
 
     /** 可用模型清单（迭代 7 模型选择器；迭代 8.5 起来自动态注册表；迭代 9 类型化 DTO）。 */
@@ -178,13 +180,15 @@ public class ChatController {
         tools = new TracedToolCallbacks(mapper, (SseEmitter) null)
                 .wrap(tools, chatTrace(identity, request.sessionId()),
                         com.example.vatica.tool.ToolResultPolicy.MAX_OUTPUT_CHARS);
+        PreparedChatContext context = contextForChat(request, slot, tools);
         UsageContext.set(usageSnapshot(request, identity));
         try {
             String reply = requireChatService().call(new AgentScopeChatService.ChatRequest(slot,
                     reasoningMode(request), SYSTEM_PROMPT,
-                    historyForChat(request.sessionId(), slot, SYSTEM_PROMPT, request.message(), tools),
+                    context.history(),
                     request.message(), tools,
-                    identity, request.sessionId(), false)).content();
+                    identity, request.sessionId(), false, context.plan(), context.status(),
+                    status -> logContextStatus(request.sessionId(), status))).content();
             sessionMemory.append(request.sessionId(), request.message(), reply);
             return reply;
         } finally {
@@ -199,29 +203,26 @@ public class ChatController {
         RequestIdentity identity = RequestIdentityContext.require();
         ModelSlot slot = resolveSlot(request);
         String channel = TenantChannels.chat(identity, request.sessionId());
-        SseEmitter emitter = eventGateway.subscribe(channel, lastEventId, chatProperties.sse().timeout());
+        java.time.Duration timeout = chatProperties == null || chatProperties.sse() == null
+                ? ChatProperties.Sse.DEFAULT_TIMEOUT : chatProperties.sse().timeout();
+        SseEmitter emitter = eventGateway.subscribe(channel, lastEventId, timeout);
         activeEmitters.add(emitter);
-        // 迭代 15 I15-13：本次流式请求的用量上下文（advisor 读取，收尾发 usage 事件）
-        UsageContext.set(usageSnapshot(request, identity));
-
-        io.agentscope.core.tool.AgentTool[] tools = PermissionBoundToolCallbacks.wrap(
-                vaticaTools, request.permission(), channel, identity, request.mailCredential());
-        // 迭代 15 I15-3：Self-Refine 重试（权限最内层，重试也重新过权限与身份快照）
-        tools = new RetryableToolCallbacks().wrap(tools);
-        // 迭代 15 I15-1：升级迭代 12 的 tool_activity——补 traceId 与脱敏输入/输出摘要
-        tools = new TracedToolCallbacks(mapper,
-                (type, payload) -> eventGateway.publish(channel, type, payload))
-                .wrap(tools, chatTrace(identity, request.sessionId()),
-                        com.example.vatica.tool.ToolResultPolicy.MAX_OUTPUT_CHARS);
-
         StringBuilder reply = new StringBuilder();
         Disposable[] subscription = new Disposable[1];
+        AtomicBoolean executionStarted = new AtomicBoolean();
+        AtomicBoolean cleaned = new AtomicBoolean();
         Runnable cleanup = () -> {
+            if (!cleaned.compareAndSet(false, true)) {
+                return;
+            }
             if (subscription[0] != null) {
                 subscription[0].dispose();
             }
             activeEmitters.remove(emitter);
-            permissionRequests.cancelChannel(channel);
+            eventGateway.unsubscribe(channel, emitter);
+            if (executionStarted.get() && permissionRequests != null) {
+                permissionRequests.cancelChannel(channel);
+            }
             UsageContext.clear();
             log.debug("SSE 流式收尾：session={}，剩余活跃连接={}", request.sessionId(), activeEmitters.size());
         };
@@ -232,49 +233,89 @@ public class ChatController {
         emitter.onError(e -> cleanup.run());
         emitter.onCompletion(cleanup::run);
 
-        subscription[0] = requireChatService().stream(new AgentScopeChatService.ChatRequest(slot,
-                reasoningMode(request), SYSTEM_PROMPT,
-                historyForChat(request.sessionId(), slot, SYSTEM_PROMPT, request.message(), tools),
-                request.message(), tools,
-                identity, request.sessionId(), true))
-                .subscribe(
-                        event -> {
-                            if (event.type() == ChatEvent.Type.REASONING
-                                    && event.content() != null && !event.content().isBlank()) {
-                                if (!eventGateway.publish(channel, "reasoning",
-                                        Map.of("content", event.content()))) {
+        // 带 Last-Event-ID 的请求是续传订阅，不得重新构建模型调用或写入同一轮对话。
+        // 网关会先回放游标之后的事件，再继续接收该频道的后续事件。
+        if (lastEventId != null && !lastEventId.isBlank()) {
+            return emitter;
+        }
+
+        executionStarted.set(true);
+        try {
+            // 迭代 15 I15-13：本次流式请求的用量上下文（只在模型构建/订阅线程使用）。
+            UsageContext.set(usageSnapshot(request, identity));
+            io.agentscope.core.tool.AgentTool[] tools = PermissionBoundToolCallbacks.wrap(
+                    vaticaTools, request.permission(), channel, identity, request.mailCredential());
+            // 迭代 15 I15-3：Self-Refine 重试（权限最内层，重试也重新过权限与身份快照）
+            tools = new RetryableToolCallbacks().wrap(tools);
+            // 迭代 15 I15-1：升级迭代 12 的 tool_activity——补 traceId 与脱敏输入/输出摘要
+            tools = new TracedToolCallbacks(mapper,
+                    (type, payload) -> eventGateway.publish(channel, type, payload))
+                    .wrap(tools, chatTrace(identity, request.sessionId()),
+                            com.example.vatica.tool.ToolResultPolicy.MAX_OUTPUT_CHARS);
+            PreparedChatContext context = contextForChat(request, slot, tools);
+            if (!eventGateway.publish(channel, "context", context.status())) {
+                cleanup.run();
+                emitter.complete();
+                return emitter;
+            }
+
+            subscription[0] = requireChatService().stream(new AgentScopeChatService.ChatRequest(slot,
+                    reasoningMode(request), SYSTEM_PROMPT,
+                    context.history(),
+                    request.message(), tools,
+                    identity, request.sessionId(), true, context.plan(), context.status(),
+                    status -> eventGateway.publish(channel, "context", status)))
+                    .subscribe(
+                            event -> {
+                                if (event.type() == ChatEvent.Type.REASONING
+                                        && event.content() != null && !event.content().isBlank()) {
+                                    if (!eventGateway.publish(channel, "reasoning",
+                                            Map.of("content", event.content()))) {
+                                        cleanup.run();
+                                        emitter.complete();
+                                    }
+                                    return;
+                                }
+                                if (event.type() == ChatEvent.Type.USAGE && event.usage() != null) {
+                                    eventGateway.publish(channel, "usage", event.usage());
+                                    return;
+                                }
+                                String chunk = event.type() == ChatEvent.Type.TEXT ? event.content() : null;
+                                if (chunk == null || chunk.isEmpty()) {
+                                    return;
+                                }
+                                reply.append(chunk);
+                                if (!eventGateway.publish(channel, "chat_text", chunk)) {
+                                    // 客户端已断连：停止上游、结束会话
                                     cleanup.run();
                                     emitter.complete();
                                 }
-                                return;
-                            }
-                            if (event.type() == ChatEvent.Type.USAGE && event.usage() != null) {
-                                eventGateway.publish(channel, "usage", event.usage());
-                                return;
-                            }
-                            String chunk = event.type() == ChatEvent.Type.TEXT ? event.content() : null;
-                            if (chunk == null || chunk.isEmpty()) {
-                                return;
-                            }
-                            reply.append(chunk);
-                            if (!eventGateway.publish(channel, "chat_text", chunk)) {
-                                // 客户端已断连：停止上游、结束会话
+                            },
+                            error -> {
                                 cleanup.run();
-                                emitter.complete();
-                            }
-                        },
-                        error -> {
-                            cleanup.run();
-                            emitter.completeWithError(error);
-                        },
-                        () -> {
-                            RequestIdentityContext.callWith(identity, () -> {
-                                sessionMemory.append(request.sessionId(), request.message(), reply.toString());
-                                return null;
+                                emitter.completeWithError(error);
+                            },
+                            () -> {
+                                try {
+                                    RequestIdentityContext.callWith(identity, () -> {
+                                        sessionMemory.append(request.sessionId(), request.message(), reply.toString());
+                                        return null;
+                                    });
+                                } catch (RuntimeException exception) {
+                                    log.warn("SSE 对话落库失败：session={} type={}", request.sessionId(),
+                                            exception.getClass().getSimpleName());
+                                } finally {
+                                    cleanup.run();
+                                    emitter.complete();
+                                }
                             });
-                            cleanup.run();
-                            emitter.complete();
-                        });
+        } catch (RuntimeException exception) {
+            cleanup.run();
+            emitter.completeWithError(exception);
+        } finally {
+            // UsageContext 是 ThreadLocal；异步收尾线程无法清理发起请求线程的值。
+            UsageContext.clear();
+        }
 
         return emitter;
     }
@@ -295,35 +336,42 @@ public class ChatController {
         return chatService;
     }
 
-    /** 事实层故障不能阻断聊天；原文摘要/近期滑窗仍按 29A 路径组装。 */
-    private List<com.example.vatica.model.ConversationMessage> historyForChat(String sessionId, ModelSlot slot,
-            String systemPrompt, String userPrompt, AgentTool[] tools) {
-        List<ContextFactService.ContextFactSnippet> facts = List.of();
-        if (contextFacts != null) {
-            try {
-                facts = contextFacts.resolveForChat(sessionId);
-            } catch (RuntimeException e) {
-                log.warn("关键事实读取失败，降级为会话历史：session={}", sessionId, e);
-            }
+    /** 迭代 31D：模型能力、请求模式、长历史与原文证据在进入 AgentScope 前统一编排。 */
+    private PreparedChatContext contextForChat(ChatRequest request, ModelSlot slot, AgentTool[] tools) {
+        if (chatContextService == null) {
+            // 历史测试构造器保留 31C 之前的默认行为，不影响生产 Spring 装配。
+            List<com.example.vatica.model.ConversationMessage> history =
+                    com.example.vatica.context.ContextAssembler.chatHistory(
+                            sessionMemory, request.sessionId(), contextBudget, List.of());
+            com.example.vatica.context.ContextAllocationPlan plan =
+                    new com.example.vatica.context.ContextAllocationPlanner(
+                            new com.example.vatica.config.ContextAllocationProperties()).plan(
+                                    capabilityFor(slot), request.contextMode(),
+                                    new com.example.vatica.context.ContextFixedInput(0, 0, 0));
+            com.example.vatica.context.ChatContextStatus status =
+                    new com.example.vatica.context.ChatContextStatus(plan.requestedMode(), plan.effectiveMode(),
+                            plan.modelWindowTokens(), plan.plannedInputTokens(), plan.dynamicBudget(),
+                            com.example.vatica.context.ConversationEvidenceStatus.UNAVAILABLE,
+                            0, 0, plan.modeDowngraded(), plan.dynamicConstrained(), "LEGACY", 0,
+                            0, 0, 0, false);
+            return new PreparedChatContext(history, plan, status);
         }
-        ContextBudget effectiveBudget = contextBudget;
-        if (contextBudgetPlanner != null && contextBudget != null) {
-            try {
-                AgentScopeContextBudgetPlanner.Plan plan = contextBudgetPlanner.plan(
-                        registry.agentScopeModel(slot), ContextBudget.CallSite.CHAT, contextBudget,
-                        systemPrompt, tools == null ? List.of() : Arrays.asList(tools), userPrompt);
-                effectiveBudget = plan.applyTo(contextBudget);
-                if (plan.ledger().constrained()) {
-                    log.debug("AgentScope 上下文预算收紧：session={} window={} history={} fixed={} toolSchema={}",
-                            sessionId, plan.ledger().modelWindowTokens(), plan.historyBudgetTokens(),
-                            plan.ledger().fixedInputTokens(), plan.ledger().toolSchemaTokens());
-                }
-            } catch (RuntimeException e) {
-                // 模型窗口探测属于预算优化，失败时继续使用 29D 的确定性历史降级路径。
-                log.warn("AgentScope 上下文预算计算失败，回退会话预算：session={}", sessionId, e);
-            }
-        }
-        return ContextAssembler.chatHistory(sessionMemory, sessionId, effectiveBudget, facts);
+        return chatContextService.prepare(new PreparationRequest(request.sessionId(), request.contextMode(),
+                capabilityFor(slot), SYSTEM_PROMPT, request.message(), tools));
+    }
+
+    private ModelCapabilityProfile capabilityFor(ModelSlot slot) {
+        io.agentscope.core.model.Model model = registry.agentScopeModel(slot);
+        int window = model == null ? 0 : model.getContextWindowSize();
+        return new ModelCapabilityProfile(slot.model(), window, 0,
+                ModelCapabilityProfile.ESTIMATED_TOKENIZER, window > 0);
+    }
+
+    private static void logContextStatus(String sessionId,
+            com.example.vatica.context.ChatContextStatus status) {
+        log.debug("AgentScope 聊天上下文：session={} requested={} effective={} window={} middlewareCalls={} evidence={}",
+                sessionId, status.requestedMode(), status.effectiveMode(), status.modelWindowTokens(),
+                status.middlewareCallCount(), status.evidenceStatus());
     }
 
     /** 迭代 15 I15-13：聊天用量上下文——平台模型计配额，自配/临时模型只记录不扣额度。 */

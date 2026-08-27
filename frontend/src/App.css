@@ -145,6 +145,11 @@ body {
   min-width: 120px;
 }
 
+.chat-header-context-mode {
+  flex: 0 1 116px;
+  min-width: 92px;
+}
+
 .header-settings-button {
   display: inline-flex;
   align-items: center;
@@ -587,6 +592,10 @@ body {
 }
 
 @media (max-width: 1180px) {
+  .chat-header-context-mode {
+    flex-basis: 100px;
+  }
+
   .chat-header-model {
     flex-basis: 160px;
   }
@@ -601,6 +610,11 @@ body {
 }
 
 @media (max-width: 760px) {
+  .chat-header-context-mode {
+    min-width: 0;
+    flex-basis: 90px;
+  }
+
   .chat-header-model {
     min-width: 0;
     flex-basis: 132px;

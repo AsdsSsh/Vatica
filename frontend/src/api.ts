@@ -356,7 +356,11 @@ function parseSseEnvelope(eventName: string, eventId: string, dataLines: string[
     const candidate = parsed as { id?: unknown; type?: unknown; data?: unknown; ts?: unknown };
     if (typeof candidate.type === "string" && "data" in candidate) {
       return {
-        id: typeof candidate.id === "string" ? candidate.id : eventId,
+        id: typeof candidate.id === "string"
+          ? candidate.id
+          : typeof candidate.id === "number" && Number.isFinite(candidate.id)
+            ? String(candidate.id)
+            : eventId,
         type: candidate.type,
         data: candidate.data,
         ts: typeof candidate.ts === "string" ? candidate.ts : "",
@@ -422,9 +426,14 @@ async function* parseSseBody(body: ReadableStream<Uint8Array>): AsyncGenerator<S
   }
 }
 
+function isReplayableSseMethod(method: string | undefined): boolean {
+  return (method ?? "GET").toUpperCase() === "GET";
+}
+
 /**
  * 迭代 16 I16-3：统一 fetch-SSE 客户端。
- * `reconnect=true` 时会携带最近事件 id 自动重连，并按 id 去重回放帧。
+ * `reconnect=true` 仅用于可安全重放的 GET 订阅，并携带最近事件 id 去重续传。
+ * POST 请求-响应流保持单次调用；调用方仍可显式传 Last-Event-ID 做一次只读回放。
  */
 export async function* fetchSse<T = unknown>(
   path: string,
@@ -433,10 +442,14 @@ export async function* fetchSse<T = unknown>(
   reconnect = false,
 ): AsyncGenerator<SseEventEnvelope<T>> {
   const effectiveSignal = signal ?? init.signal;
+  const method = (init.method ?? "GET").toUpperCase();
+  const canReconnect = reconnect && isReplayableSseMethod(method);
+  // 非 GET 流（尤其聊天 POST）保留一次性请求语义，即使误传 reconnect 也不能重放副作用。
   let lastEventId = "";
   let retryCount = 0;
   const seenIds = new Set<string>();
   while (!effectiveSignal?.aborted) {
+    let deliveredEvent = false;
     try {
       const headers = new Headers(init.headers);
       headers.set("Accept", "text/event-stream");
@@ -448,9 +461,9 @@ export async function* fetchSse<T = unknown>(
         throw error;
       }
       if (!res.body) throw new Error(`SSE 响应没有可读流（HTTP ${res.status}）`);
-      retryCount = 0;
       for await (const event of parseSseBody(res.body)) {
         if (event.id && seenIds.has(event.id)) continue;
+        deliveredEvent = true;
         if (event.id) {
           seenIds.add(event.id);
           if (seenIds.size > 512) seenIds.delete(seenIds.values().next().value ?? "");
@@ -458,20 +471,33 @@ export async function* fetchSse<T = unknown>(
         }
         yield event as SseEventEnvelope<T>;
       }
-      if (!reconnect) return;
+      if (!canReconnect) return;
     } catch (error) {
-      if (effectiveSignal?.aborted) return;
-      if (!reconnect || error instanceof NonRetryableSseError || isAuthExpiredError(error)) throw error;
+      if (effectiveSignal?.aborted) throw new DOMException("Aborted", "AbortError");
+      if (!canReconnect || error instanceof NonRetryableSseError || isAuthExpiredError(error)) throw error;
     }
+    // 只有真正收到业务事件才清零退避计数；空响应连续关闭时必须最终停止重试。
+    if (deliveredEvent) retryCount = 0;
     retryCount += 1;
     if (retryCount > 8) throw new Error("SSE 连接重试次数过多，请稍后重试");
     const delay = Math.min(250 * 2 ** (retryCount - 1), 4_000);
     await new Promise<void>((resolve, reject) => {
-      const timer = window.setTimeout(resolve, delay);
-      effectiveSignal?.addEventListener("abort", () => {
+      let settled = false;
+      const onAbort = () => {
+        if (settled) return;
+        settled = true;
         window.clearTimeout(timer);
+        effectiveSignal?.removeEventListener("abort", onAbort);
         reject(new DOMException("Aborted", "AbortError"));
-      }, { once: true });
+      };
+      const timer = window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        effectiveSignal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, delay);
+      if (effectiveSignal?.aborted) onAbort();
+      else effectiveSignal?.addEventListener("abort", onAbort, { once: true });
     });
   }
 }
@@ -481,7 +507,111 @@ export type ChatStreamEvent =
   | { kind: "reasoning"; content: string }
   | { kind: "usage"; usage: UsageSummary }
   | { kind: "permission"; request: FilePermissionRequest }
-  | { kind: "tool"; activity: ToolActivity };
+  | { kind: "tool"; activity: ToolActivity }
+  | { kind: "context"; context: ChatContextEvent };
+
+/** 迭代 31：请求期上下文使用强度；服务端仍会按所选模型窗口保守降级。 */
+export type ContextMode = "NORMAL" | "LONG_TASK" | "DEEP_REVIEW";
+
+/** 迭代 31D：每轮模型调用的上下文预算与历史证据摘要（不含原文）。 */
+export interface ChatContextEvent {
+  requestedMode: ContextMode;
+  effectiveMode: ContextMode;
+  modelWindowTokens: number;
+  plannedInputTokens: number;
+  dynamicBudget: {
+    verifiedFactsTokens: number;
+    summaryTokens: number;
+    recentHistoryTokens: number;
+    historicalEvidenceTokens: number;
+    ragEvidenceTokens: number;
+  };
+  evidenceStatus: string;
+  evidenceCandidateCount: number;
+  evidenceTokens: number;
+  modeDowngraded: boolean;
+  dynamicConstrained: boolean;
+  historyStatus: string;
+  assembledHistoryTokens: number;
+  middlewareCallCount: number;
+  middlewareHistoryBudgetTokens: number;
+  middlewareFixedInputTokens: number;
+  middlewareConstrained: boolean;
+}
+
+function nonNegativeFinite(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : null;
+}
+
+function optionalNonNegativeFinite(value: unknown): number {
+  return nonNegativeFinite(value) ?? 0;
+}
+
+function normalizedContextMode(value: unknown): ContextMode | null {
+  return value === "NORMAL" || value === "LONG_TASK" || value === "DEEP_REVIEW" ? value : null;
+}
+
+/** 解析并归一化服务端 context 事件；非法事件被忽略，避免 SSE 数据污染聊天渲染。 */
+export function parseChatContextEvent(value: unknown): ChatContextEvent | null {
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return parsed === value ? null : parseChatContextEvent(parsed);
+    } catch {
+      return null;
+    }
+  }
+  if (!value || typeof value !== "object") return null;
+  const source = value as Record<string, unknown>;
+  const requestedMode = normalizedContextMode(source.requestedMode);
+  const effectiveMode = normalizedContextMode(source.effectiveMode);
+  const rawBudget = source.dynamicBudget;
+  if (!requestedMode || !effectiveMode || !rawBudget || typeof rawBudget !== "object") return null;
+  const budget = rawBudget as Record<string, unknown>;
+  if (typeof source.evidenceStatus !== "string" || !source.evidenceStatus.trim()) return null;
+  if (typeof source.modeDowngraded !== "boolean" || typeof source.dynamicConstrained !== "boolean") return null;
+  const modelWindowTokens = nonNegativeFinite(source.modelWindowTokens);
+  const plannedInputTokens = nonNegativeFinite(source.plannedInputTokens);
+  const verifiedFactsTokens = nonNegativeFinite(budget.verifiedFactsTokens);
+  const summaryTokens = nonNegativeFinite(budget.summaryTokens);
+  const recentHistoryTokens = nonNegativeFinite(budget.recentHistoryTokens);
+  const historicalEvidenceTokens = nonNegativeFinite(budget.historicalEvidenceTokens);
+  const ragEvidenceTokens = nonNegativeFinite(budget.ragEvidenceTokens);
+  const evidenceCandidateCount = nonNegativeFinite(source.evidenceCandidateCount);
+  const evidenceTokens = nonNegativeFinite(source.evidenceTokens);
+  if (modelWindowTokens == null || plannedInputTokens == null || verifiedFactsTokens == null
+    || summaryTokens == null || recentHistoryTokens == null || historicalEvidenceTokens == null
+    || ragEvidenceTokens == null || evidenceCandidateCount == null || evidenceTokens == null) {
+    return null;
+  }
+  return {
+    requestedMode,
+    effectiveMode,
+    modelWindowTokens,
+    plannedInputTokens,
+    dynamicBudget: {
+      verifiedFactsTokens,
+      summaryTokens,
+      recentHistoryTokens,
+      historicalEvidenceTokens,
+      ragEvidenceTokens,
+    },
+    evidenceStatus: source.evidenceStatus,
+    evidenceCandidateCount,
+    evidenceTokens,
+    modeDowngraded: source.modeDowngraded,
+    dynamicConstrained: source.dynamicConstrained,
+    // 31D 之前的服务若少发这些观测字段，仍能安全展示核心模式/证据状态。
+    historyStatus: typeof source.historyStatus === "string" && source.historyStatus.trim()
+      ? source.historyStatus : "UNKNOWN",
+    assembledHistoryTokens: optionalNonNegativeFinite(source.assembledHistoryTokens),
+    middlewareCallCount: optionalNonNegativeFinite(source.middlewareCallCount),
+    middlewareHistoryBudgetTokens: optionalNonNegativeFinite(source.middlewareHistoryBudgetTokens),
+    middlewareFixedInputTokens: optionalNonNegativeFinite(source.middlewareFixedInputTokens),
+    middlewareConstrained: typeof source.middlewareConstrained === "boolean"
+      ? source.middlewareConstrained : false,
+  };
+}
 
 /**
  * SSE 流式对话（迭代 6 I6-5；迭代 11 支持权限请求事件）：
@@ -495,12 +625,14 @@ export async function* streamChat(
   signal?: AbortSignal,
   credential?: EphemeralCredential,
   deepThinking = false,
+  contextMode: ContextMode = "NORMAL",
 ): AsyncGenerator<ChatStreamEvent> {
   const body = {
     message,
     sessionId,
     permission,
     deepThinking,
+    contextMode,
     mailCredential: getEphemeralMailCredential(),
     ...(credential ? { credential } : { model }),
   };
@@ -518,6 +650,9 @@ export async function* streamChat(
       if (data && typeof data.content === "string") yield { kind: "reasoning", content: data.content };
     } else if (event.type === "tool_activity") {
       yield { kind: "tool", activity: event.data as ToolActivity };
+    } else if (event.type === "context") {
+      const context = parseChatContextEvent(event.data);
+      if (context) yield { kind: "context", context };
     } else if (typeof event.data === "string") {
       yield { kind: "text", content: event.data };
     }

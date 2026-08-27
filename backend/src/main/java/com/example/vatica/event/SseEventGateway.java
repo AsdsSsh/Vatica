@@ -175,6 +175,16 @@ public class SseEventGateway {
         }
     }
 
+    /**
+     * 调用方在业务准备同步失败时显式取消订阅；与 emitter 的超时/错误/完成回调幂等。
+     */
+    public void unsubscribe(String channel, SseEmitter emitter) {
+        if (channel == null || emitter == null) {
+            return;
+        }
+        remove(channel, emitter);
+    }
+
     private EventEnvelope next(String type, Object data) {
         return new EventEnvelope(Long.toString(sequence.incrementAndGet()), type, data, Instant.now());
     }

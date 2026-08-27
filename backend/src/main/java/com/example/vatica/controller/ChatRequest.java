@@ -1,6 +1,7 @@
 package com.example.vatica.controller;
 
 import com.example.vatica.config.EphemeralCredential;
+import com.example.vatica.context.ContextMode;
 import com.example.vatica.permission.FilePermissionPolicy;
 import com.example.vatica.mail.MailConnectionSettings;
 
@@ -13,22 +14,34 @@ import com.example.vatica.mail.MailConnectionSettings;
  * @param permission 迭代 11：前端权限快照（模式/工作区根），缺省时后端用默认工作区策略
  * @param credential 迭代 13：请求级自配模型凭据；与 model 同时出现视为冲突（400）
  * @param deepThinking 迭代 15：true=本轮开启深思（HIGH），false=默认快通道
+ * @param contextMode 迭代 31D：NORMAL / LONG_TASK / DEEP_REVIEW，请求会按模型窗口保守降级
  */
 public record ChatRequest(String message, String sessionId, String model,
         FilePermissionPolicy permission, EphemeralCredential credential,
-        MailConnectionSettings mailCredential, Boolean deepThinking) {
+        MailConnectionSettings mailCredential, Boolean deepThinking, ContextMode contextMode) {
+
+    public ChatRequest {
+        contextMode = ContextMode.normalize(contextMode);
+    }
+
+    /** 兼容迭代 15～31C 的完整请求构造器。 */
+    public ChatRequest(String message, String sessionId, String model,
+            FilePermissionPolicy permission, EphemeralCredential credential,
+            MailConnectionSettings mailCredential, Boolean deepThinking) {
+        this(message, sessionId, model, permission, credential, mailCredential, deepThinking, ContextMode.NORMAL);
+    }
 
     public ChatRequest(String message, String sessionId, String model, FilePermissionPolicy permission) {
-        this(message, sessionId, model, permission, null, null, false);
+        this(message, sessionId, model, permission, null, null, false, ContextMode.NORMAL);
     }
 
     public ChatRequest(String message, String sessionId, String model, FilePermissionPolicy permission,
             EphemeralCredential credential) {
-        this(message, sessionId, model, permission, credential, null, false);
+        this(message, sessionId, model, permission, credential, null, false, ContextMode.NORMAL);
     }
 
     public ChatRequest(String message, String sessionId, String model, FilePermissionPolicy permission,
             EphemeralCredential credential, MailConnectionSettings mailCredential) {
-        this(message, sessionId, model, permission, credential, mailCredential, false);
+        this(message, sessionId, model, permission, credential, mailCredential, false, ContextMode.NORMAL);
     }
 }

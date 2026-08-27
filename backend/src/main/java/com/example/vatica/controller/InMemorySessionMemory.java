@@ -86,6 +86,12 @@ public final class InMemorySessionMemory implements SessionMemory {
         sessions.remove(keyOf(sessionId));
     }
 
+    /** 纯内存实现的普通窗口本身就是热缓存视图。 */
+    @Override
+    public synchronized ContextWindow hotContextWindow(String sessionId) {
+        return contextWindow(sessionId);
+    }
+
     private void add(Bucket bucket, ConversationMessage message) {
         String text = message.text();
         if (text == null || text.isBlank()) {

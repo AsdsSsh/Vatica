@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -14,6 +15,9 @@ import com.example.vatica.config.ModelSlot;
 import com.example.vatica.config.ReasoningMode;
 import com.example.vatica.config.AgentScopeContextProperties;
 import com.example.vatica.context.ContextBudget;
+import com.example.vatica.context.ContextAllocationPlan;
+import com.example.vatica.context.ContextBudgetLedger;
+import com.example.vatica.context.ChatContextStatus;
 import com.example.vatica.model.ConversationMessage;
 import com.example.vatica.model.ModelUsage;
 import com.example.vatica.runtime.AgentRuntime.StepUsage;
@@ -114,9 +118,20 @@ public class AgentScopeChatService {
                 .reasoningEffort(AgentScopeModelGateway.reasoningEffort(request.reasoningMode()))
                 .build();
         var model = registry.agentScopeModel(request.slot());
+        ContextAllocationPlan allocationPlan = request.allocationPlan();
+        ContextBudget effectiveBudget = allocationPlan == null ? contextBudget
+                : contextBudget.with(ContextBudget.CallSite.CHAT,
+                        Math.max(1, allocationPlan.dynamicBudget().totalTokens()));
+        AgentScopeContextProperties effectiveProperties = allocationPlan == null ? contextProperties
+                : new AgentScopeContextProperties(contextProperties.enabled(),
+                        allocationPlan.outputReserveTokens(), allocationPlan.safetyMarginTokens(),
+                        Math.max(1, allocationPlan.modelWindowTokens()));
+        AtomicInteger middlewareCalls = new AtomicInteger();
         AgentScopeContextBudgetMiddleware budgetMiddleware = new AgentScopeContextBudgetMiddleware(model,
                 request.systemPrompt(), ContextBudget.CallSite.CHAT,
-                contextBudget.tokensFor(ContextBudget.CallSite.CHAT), contextProperties);
+                effectiveBudget.tokensFor(ContextBudget.CallSite.CHAT), effectiveProperties,
+                ledger -> observeContext(request, ledger, middlewareCalls.incrementAndGet()), null,
+                allocationPlan == null ? 0 : allocationPlan.modelWindowTokens());
         return ReActAgent.builder()
                 .name("vatica-chat")
                 .sysPrompt(request.systemPrompt())
@@ -129,6 +144,16 @@ public class AgentScopeChatService {
                 .defaultSessionId(request.sessionId())
                 .generateOptions(options)
                 .build();
+    }
+
+    private static void observeContext(ChatRequest request, ContextBudgetLedger ledger, int callCount) {
+        if (request.contextObserver() == null || ledger == null) {
+            return;
+        }
+        ChatContextStatus status = request.contextStatus();
+        if (status != null) {
+            request.contextObserver().accept(status.withMiddleware(ledger, callCount));
+        }
     }
 
     private static List<Msg> messages(ChatRequest request) {
@@ -191,7 +216,9 @@ public class AgentScopeChatService {
 
     public record ChatRequest(ModelSlot slot, ReasoningMode reasoningMode, String systemPrompt,
             List<ConversationMessage> history, String userPrompt, AgentTool[] tools,
-            RequestIdentity identity, String sessionId, boolean streaming) {
+            RequestIdentity identity, String sessionId, boolean streaming,
+            ContextAllocationPlan allocationPlan, ChatContextStatus contextStatus,
+            java.util.function.Consumer<ChatContextStatus> contextObserver) {
         public ChatRequest {
             reasoningMode = reasoningMode == null ? ReasoningMode.DISABLED : reasoningMode;
             systemPrompt = systemPrompt == null ? "" : systemPrompt;
@@ -200,6 +227,14 @@ public class AgentScopeChatService {
             tools = tools == null ? new AgentTool[0] : tools.clone();
             sessionId = sessionId == null || sessionId.isBlank()
                     ? "chat-" + UUID.randomUUID() : sessionId;
+        }
+
+        /** 兼容迭代 22A～31C 的聊天服务调用方。 */
+        public ChatRequest(ModelSlot slot, ReasoningMode reasoningMode, String systemPrompt,
+                List<ConversationMessage> history, String userPrompt, AgentTool[] tools,
+                RequestIdentity identity, String sessionId, boolean streaming) {
+            this(slot, reasoningMode, systemPrompt, history, userPrompt, tools, identity, sessionId, streaming,
+                    null, null, null);
         }
 
         @Override
