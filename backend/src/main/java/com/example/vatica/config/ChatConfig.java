@@ -24,6 +24,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
         TaskReliabilityProperties.class,
         AgentScopeContextProperties.class,
         ContextAllocationProperties.class,
+        ConversationEvidenceProperties.class,
         com.example.vatica.evaluation.EvaluationProperties.class,
         com.example.vatica.usage.UsageProperties.class })
 public class ChatConfig {

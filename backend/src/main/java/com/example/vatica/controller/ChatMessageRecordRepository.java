@@ -4,6 +4,8 @@ import java.util.List;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 /** 会话消息仓库（迭代 5 I5-4）。 */
 public interface ChatMessageRecordRepository extends JpaRepository<ChatMessageRecord, Long> {
@@ -37,6 +39,28 @@ public interface ChatMessageRecordRepository extends JpaRepository<ChatMessageRe
 
     List<ChatMessageRecord> findByOrgIdAndUserIdAndSessionIdAndSeqGreaterThanAndSeqLessThanOrderBySeqDesc(
             Long orgId, Long userId, String sessionId, long afterSeq, long beforeSeq, Pageable pageable);
+
+    /**
+     * 迭代 31C：在近期窗口之前按字面量检索会话原文。
+     * LOCATE 不把用户输入中的 % / _ 当作 LIKE 通配符，参数绑定也避免动态 SQL 注入。
+     */
+    @Query("""
+            select m from ChatMessageRecord m
+            where m.orgId = :orgId and m.userId = :userId and m.sessionId = :sessionId
+              and m.seq >= :afterSeq and m.seq < :beforeSeq
+              and locate(lower(:term), lower(m.content)) > 0
+            order by m.seq desc, m.id desc
+            """)
+    List<ChatMessageRecord> searchHistoricalEvidence(@Param("orgId") Long orgId,
+            @Param("userId") Long userId, @Param("sessionId") String sessionId,
+            @Param("afterSeq") long afterSeq, @Param("beforeSeq") long beforeSeq,
+            @Param("term") String term, Pageable pageable);
+
+    List<ChatMessageRecord> findByOrgIdAndUserIdAndSessionIdAndSeqLessThanOrderBySeqDescIdDesc(
+            Long orgId, Long userId, String sessionId, long seq, Pageable pageable);
+
+    List<ChatMessageRecord> findByOrgIdAndUserIdAndSessionIdAndSeqGreaterThanAndSeqLessThanOrderBySeqAscIdAsc(
+            Long orgId, Long userId, String sessionId, long seq, long beforeSeq, Pageable pageable);
 
     long countByUserIdAndSessionIdAndSeqGreaterThan(Long userId, String sessionId, long seq);
 
