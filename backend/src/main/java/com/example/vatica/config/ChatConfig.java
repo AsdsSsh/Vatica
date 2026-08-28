@@ -23,6 +23,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
         ChatProperties.class, JudgeProperties.class, ModelProperties.class, OpenAiDefaultsProperties.class,
         TaskReliabilityProperties.class,
         AgentScopeContextProperties.class,
+        ToolDiscoveryProperties.class,
         ContextAllocationProperties.class,
         ConversationEvidenceProperties.class,
         com.example.vatica.evaluation.EvaluationProperties.class,

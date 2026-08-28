@@ -13,6 +13,7 @@ import com.example.vatica.config.AgentScopeContextProperties;
 import com.example.vatica.context.ContextBudget;
 import com.example.vatica.context.ContextBudgetLedger;
 import com.example.vatica.context.TokenEstimator;
+import com.example.vatica.runtime.ToolDiscoveryService;
 
 import io.agentscope.core.agent.Agent;
 import io.agentscope.core.agent.RuntimeContext;
@@ -45,19 +46,20 @@ public final class AgentScopeContextBudgetMiddleware implements MiddlewareBase {
     private final AgentScopeContextProperties properties;
     private final Consumer<ContextBudgetLedger> observer;
     private final int modelWindowOverrideTokens;
+    private final ToolDiscoveryService toolDiscovery;
     private final AtomicReference<ContextBudgetLedger> lastLedger = new AtomicReference<>();
     private final AtomicReference<java.util.Set<String>> visibleToolNames = new AtomicReference<>();
 
     public AgentScopeContextBudgetMiddleware(Model model, String systemPrompt,
             ContextBudget.CallSite callSite, int requestedHistoryTokens,
             AgentScopeContextProperties properties) {
-        this(model, systemPrompt, callSite, requestedHistoryTokens, properties, ignored -> { });
+        this(model, systemPrompt, callSite, requestedHistoryTokens, properties, ignored -> { }, null);
     }
 
     public AgentScopeContextBudgetMiddleware(Model model, String systemPrompt,
             ContextBudget.CallSite callSite, int requestedHistoryTokens,
             AgentScopeContextProperties properties, Consumer<ContextBudgetLedger> observer) {
-        this(model, systemPrompt, callSite, requestedHistoryTokens, properties, observer, null);
+        this(model, systemPrompt, callSite, requestedHistoryTokens, properties, observer, null, 0, null);
     }
 
     public AgentScopeContextBudgetMiddleware(Model model, String systemPrompt,
@@ -65,7 +67,7 @@ public final class AgentScopeContextBudgetMiddleware implements MiddlewareBase {
             AgentScopeContextProperties properties, Consumer<ContextBudgetLedger> observer,
             java.util.Set<String> initialVisibleToolNames) {
         this(model, systemPrompt, callSite, requestedHistoryTokens, properties, observer,
-                initialVisibleToolNames, 0);
+                initialVisibleToolNames, 0, null);
     }
 
     /** 迭代 31D：显式能力档案可覆盖未知兼容端点的保守 AgentScope 窗口。 */
@@ -73,6 +75,16 @@ public final class AgentScopeContextBudgetMiddleware implements MiddlewareBase {
             ContextBudget.CallSite callSite, int requestedHistoryTokens,
             AgentScopeContextProperties properties, Consumer<ContextBudgetLedger> observer,
             java.util.Set<String> initialVisibleToolNames, int modelWindowOverrideTokens) {
+        this(model, systemPrompt, callSite, requestedHistoryTokens, properties, observer,
+                initialVisibleToolNames, modelWindowOverrideTokens, null);
+    }
+
+    /** 迭代 32B：生产入口可注入混合工具召回器；旧构造器保持纯词法兼容。 */
+    public AgentScopeContextBudgetMiddleware(Model model, String systemPrompt,
+            ContextBudget.CallSite callSite, int requestedHistoryTokens,
+            AgentScopeContextProperties properties, Consumer<ContextBudgetLedger> observer,
+            java.util.Set<String> initialVisibleToolNames, int modelWindowOverrideTokens,
+            ToolDiscoveryService toolDiscovery) {
         this.model = model;
         this.systemPrompt = systemPrompt == null ? "" : systemPrompt;
         this.callSite = callSite == null ? ContextBudget.CallSite.CHAT : callSite;
@@ -81,6 +93,7 @@ public final class AgentScopeContextBudgetMiddleware implements MiddlewareBase {
                 ? new AgentScopeContextProperties(true, 0, 0, 0) : properties;
         this.observer = observer == null ? ignored -> { } : observer;
         this.modelWindowOverrideTokens = Math.max(0, modelWindowOverrideTokens);
+        this.toolDiscovery = toolDiscovery;
         if (initialVisibleToolNames != null) {
             this.visibleToolNames.set(java.util.Set.copyOf(initialVisibleToolNames));
         }
@@ -106,9 +119,15 @@ public final class AgentScopeContextBudgetMiddleware implements MiddlewareBase {
         int toolCapacity = remainingCapacity(modelWindow, properties.outputReserveTokens(),
                 properties.safetyMarginTokens(), systemTokens, currentTokens);
         int rawToolTokens = estimateTools(tools);
-        if (rawToolTokens > toolCapacity) {
-            List<ToolSchema> selected = selectToolsWithinBudget(tools, toolCapacity,
-                    currentRequest(messages, currentIndex));
+        String request = currentRequest(messages, currentIndex);
+        List<ToolSchema> selected = toolDiscovery == null || !toolDiscovery.enabledValue()
+                ? null : toolDiscovery.selectSchemas(tools, request, toolCapacity).selected();
+        if (selected != null && (rawToolTokens > toolCapacity || selected.size() < tools.size())) {
+            log.warn("AgentScope 工具 Schema 预算收紧：callSite={} window={} supplied={} selected={} capacity={}",
+                    callSite, modelWindow, tools.size(), selected.size(), toolCapacity);
+            tools = selected;
+        } else if (rawToolTokens > toolCapacity) {
+            selected = selectToolsWithinBudget(tools, toolCapacity, request);
             log.warn("AgentScope 工具 Schema 预算收紧：callSite={} window={} supplied={} selected={} capacity={}",
                     callSite, modelWindow, tools.size(), selected.size(), toolCapacity);
             tools = selected;

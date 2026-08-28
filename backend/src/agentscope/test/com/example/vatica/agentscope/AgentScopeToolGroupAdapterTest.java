@@ -3,6 +3,7 @@ package com.example.vatica.agentscope;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -17,6 +18,7 @@ import com.example.vatica.permission.FilePermissionContext;
 import com.example.vatica.permission.FilePermissionMode;
 import com.example.vatica.permission.FilePermissionPolicy;
 import com.example.vatica.permission.PermissionBoundToolCallbacks;
+import com.example.vatica.runtime.ToolDiscoveryService;
 import com.example.vatica.tool.AgentToolProvider;
 
 import io.agentscope.core.message.ToolResultBlock;
@@ -161,6 +163,38 @@ class AgentScopeToolGroupAdapterTest {
         assertThat(registration.restricted()).isTrue();
         assertThat(registration.selectedToolNames()).isEmpty();
         assertThat(toolkit.getToolSchemas()).isEmpty();
+    }
+
+    @Test
+    void transactionalLoaderRemovesEarlierRegistrationsAfterPartialFailure() {
+        Toolkit toolkit = new Toolkit();
+        String groupName = "dynamic-test";
+        toolkit.createToolGroup(groupName, "dynamic test", false);
+        AgentTool first = tool("first", new AtomicInteger());
+        AgentTool second = tool("second", new AtomicInteger());
+        ToolDiscoveryService.ToolLoader delegate =
+                AgentScopeToolGroupAdapter.transactionalLoader(toolkit, groupName);
+        ToolDiscoveryService.ToolLoader failing = new ToolDiscoveryService.ToolLoader() {
+            @Override
+            public void load(List<AgentTool> tools) {
+                delegate.load(List.of(tools.getFirst()));
+                throw new IllegalStateException("simulated second registration failure");
+            }
+
+            @Override
+            public void rollback(List<AgentTool> tools) {
+                delegate.rollback(tools);
+            }
+        };
+
+        try {
+            failing.load(List.of(first, second));
+        } catch (IllegalStateException expected) {
+            failing.rollback(List.of(first, second));
+        }
+
+        assertThat(toolkit.getTool(first.getName())).isNull();
+        assertThat(toolkit.getToolGroup(groupName).containsTool(first.getName())).isFalse();
     }
 
     @Test

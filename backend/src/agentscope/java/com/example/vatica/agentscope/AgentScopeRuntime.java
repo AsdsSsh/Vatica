@@ -22,6 +22,7 @@ import com.example.vatica.runtime.AgentRegistry;
 import com.example.vatica.runtime.AgentRuntime;
 import com.example.vatica.runtime.AgentRuntime.AdvisoryRequest;
 import com.example.vatica.runtime.AgentRuntime.AdvisoryResult;
+import com.example.vatica.runtime.ToolDiscoveryService;
 import com.example.vatica.trace.TraceSanitizer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -56,23 +57,24 @@ public class AgentScopeRuntime implements AgentRuntime {
     private final Function<ModelSlot, Model> modelFactory;
     private final ContextBudget contextBudget;
     private final AgentScopeContextProperties contextProperties;
+    private final ToolDiscoveryService toolDiscovery;
     private final AgentScopeSkillRunner skillRunner;
 
     public AgentScopeRuntime(ModelRegistry registry, AgentToolProvider vaticaTools, ObjectMapper mapper) {
         this(registry, vaticaTools, mapper, new AgentRegistry(),
-                new ContextBudget(0, 0, 0, 0, 0), new AgentScopeContextProperties(true, 0, 0, 0));
+                new ContextBudget(0, 0, 0, 0, 0), new AgentScopeContextProperties(true, 0, 0, 0), null);
     }
 
     public AgentScopeRuntime(ModelRegistry registry, AgentToolProvider vaticaTools, ObjectMapper mapper,
             AgentRegistry agentRegistry) {
         this(registry, vaticaTools, mapper, agentRegistry, registry::agentScopeModel,
-                new ContextBudget(0, 0, 0, 0, 0), new AgentScopeContextProperties(true, 0, 0, 0));
+                new ContextBudget(0, 0, 0, 0, 0), new AgentScopeContextProperties(true, 0, 0, 0), null);
     }
 
     AgentScopeRuntime(ModelRegistry registry, AgentToolProvider vaticaTools, ObjectMapper mapper,
             AgentRegistry agentRegistry, Function<ModelSlot, Model> modelFactory) {
         this(registry, vaticaTools, mapper, agentRegistry, modelFactory,
-                new ContextBudget(0, 0, 0, 0, 0), new AgentScopeContextProperties(true, 0, 0, 0));
+                new ContextBudget(0, 0, 0, 0, 0), new AgentScopeContextProperties(true, 0, 0, 0), null);
     }
 
     /**
@@ -82,12 +84,28 @@ public class AgentScopeRuntime implements AgentRuntime {
             AgentRegistry agentRegistry, ContextBudget contextBudget,
             AgentScopeContextProperties contextProperties) {
         this(registry, vaticaTools, mapper, agentRegistry, registry::agentScopeModel,
-                contextBudget, contextProperties);
+                contextBudget, contextProperties, null);
+    }
+
+    /** 迭代 32B：生产运行时接收混合工具召回器；旧构造器保持兼容。 */
+    public AgentScopeRuntime(ModelRegistry registry, AgentToolProvider vaticaTools, ObjectMapper mapper,
+            AgentRegistry agentRegistry, ContextBudget contextBudget,
+            AgentScopeContextProperties contextProperties, ToolDiscoveryService toolDiscovery) {
+        this(registry, vaticaTools, mapper, agentRegistry, registry::agentScopeModel,
+                contextBudget, contextProperties, toolDiscovery);
     }
 
     AgentScopeRuntime(ModelRegistry registry, AgentToolProvider vaticaTools, ObjectMapper mapper,
             AgentRegistry agentRegistry, Function<ModelSlot, Model> modelFactory,
             ContextBudget contextBudget, AgentScopeContextProperties contextProperties) {
+        this(registry, vaticaTools, mapper, agentRegistry, modelFactory,
+                contextBudget, contextProperties, null);
+    }
+
+    AgentScopeRuntime(ModelRegistry registry, AgentToolProvider vaticaTools, ObjectMapper mapper,
+            AgentRegistry agentRegistry, Function<ModelSlot, Model> modelFactory,
+            ContextBudget contextBudget, AgentScopeContextProperties contextProperties,
+            ToolDiscoveryService toolDiscovery) {
         this.registry = registry;
         this.vaticaTools = vaticaTools;
         this.mapper = mapper;
@@ -96,8 +114,9 @@ public class AgentScopeRuntime implements AgentRuntime {
         this.contextBudget = contextBudget == null ? new ContextBudget(0, 0, 0, 0, 0) : contextBudget;
         this.contextProperties = contextProperties == null
                 ? new AgentScopeContextProperties(true, 0, 0, 0) : contextProperties;
+        this.toolDiscovery = toolDiscovery;
         this.skillRunner = new AgentScopeSkillRunner(mapper, modelFactory,
-                this.contextBudget, this.contextProperties);
+                this.contextBudget, this.contextProperties, toolDiscovery);
     }
 
     @Override
@@ -168,7 +187,7 @@ public class AgentScopeRuntime implements AgentRuntime {
                     needHelp 只用于确实无法继续的求助，discoveries 最多提出 2 个必要补充步骤。
                     """ + role.systemPrompt();
             ToolKitContext kit = buildToolkit(request.modelSlot(), request.tools(), traces,
-                    "vatica-" + role.id(), system, Set.of(), request.sessionId());
+                    "vatica-" + role.id(), system, Set.of(), request.sessionId(), stepPrompt(request));
             try {
                 AgentReply reply = callAgent(kit.agent(), stepPrompt(request), request.identity(), request.sessionId());
                 ChatUsage usage = reply.usage();
@@ -268,11 +287,17 @@ public class AgentScopeRuntime implements AgentRuntime {
         io.agentscope.core.tool.AgentTool[] tools = PermissionBoundToolCallbacks.wrap(
                 vaticaTools, permission, channel, identity, null);
         return buildToolkit(slot, tools, traces,
-                agentName, sysPrompt, allowedTools, "poc-session");
+                agentName, sysPrompt, allowedTools, "poc-session", sysPrompt);
     }
 
     private ToolKitContext buildToolkit(ModelSlot slot, io.agentscope.core.tool.AgentTool[] tools, List<String> traces,
             String agentName, String sysPrompt, Set<String> allowedTools, String sessionId) {
+        return buildToolkit(slot, tools, traces, agentName, sysPrompt, allowedTools, sessionId, sysPrompt);
+    }
+
+    private ToolKitContext buildToolkit(ModelSlot slot, io.agentscope.core.tool.AgentTool[] tools, List<String> traces,
+            String agentName, String sysPrompt, Set<String> allowedTools, String sessionId,
+            String discoveryQuery) {
         Model model = modelFactory.apply(slot);
         Toolkit toolkit = new Toolkit();
         toolkit.setChunkCallback((use, result) -> {
@@ -280,8 +305,24 @@ public class AgentScopeRuntime implements AgentRuntime {
             traces.add(agentName + ":" + use.getName() + " -> "
                     + TraceSanitizer.outputSummary(output, null) + " [" + result.getState() + "]");
         });
+        ToolDiscoveryService.DiscoverySession discovery = toolDiscovery == null || !toolDiscovery.enabledValue()
+                ? null : toolDiscovery.open(tools, discoveryQuery, allowedTools, !allowedTools.isEmpty());
+        io.agentscope.core.tool.AgentTool[] initial = tools;
+        if (discovery != null) {
+            ToolDiscoveryService.DiscoveryResult result = discovery.initial();
+            List<io.agentscope.core.tool.AgentTool> selected = new ArrayList<>(result.selected());
+            io.agentscope.core.tool.AgentTool search = discovery.searchTool();
+            if (search != null) {
+                selected.add(search);
+            }
+            initial = selected.toArray(io.agentscope.core.tool.AgentTool[]::new);
+        }
         AgentScopeToolGroupAdapter.Registration registration = AgentScopeToolGroupAdapter.registerRequestScoped(
-                toolkit, tools, allowedTools);
+                toolkit, initial, AgentScopeToolGroupAdapter.candidateNames(initial));
+        if (discovery != null && registration.allowedGroup() != null) {
+            String baselineGroup = registration.allowedGroup();
+            discovery.bindLoader(AgentScopeToolGroupAdapter.transactionalLoader(toolkit, baselineGroup));
+        }
         List<String> registered = new ArrayList<>(registration.selectedToolNames());
         if (!registration.missingAllowedToolNames().isEmpty()) {
             log.warn("AgentScope agent={} requested unavailable tools={}",
@@ -310,7 +351,8 @@ public class AgentScopeRuntime implements AgentRuntime {
     private AgentScopeContextBudgetMiddleware contextMiddleware(Model model, String systemPrompt,
             ContextBudget.CallSite callSite) {
         return new AgentScopeContextBudgetMiddleware(model, systemPrompt, callSite,
-                contextBudget.tokensFor(callSite), contextProperties);
+                contextBudget.tokensFor(callSite), contextProperties,
+                ignored -> { }, null, 0, toolDiscovery);
     }
 
     static String stepPrompt(StepRequest request) {

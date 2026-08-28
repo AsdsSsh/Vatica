@@ -33,6 +33,19 @@ vatica:
       output-reserve-tokens: ${VATICA_AGENT_OUTPUT_RESERVE_TOKENS:2048}
       safety-margin-tokens: ${VATICA_AGENT_CONTEXT_SAFETY_TOKENS:512}
       fallback-model-window-tokens: ${VATICA_AGENT_FALLBACK_CONTEXT_TOKENS:16000}
+    # 迭代 32A/32B：先做能力硬过滤，再按词法 + Embedding 选择工具 Schema。
+    # 关闭 enabled 可回退到迭代 30D 的全量注册/词法裁剪路径。
+    tools:
+      discovery:
+        enabled: ${VATICA_AGENT_TOOL_DISCOVERY_ENABLED:true}
+        max-initial-tools: ${VATICA_AGENT_TOOL_DISCOVERY_MAX_INITIAL:12}
+        max-search-results: ${VATICA_AGENT_TOOL_DISCOVERY_MAX_RESULTS:8}
+        max-search-expansions: ${VATICA_AGENT_TOOL_DISCOVERY_MAX_EXPANSIONS:1}
+        max-initial-schema-tokens: ${VATICA_AGENT_TOOL_DISCOVERY_INITIAL_SCHEMA_TOKENS:6000}
+        max-search-schema-tokens: ${VATICA_AGENT_TOOL_DISCOVERY_SEARCH_SCHEMA_TOKENS:8000}
+        lexical-weight: ${VATICA_AGENT_TOOL_DISCOVERY_LEXICAL_WEIGHT:0.45}
+        semantic-weight: ${VATICA_AGENT_TOOL_DISCOVERY_SEMANTIC_WEIGHT:0.55}
+        minimum-score: ${VATICA_AGENT_TOOL_DISCOVERY_MINIMUM_SCORE:0.0}
   # 迭代 23B：额外开发 origin 用逗号分隔；桌面壳和默认 Vite 来源始终保留。
   cors:
     allowed-origins: ${VATICA_CORS_ALLOWED_ORIGINS:}

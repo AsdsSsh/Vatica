@@ -27,20 +27,22 @@ public class AgentRuntimeFactory {
     private final DirectModelUsageRecorder directUsage;
     private final ContextBudget contextBudget;
     private final AgentScopeContextProperties contextProperties;
+    private final ToolDiscoveryService toolDiscovery;
     private volatile AgentRuntime runtime;
 
     public AgentRuntimeFactory(ModelRegistry registry, AgentToolProvider vaticaTools,
             ObjectMapper mapper,
             AgentRegistry agentRegistry, DirectModelUsageRecorder directUsage) {
         this(registry, vaticaTools, mapper, agentRegistry, directUsage,
-                new ContextBudget(0, 0, 0, 0, 0), new AgentScopeContextProperties(true, 0, 0, 0));
+                new ContextBudget(0, 0, 0, 0, 0), new AgentScopeContextProperties(true, 0, 0, 0), null);
     }
 
     @Autowired
     public AgentRuntimeFactory(ModelRegistry registry, AgentToolProvider vaticaTools,
             ObjectMapper mapper,
             AgentRegistry agentRegistry, DirectModelUsageRecorder directUsage,
-            ContextBudget contextBudget, AgentScopeContextProperties contextProperties) {
+            ContextBudget contextBudget, AgentScopeContextProperties contextProperties,
+            ToolDiscoveryService toolDiscovery) {
         this.registry = registry;
         this.vaticaTools = vaticaTools;
         this.mapper = mapper;
@@ -49,6 +51,16 @@ public class AgentRuntimeFactory {
         this.contextBudget = contextBudget == null ? new ContextBudget(0, 0, 0, 0, 0) : contextBudget;
         this.contextProperties = contextProperties == null
                 ? new AgentScopeContextProperties(true, 0, 0, 0) : contextProperties;
+        this.toolDiscovery = toolDiscovery;
+    }
+
+    /** 兼容迭代 22D～31D 的程序化构造器。 */
+    public AgentRuntimeFactory(ModelRegistry registry, AgentToolProvider vaticaTools,
+            ObjectMapper mapper,
+            AgentRegistry agentRegistry, DirectModelUsageRecorder directUsage,
+            ContextBudget contextBudget, AgentScopeContextProperties contextProperties) {
+        this(registry, vaticaTools, mapper, agentRegistry, directUsage,
+                contextBudget, contextProperties, null);
     }
 
     /** 迭代 20C：AgentScope 建议直连模型，统一复用平台配额与 usage 记录。 */
@@ -87,16 +99,25 @@ public class AgentRuntimeFactory {
         try {
             Class<?> type = Class.forName(AGENTSCOPE_CLASS);
             try {
-                // 迭代 30B：新运行时接收统一上下文预算配置；旧构建产物回退四参数构造器。
+                // 迭代 32B：把混合工具召回器传入所有 AgentScope 入口。
                 return (AgentRuntime) type.getConstructor(ModelRegistry.class, AgentToolProvider.class,
                         ObjectMapper.class, AgentRegistry.class, ContextBudget.class,
-                        AgentScopeContextProperties.class)
+                        AgentScopeContextProperties.class, ToolDiscoveryService.class)
                         .newInstance(registry, vaticaTools, mapper, agentRegistry,
-                                contextBudget, contextProperties);
-            } catch (NoSuchMethodException legacyRuntime) {
-                return (AgentRuntime) type.getConstructor(ModelRegistry.class, AgentToolProvider.class,
-                        ObjectMapper.class, AgentRegistry.class)
-                        .newInstance(registry, vaticaTools, mapper, agentRegistry);
+                                contextBudget, contextProperties, toolDiscovery);
+            } catch (NoSuchMethodException currentRuntime) {
+                try {
+                    // 迭代 30B：旧运行时接收统一上下文预算配置；继续向后兼容。
+                    return (AgentRuntime) type.getConstructor(ModelRegistry.class, AgentToolProvider.class,
+                            ObjectMapper.class, AgentRegistry.class, ContextBudget.class,
+                            AgentScopeContextProperties.class)
+                            .newInstance(registry, vaticaTools, mapper, agentRegistry,
+                                    contextBudget, contextProperties);
+                } catch (NoSuchMethodException legacyRuntime) {
+                    return (AgentRuntime) type.getConstructor(ModelRegistry.class, AgentToolProvider.class,
+                            ObjectMapper.class, AgentRegistry.class)
+                            .newInstance(registry, vaticaTools, mapper, agentRegistry);
+                }
             }
         } catch (ClassNotFoundException e) {
             throw new IllegalStateException("操作失败：AgentScopeRuntime 未进入当前构建，请使用默认 Maven 构建重新打包。", e);

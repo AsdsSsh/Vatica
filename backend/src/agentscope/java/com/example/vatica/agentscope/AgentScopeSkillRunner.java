@@ -15,6 +15,7 @@ import com.example.vatica.runtime.AgentRegistry.AgentDefinition;
 import com.example.vatica.runtime.AgentRuntime.StepRequest;
 import com.example.vatica.runtime.AgentRuntime.StepResult;
 import com.example.vatica.runtime.AgentRuntime.StepUsage;
+import com.example.vatica.runtime.ToolDiscoveryService;
 import com.example.vatica.skill.SkillCatalogService.ExecutionProfile;
 import com.example.vatica.trace.TraceSanitizer;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -40,19 +41,27 @@ final class AgentScopeSkillRunner {
     private final Function<ModelSlot, Model> modelFactory;
     private final ContextBudget contextBudget;
     private final AgentScopeContextProperties contextProperties;
+    private final ToolDiscoveryService toolDiscovery;
 
     AgentScopeSkillRunner(ObjectMapper mapper, Function<ModelSlot, Model> modelFactory) {
         this(mapper, modelFactory, new ContextBudget(0, 0, 0, 0, 0),
-                new AgentScopeContextProperties(true, 0, 0, 0));
+                new AgentScopeContextProperties(true, 0, 0, 0), null);
     }
 
     AgentScopeSkillRunner(ObjectMapper mapper, Function<ModelSlot, Model> modelFactory,
             ContextBudget contextBudget, AgentScopeContextProperties contextProperties) {
+        this(mapper, modelFactory, contextBudget, contextProperties, null);
+    }
+
+    AgentScopeSkillRunner(ObjectMapper mapper, Function<ModelSlot, Model> modelFactory,
+            ContextBudget contextBudget, AgentScopeContextProperties contextProperties,
+            ToolDiscoveryService toolDiscovery) {
         this.mapper = mapper;
         this.modelFactory = modelFactory;
         this.contextBudget = contextBudget == null ? new ContextBudget(0, 0, 0, 0, 0) : contextBudget;
         this.contextProperties = contextProperties == null
                 ? new AgentScopeContextProperties(true, 0, 0, 0) : contextProperties;
+        this.toolDiscovery = toolDiscovery;
     }
 
     StepResult execute(StepRequest request, AgentDefinition role) {
@@ -74,8 +83,30 @@ final class AgentScopeSkillRunner {
                     + TraceSanitizer.outputSummary(output, null) + " [" + result.getState() + "]");
         });
         Set<String> declaredTools = Set.copyOf(skill.tools());
+        Set<String> availableNames = AgentScopeToolGroupAdapter.candidateNames(request.tools());
+        Set<String> missingDeclared = new java.util.LinkedHashSet<>(declaredTools);
+        missingDeclared.removeAll(availableNames);
+        if (!missingDeclared.isEmpty()) {
+            throw new IllegalStateException("操作失败：Skill " + skill.id() + "@" + skill.version()
+                    + " 的授权工具不可用（" + String.join(", ", missingDeclared) + "）。");
+        }
+        ToolDiscoveryService.DiscoverySession discovery = toolDiscovery == null || !toolDiscovery.enabledValue()
+                ? null : toolDiscovery.open(request.tools(), AgentScopeRuntime.stepPrompt(request), declaredTools, true);
+        io.agentscope.core.tool.AgentTool[] initial = request.tools();
+        if (discovery != null) {
+            List<io.agentscope.core.tool.AgentTool> selected = new ArrayList<>(discovery.initial().selected());
+            io.agentscope.core.tool.AgentTool search = discovery.searchTool();
+            if (search != null) {
+                selected.add(search);
+            }
+            initial = selected.toArray(io.agentscope.core.tool.AgentTool[]::new);
+        }
         AgentScopeToolGroupAdapter.Registration registration = AgentScopeToolGroupAdapter.register(
-                toolkit, request.tools(), declaredTools, true);
+                toolkit, initial, AgentScopeToolGroupAdapter.candidateNames(initial), true);
+        if (discovery != null && registration.allowedGroup() != null) {
+            String baselineGroup = registration.allowedGroup();
+            discovery.bindLoader(AgentScopeToolGroupAdapter.transactionalLoader(toolkit, baselineGroup));
+        }
         if (!registration.missingAllowedToolNames().isEmpty()) {
             throw new IllegalStateException("操作失败：Skill " + skill.id() + "@" + skill.version()
                     + " 的授权工具不可用（" + String.join(", ", registration.missingAllowedToolNames()) + "）。");
@@ -84,7 +115,8 @@ final class AgentScopeSkillRunner {
         String prompt = systemPrompt(role, skill);
         AgentScopeContextBudgetMiddleware budgetMiddleware = new AgentScopeContextBudgetMiddleware(model,
                 prompt, ContextBudget.CallSite.EXECUTOR,
-                contextBudget.tokensFor(ContextBudget.CallSite.EXECUTOR), contextProperties);
+                contextBudget.tokensFor(ContextBudget.CallSite.EXECUTOR), contextProperties,
+                ignored -> { }, null, 0, toolDiscovery);
         ReActAgent agent = ReActAgent.builder()
                 .name(agentName)
                 .sysPrompt(prompt)

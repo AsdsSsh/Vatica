@@ -11,7 +11,10 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
+import com.example.vatica.runtime.ToolDiscoveryService;
+
 import io.agentscope.core.tool.AgentTool;
+import io.agentscope.core.tool.ToolGroup;
 import io.agentscope.core.tool.Toolkit;
 
 /**
@@ -176,6 +179,60 @@ public final class AgentScopeToolGroupAdapter {
     public static Set<String> candidateNames(AgentTool[] tools) {
         return distinctTools(tools).stream().map(AgentTool::getName)
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    /**
+     * 创建一个请求级、可回滚的动态挂载器。
+     *
+     * <p>AgentScope 的 {@code ToolRegistration.apply()} 没有批量事务；因此加载器在
+     * 任一工具注册失败时，会按逆序移除本批次的组成员，并用对象身份删除注册表条目。
+     * {@code removeToolIfSame} 可避免误删同名的既有工具。</p>
+     */
+    public static ToolDiscoveryService.ToolLoader transactionalLoader(Toolkit toolkit,
+            String groupName) {
+        Objects.requireNonNull(toolkit, "toolkit 不能为空");
+        if (groupName == null || groupName.isBlank()) {
+            throw new IllegalArgumentException("工具组名不能为空");
+        }
+        return new ToolDiscoveryService.ToolLoader() {
+            @Override
+            public void load(List<AgentTool> tools) {
+                for (AgentTool tool : tools == null ? List.<AgentTool>of() : tools) {
+                    if (tool == null) {
+                        throw new IllegalArgumentException("动态挂载工具不能为空");
+                    }
+                    toolkit.registration().agentTool(tool).group(groupName).apply();
+                }
+            }
+
+            @Override
+            public void rollback(List<AgentTool> tools) {
+                List<AgentTool> batch = tools == null ? List.of() : tools;
+                ToolGroup group = toolkit.getToolGroup(groupName);
+                RuntimeException firstFailure = null;
+                for (int i = batch.size() - 1; i >= 0; i--) {
+                    AgentTool tool = batch.get(i);
+                    if (tool == null) {
+                        continue;
+                    }
+                    try {
+                        if (group != null) {
+                            group.removeTool(tool.getName());
+                        }
+                        toolkit.removeToolIfSame(tool.getName(), tool);
+                    } catch (RuntimeException e) {
+                        if (firstFailure == null) {
+                            firstFailure = e;
+                        } else {
+                            firstFailure.addSuppressed(e);
+                        }
+                    }
+                }
+                if (firstFailure != null) {
+                    throw firstFailure;
+                }
+            }
+        };
     }
 
     private record Baseline(List<String> restoreGroups) {

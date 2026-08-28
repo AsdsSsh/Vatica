@@ -21,6 +21,7 @@ import com.example.vatica.context.ChatContextStatus;
 import com.example.vatica.model.ConversationMessage;
 import com.example.vatica.model.ModelUsage;
 import com.example.vatica.runtime.AgentRuntime.StepUsage;
+import com.example.vatica.runtime.ToolDiscoveryService;
 import com.example.vatica.usage.DirectModelUsageRecorder;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -49,23 +50,32 @@ public class AgentScopeChatService {
     private final DirectModelUsageRecorder usageRecorder;
     private final ContextBudget contextBudget;
     private final AgentScopeContextProperties contextProperties;
+    private final ToolDiscoveryService toolDiscovery;
 
     public AgentScopeChatService(ModelRegistry registry, ObjectMapper mapper,
             DirectModelUsageRecorder usageRecorder) {
         this(registry, mapper, usageRecorder, new ContextBudget(0, 0, 0, 0, 0),
-                new AgentScopeContextProperties(true, 0, 0, 0));
+                new AgentScopeContextProperties(true, 0, 0, 0), null);
     }
 
     @Autowired
     public AgentScopeChatService(ModelRegistry registry, ObjectMapper mapper,
             DirectModelUsageRecorder usageRecorder, ContextBudget contextBudget,
-            AgentScopeContextProperties contextProperties) {
+            AgentScopeContextProperties contextProperties, ToolDiscoveryService toolDiscovery) {
         this.registry = registry;
         this.mapper = mapper;
         this.usageRecorder = usageRecorder;
         this.contextBudget = contextBudget == null ? new ContextBudget(0, 0, 0, 0, 0) : contextBudget;
         this.contextProperties = contextProperties == null
                 ? new AgentScopeContextProperties(true, 0, 0, 0) : contextProperties;
+        this.toolDiscovery = toolDiscovery;
+    }
+
+    /** 兼容迭代 22A～31D 的程序化构造器。 */
+    public AgentScopeChatService(ModelRegistry registry, ObjectMapper mapper,
+            DirectModelUsageRecorder usageRecorder, ContextBudget contextBudget,
+            AgentScopeContextProperties contextProperties) {
+        this(registry, mapper, usageRecorder, contextBudget, contextProperties, null);
     }
 
     public ChatResult call(ChatRequest request) {
@@ -109,9 +119,26 @@ public class AgentScopeChatService {
 
     private ReActAgent buildAgent(ChatRequest request) {
         Toolkit toolkit = new Toolkit();
-        // 聊天工具已经过 Vatica 权限/重试/Trace 包装；建立永久请求基线组，
-        // 便于每轮上下文预算收缩时临时切换 allow/deny 而不丢失原工具。
-        AgentScopeToolGroupAdapter.registerAll(toolkit, request.tools());
+        // 迭代 32C：首轮只挂载语义召回结果；遗漏能力通过一次受控 search_tools 扩展。
+        AgentTool[] requestTools = request.tools();
+        ToolDiscoveryService.DiscoverySession discovery = toolDiscovery == null || !toolDiscovery.enabledValue()
+                ? null : toolDiscovery.open(requestTools, request.userPrompt(), java.util.Set.of());
+        AgentTool[] initial = requestTools;
+        if (discovery != null) {
+            ToolDiscoveryService.DiscoveryResult result = discovery.initial();
+            List<AgentTool> selected = new ArrayList<>(result.selected());
+            AgentTool search = discovery.searchTool();
+            if (search != null) {
+                selected.add(search);
+            }
+            initial = selected.toArray(AgentTool[]::new);
+        }
+        AgentScopeToolGroupAdapter.Registration registration = AgentScopeToolGroupAdapter.registerRequestScoped(
+                toolkit, initial, AgentScopeToolGroupAdapter.candidateNames(initial));
+        if (discovery != null && registration.allowedGroup() != null) {
+            String baselineGroup = registration.allowedGroup();
+            discovery.bindLoader(AgentScopeToolGroupAdapter.transactionalLoader(toolkit, baselineGroup));
+        }
         GenerateOptions options = GenerateOptions.builder()
                 .stream(request.streaming())
                 .temperature(request.slot().temperature())
@@ -131,7 +158,7 @@ public class AgentScopeChatService {
                 request.systemPrompt(), ContextBudget.CallSite.CHAT,
                 effectiveBudget.tokensFor(ContextBudget.CallSite.CHAT), effectiveProperties,
                 ledger -> observeContext(request, ledger, middlewareCalls.incrementAndGet()), null,
-                allocationPlan == null ? 0 : allocationPlan.modelWindowTokens());
+                allocationPlan == null ? 0 : allocationPlan.modelWindowTokens(), toolDiscovery);
         return ReActAgent.builder()
                 .name("vatica-chat")
                 .sysPrompt(request.systemPrompt())
