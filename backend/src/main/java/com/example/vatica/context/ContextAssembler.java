@@ -28,7 +28,8 @@ public final class ContextAssembler {
      */
     public static List<ConversationMessage> chatHistory(SessionMemory memory, String sessionId, ContextBudget budget,
             List<ContextFactService.ContextFactSnippet> facts) {
-        return chatHistory(memory.contextWindow(sessionId), budget, facts);
+        return chatHistory(memory.contextWindow(sessionId), budget, facts,
+                ContextOperationalMaterials.empty());
     }
 
     /**
@@ -36,12 +37,28 @@ public final class ContextAssembler {
      */
     public static List<ConversationMessage> chatHistory(ContextWindow window, ContextBudget budget,
             List<ContextFactService.ContextFactSnippet> facts) {
+        return chatHistory(window, budget, facts, ContextOperationalMaterials.empty());
+    }
+
+    /**
+     * 迭代 33：把操作事实作为独立 mandatory 材料注入。
+     * {@code operationalMaterials.shouldInject()} 为 true 时材料必注入；未查询过则保持 silence，
+     * 避免把“查询不可用”与“已确认无记录”混同。
+     */
+    public static List<ConversationMessage> chatHistory(ContextWindow window, ContextBudget budget,
+            List<ContextFactService.ContextFactSnippet> facts,
+            ContextOperationalMaterials operationalMaterials) {
         window = window == null ? new ContextWindow(null,
                 com.example.vatica.controller.SessionSummaryStatus.PENDING, 0, 0, 0,
                 List.of(), List.of(), List.of()) : window;
         budget = budget == null ? new ContextBudget(0, 0, 0, 0, 0) : budget;
+        // 迭代 33：材料注入只响应显式 required（=服务端已查询过记录状态）。
+        // 服务不可用时保持 empty(false)，降级不与“已确认无记录”混同。
+        ContextOperationalMaterials operational = operationalMaterials == null
+                ? ContextOperationalMaterials.empty()
+                : operationalMaterials;
         List<ConversationMessage> combined = new ArrayList<>(
-                window.recent().size() + window.uncoveredHead().size() + 4);
+                window.recent().size() + window.uncoveredHead().size() + 5);
         List<Boolean> mandatory = new ArrayList<>();
         if (window.summary() != null && !window.summary().isBlank()) {
             combined.add(ConversationMessage.user("【历史会话摘要】\n" + window.summary()));
@@ -49,6 +66,10 @@ public final class ContextAssembler {
         }
         if (facts != null && !facts.isEmpty()) {
             combined.add(factMessage(facts));
+            mandatory.add(true);
+        }
+        if (operational.shouldInject()) {
+            combined.add(operational.contextMessage());
             mandatory.add(true);
         }
         if (window.hasFallbackHistory()) {
@@ -78,15 +99,13 @@ public final class ContextAssembler {
         for (int i = 0; i < window.recent().size(); i++) {
             combined.add(window.recent().get(i));
             // 降级路径至少保留近期尾部；健康路径交给原有尾部保护逻辑。
-            mandatory.add((window.hasFallbackHistory() || hasFacts) && i == window.recent().size() - 1);
+            mandatory.add((window.hasFallbackHistory() || hasFacts || operational.shouldInject())
+                    && i == window.recent().size() - 1);
         }
-        if (!window.hasFallbackHistory()) {
-            if (!hasFacts) {
-                return ContextTrimmer.trim(combined, budget.tokensFor(ContextBudget.CallSite.CHAT), 1);
-            }
-            return trimWithMandatory(combined, mandatory, budget.tokensFor(ContextBudget.CallSite.CHAT));
+        if (!window.hasFallbackHistory() && !hasFacts && !operational.shouldInject()) {
+            return ContextTrimmer.trim(combined, budget.tokensFor(ContextBudget.CallSite.CHAT), 1);
         }
-        return trimDegraded(combined, mandatory, budget.tokensFor(ContextBudget.CallSite.CHAT));
+        return trimWithMandatory(combined, mandatory, budget.tokensFor(ContextBudget.CallSite.CHAT));
     }
 
     static int estimateFactTokens(List<ContextFactService.ContextFactSnippet> facts) {
@@ -135,27 +154,6 @@ public final class ContextAssembler {
      * 降级上下文不能把摘要和“这里有未覆盖区间”的边界标记从最旧端一起裁掉。
      * 只淘汰非关键片段；若关键片段本身就超预算，则沿用完整消息优先的语义返回它们。
      */
-    private static List<ConversationMessage> trimDegraded(List<ConversationMessage> messages,
-            List<Boolean> mandatory, int tokenBudget) {
-        List<ConversationMessage> working = new ArrayList<>(messages);
-        List<Boolean> required = new ArrayList<>(mandatory);
-        while (working.size() > 1 && ContextTrimmer.estimateTokens(working) > tokenBudget) {
-            int remove = -1;
-            for (int i = 0; i < required.size(); i++) {
-                if (!required.get(i)) {
-                    remove = i;
-                    break;
-                }
-            }
-            if (remove < 0) {
-                break;
-            }
-            working.remove(remove);
-            required.remove(remove);
-        }
-        return List.copyOf(working);
-    }
-
     private static ConversationMessage fallbackExcerpt(ConversationMessage message) {
         String text = message.text() == null ? "" : message.text();
         if (text.length() <= FALLBACK_EXCERPT_CHARS) {

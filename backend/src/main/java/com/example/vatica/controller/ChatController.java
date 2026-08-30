@@ -357,7 +357,7 @@ public class ChatController {
             return new PreparedChatContext(history, plan, status);
         }
         return chatContextService.prepare(new PreparationRequest(request.sessionId(), request.contextMode(),
-                capabilityFor(slot), SYSTEM_PROMPT, request.message(), tools));
+                capabilityFor(slot), SYSTEM_PROMPT, request.message(), tools, request.taskId()));
     }
 
     private ModelCapabilityProfile capabilityFor(ModelSlot slot) {

@@ -2,9 +2,11 @@ package com.example.vatica.context;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
@@ -156,12 +158,126 @@ class ChatContextServiceTest {
         }
     }
 
+    @Test
+    void summaryFailureInjectsOperationalMaterialsIntoDegradedHistory() {
+        SessionMemory memory = mock(SessionMemory.class);
+        when(memory.contextWindow(eq("s1"), any(SessionContextReadRequest.class)))
+                .thenReturn(new ContextWindow("旧摘要", SessionSummaryStatus.FAILED, 2, 2, 0,
+                        List.of(), List.of(),
+                        List.of(ConversationMessage.user("近期问题")), 3, 3));
+        ContextOperationalMaterialService operational = mock(ContextOperationalMaterialService.class);
+        when(operational.resolveForChat(eq("s1"), isNull(), eq(true)))
+                .thenReturn(new ContextOperationalMaterials(List.of(new ContextOperationalMaterials.Snippet(
+                        ContextOperationalMaterials.TASK_STATE, "task:t-1", "",
+                        "status=RUNNING; currentStep=1")), true, false));
+        ChatContextService service = serviceWithOperational(memory, operational);
+
+        ChatContextService.PreparedChatContext prepared = service.prepare(request(ContextMode.NORMAL, 128_000));
+
+        assertThat(prepared.history()).extracting(ConversationMessage::text)
+                .anyMatch(text -> text.contains("【关键工具、审批和交付物记录】"))
+                .anyMatch(text -> text.contains("task:t-1"))
+                .contains("近期问题");
+    }
+
+    @Test
+    void healthySummaryDoesNotReadOrInjectOperationalMaterials() {
+        SessionMemory memory = mock(SessionMemory.class);
+        when(memory.contextWindow(eq("s1"), any(SessionContextReadRequest.class)))
+                .thenReturn(window(1, 2, List.of(ConversationMessage.user("近期问题"))));
+        ContextOperationalMaterialService operational = mock(ContextOperationalMaterialService.class);
+        ChatContextService service = serviceWithOperational(memory, operational);
+
+        ChatContextService.PreparedChatContext prepared = service.prepare(request(ContextMode.NORMAL, 128_000));
+
+        verify(operational, never()).resolveForChat(any(), any(), anyBoolean());
+        assertThat(prepared.history()).extracting(ConversationMessage::text)
+                .noneMatch(text -> text.contains("关键工具、审批和交付物记录"))
+                .contains("近期问题");
+    }
+
+    @Test
+    void explicitTaskIdInjectsOperationalMaterialsEvenWithoutDegradation() {
+        SessionMemory memory = mock(SessionMemory.class);
+        when(memory.contextWindow(eq("s1"), any(SessionContextReadRequest.class)))
+                .thenReturn(window(1, 2, List.of(ConversationMessage.user("近期问题"))));
+        ContextOperationalMaterialService operational = mock(ContextOperationalMaterialService.class);
+        when(operational.resolveForChat(eq("s1"), eq("t-9"), eq(true)))
+                .thenReturn(new ContextOperationalMaterials(List.of(new ContextOperationalMaterials.Snippet(
+                        ContextOperationalMaterials.APPROVAL, "task:t-9/step:2", "PENDING",
+                        "description=写入文档")), true, false));
+        ChatContextService service = serviceWithOperational(memory, operational);
+
+        ChatContextService.PreparedChatContext prepared = service.prepare(
+                new ChatContextService.PreparationRequest("s1", ContextMode.NORMAL,
+                        new ModelCapabilityProfile("test-model", 128_000, 16_000,
+                                ModelCapabilityProfile.ESTIMATED_TOKENIZER, true),
+                        "系统规则", "请继续任务", new io.agentscope.core.tool.AgentTool[0], "t-9"));
+
+        assertThat(prepared.history()).extracting(ConversationMessage::text)
+                .anyMatch(text -> text.contains("task:t-9/step:2"))
+                .anyMatch(text -> text.contains("【关键工具、审批和交付物记录】"));
+    }
+
+    @Test
+    void operationalMaterialFailureStillLeavesExplicitBoundaryInDegradedHistory() {
+        SessionMemory memory = mock(SessionMemory.class);
+        when(memory.contextWindow(eq("s1"), any(SessionContextReadRequest.class)))
+                .thenReturn(new ContextWindow("旧摘要", SessionSummaryStatus.FAILED, 2, 2, 0,
+                        List.of(), List.of(),
+                        List.of(ConversationMessage.user("近期问题")), 3, 3));
+        ContextOperationalMaterialService operational = mock(ContextOperationalMaterialService.class);
+        when(operational.resolveForChat(any(), any(), anyBoolean())).thenThrow(new IllegalStateException("db down"));
+        ChatContextService service = serviceWithOperational(memory, operational);
+
+        ChatContextService.PreparedChatContext prepared = service.prepare(request(ContextMode.NORMAL, 128_000));
+
+        assertThat(prepared.history()).extracting(ConversationMessage::text)
+                .anyMatch(text -> text.contains("【关键工具、审批和交付物记录】"))
+                .anyMatch(text -> text.contains("读取部分操作记录失败"));
+    }
+
+    @Test
+    void evidenceFailureTriggersOperationalLookupEvenWithoutInitialDegradation() {
+        SessionMemory memory = mock(SessionMemory.class);
+        when(memory.contextWindow(eq("s1"), any(SessionContextReadRequest.class)))
+                .thenReturn(new ContextWindow("历史摘要", SessionSummaryStatus.SUCCESS, 8, 8, 2,
+                        List.of(), List.of(),
+                        List.of(ConversationMessage.user("近期问题"), ConversationMessage.assistant("近期回答")),
+                        8, 9));
+        ConversationEvidenceRetriever evidence = mock(ConversationEvidenceRetriever.class);
+        when(evidence.retrieve(any(), any(), anyLong(), anyInt()))
+                .thenReturn(ConversationEvidenceResult.empty(ConversationEvidenceStatus.UNAVAILABLE));
+        ContextOperationalMaterialService operational = mock(ContextOperationalMaterialService.class);
+        when(operational.resolveForChat(eq("s1"), isNull(), eq(true)))
+                .thenReturn(new ContextOperationalMaterials(List.of(new ContextOperationalMaterials.Snippet(
+                        ContextOperationalMaterials.TOOL, "task:t-1/tool:calendar.search", "SUCCESS",
+                        "output=返回 3 条日程")), true, false));
+        ChatContextService service = new ChatContextService(memory, null, evidence,
+                new ContextAllocationPlanner(new ContextAllocationProperties()),
+                new ChatProperties(null, new ChatProperties.Memory(20, 64, 16_000, 512), null), operational);
+
+        ChatContextService.PreparedChatContext prepared = service.prepare(request(ContextMode.LONG_TASK, 128_000));
+
+        verify(operational).resolveForChat(eq("s1"), isNull(), eq(true));
+        assertThat(prepared.history()).extracting(ConversationMessage::text)
+                .anyMatch(text -> text.contains("calendar.search"));
+    }
+
     private static ChatContextService service(SessionMemory memory, ContextFactService facts,
             ConversationEvidenceRetriever evidence) {
         ChatProperties properties = new ChatProperties(null,
                 new ChatProperties.Memory(20, 64, 16_000, 512), null);
         return new ChatContextService(memory, facts, evidence,
                 new ContextAllocationPlanner(new ContextAllocationProperties()), properties);
+    }
+
+    private static ChatContextService serviceWithOperational(SessionMemory memory,
+            ContextOperationalMaterialService operational) {
+        ChatProperties properties = new ChatProperties(null,
+                new ChatProperties.Memory(20, 64, 16_000, 512), null);
+        return new ChatContextService(memory, null, mock(ConversationEvidenceRetriever.class),
+                new ContextAllocationPlanner(new ContextAllocationProperties()), properties, operational);
     }
 
     private static ChatContextService.PreparationRequest request(ContextMode mode, int windowTokens) {

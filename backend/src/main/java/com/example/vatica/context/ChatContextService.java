@@ -3,6 +3,7 @@ package com.example.vatica.context;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -31,15 +32,25 @@ public class ChatContextService {
     private final ConversationEvidenceRetriever evidenceRetriever;
     private final ContextAllocationPlanner allocationPlanner;
     private final ChatProperties chatProperties;
+    private final ContextOperationalMaterialService operationalMaterials;
 
+    /** 兼容没有操作材料读取器的历史测试替身。 */
     public ChatContextService(SessionMemory sessionMemory, ContextFactService contextFacts,
             ConversationEvidenceRetriever evidenceRetriever, ContextAllocationPlanner allocationPlanner,
             ChatProperties chatProperties) {
+        this(sessionMemory, contextFacts, evidenceRetriever, allocationPlanner, chatProperties, null);
+    }
+
+    @Autowired
+    public ChatContextService(SessionMemory sessionMemory, ContextFactService contextFacts,
+            ConversationEvidenceRetriever evidenceRetriever, ContextAllocationPlanner allocationPlanner,
+            ChatProperties chatProperties, ContextOperationalMaterialService operationalMaterials) {
         this.sessionMemory = sessionMemory;
         this.contextFacts = contextFacts;
         this.evidenceRetriever = evidenceRetriever;
         this.allocationPlanner = allocationPlanner;
         this.chatProperties = chatProperties;
+        this.operationalMaterials = operationalMaterials;
     }
 
     public PreparedChatContext prepare(PreparationRequest request) {
@@ -51,46 +62,75 @@ public class ChatContextService {
                 TokenEstimator.estimate(source.userPrompt()), 0, 0);
         ContextAllocationPlan initialPlan = allocationPlanner.plan(source.modelCapability(), requestedMode, fixed);
 
-        List<ContextFactService.ContextFactSnippet> facts = factsFor(sessionId);
+        FactRead factRead = factsFor(sessionId);
+        List<ContextFactService.ContextFactSnippet> facts = factRead.snippets();
         // 先按模式的近期原文上限做一次受控探测。不能用第一次“全策略分配”后的 recent 额度：
         // 小窗口下事实/摘要的理论配额会先占满动态 cap，导致没有实际事实时也错误读到 0 条历史。
         int probeHistoryTokens = Math.min(initialPlan.requestedDynamic().recentHistoryTokens(),
                 initialPlan.modeDynamicCapTokens());
         ReadWindow read = readWindow(sessionId, probeHistoryTokens);
+        boolean degradedBeforeEvidence = isDegraded(read, factRead);
+        ContextOperationalMaterials operational = operationalFor(source, sessionId, degradedBeforeEvidence);
         ContextAllocationPlan plan = allocationPlanner.plan(source.modelCapability(), requestedMode, fixed,
-                demandFor(initialPlan, read.window(), facts));
+                demandFor(initialPlan, read.window(), facts, operational));
 
         // 事实或摘要实际较小时，二次规划会把空出的额度让给近期原文；只重新读取本次请求视图。
         if (plan.dynamicBudget().recentHistoryTokens() != initialPlan.dynamicBudget().recentHistoryTokens()
                 && !"UNAVAILABLE".equals(read.status())) {
             read = readWindow(sessionId, plan.dynamicBudget().recentHistoryTokens());
             plan = allocationPlanner.plan(source.modelCapability(), requestedMode, fixed,
-                    demandFor(plan, read.window(), facts));
+                    demandFor(plan, read.window(), facts, operational));
         }
 
         ConversationEvidenceResult evidence = evidenceFor(sessionId, source.userPrompt(), read.window(), plan);
-        List<ConversationMessage> history = assemble(read.window(), facts, evidence, plan);
+        boolean degraded = degradedBeforeEvidence || evidence.status() == ConversationEvidenceStatus.UNAVAILABLE;
+        if (degraded && !operational.shouldInject()) {
+            // 证据失败才暴露的降级要真实读取操作事实，而不是注入“无可用记录”空壳。
+            operational = operationalFor(source, sessionId, true);
+        }
+        List<ConversationMessage> history = assemble(read.window(), facts, operational, evidence, plan);
         int historyTokens = ContextTrimmer.estimateTokens(history);
         ChatContextStatus status = new ChatContextStatus(plan.requestedMode(), plan.effectiveMode(),
                 plan.modelWindowTokens(), plan.plannedInputTokens(), plan.dynamicBudget(), evidence.status(),
                 evidence.candidateCount(), evidence.estimatedTokens(), plan.modeDowngraded(),
                 plan.dynamicConstrained(), read.status(), historyTokens, 0, 0, 0, false);
-        log.debug("聊天上下文装配：requested={} effective={} window={} history={} evidence={} candidates={} status={}",
+        log.debug("聊天上下文装配：requested={} effective={} window={} history={} evidence={} candidates={} operational={} status={}",
                 status.requestedMode(), status.effectiveMode(), status.modelWindowTokens(), historyTokens,
-                status.evidenceTokens(), status.evidenceCandidateCount(), status.evidenceStatus());
+                status.evidenceTokens(), status.evidenceCandidateCount(), operational.snippets().size(),
+                status.evidenceStatus());
         return new PreparedChatContext(history, plan, status);
     }
 
-    private List<ContextFactService.ContextFactSnippet> factsFor(String sessionId) {
+    private FactRead factsFor(String sessionId) {
         if (contextFacts == null) {
-            return List.of();
+            return FactRead.empty();
         }
         try {
-            return contextFacts.resolveForChat(sessionId);
+            return new FactRead(contextFacts.resolveForChat(sessionId), false);
         } catch (RuntimeException exception) {
             log.warn("关键事实读取失败，降级为会话历史：type={}", exception.getClass().getSimpleName());
-            return List.of();
+            return new FactRead(List.of(), true);
         }
+    }
+
+    private ContextOperationalMaterials operationalFor(PreparationRequest request, String sessionId,
+            boolean degraded) {
+        boolean hasExplicitTask = request.taskId() != null && !request.taskId().isBlank();
+        if (operationalMaterials == null || (!degraded && !hasExplicitTask)) {
+            return ContextOperationalMaterials.empty(false);
+        }
+        try {
+            return operationalMaterials.resolveForChat(sessionId, request.taskId(), degraded || hasExplicitTask);
+        } catch (RuntimeException exception) {
+            log.warn("操作事实读取失败，继续使用降级上下文：type={}", exception.getClass().getSimpleName());
+            return new ContextOperationalMaterials(List.of(), degraded || hasExplicitTask, true);
+        }
+    }
+
+    private static boolean isDegraded(ReadWindow read, FactRead facts) {
+        ContextWindow window = read.window();
+        return facts.failed() || !"LOADED".equals(read.status()) || window.hasFallbackHistory()
+                || window.summaryStatus() == com.example.vatica.controller.SessionSummaryStatus.FAILED;
     }
 
     private ReadWindow readWindow(String sessionId, int tokenBudget) {
@@ -116,9 +156,10 @@ public class ChatContextService {
     }
 
     private ContextDynamicDemand demandFor(ContextAllocationPlan base, ContextWindow window,
-            List<ContextFactService.ContextFactSnippet> facts) {
+            List<ContextFactService.ContextFactSnippet> facts, ContextOperationalMaterials operational) {
         ContextDynamicDemand target = base.requestedDynamic();
-        int factsTokens = ContextAssembler.estimateFactTokens(facts);
+        int factsTokens = saturatedAdd(ContextAssembler.estimateFactTokens(facts),
+                operational == null || !operational.shouldInject() ? 0 : operational.estimatedTokens());
         int summaryTokens = window.summary() == null ? 0
                 : TokenEstimator.estimate("【历史会话摘要】\n" + window.summary());
         int recentTokens = estimateMessages(window.uncoveredHead()) + estimateMessages(window.uncoveredTail())
@@ -153,15 +194,15 @@ public class ChatContextService {
     }
 
     private static List<ConversationMessage> assemble(ContextWindow window,
-            List<ContextFactService.ContextFactSnippet> facts, ConversationEvidenceResult evidence,
-            ContextAllocationPlan plan) {
+            List<ContextFactService.ContextFactSnippet> facts, ContextOperationalMaterials operational,
+            ConversationEvidenceResult evidence, ContextAllocationPlan plan) {
         ContextDynamicBudget budget = plan.dynamicBudget();
         int nonEvidenceBudget = Math.max(1, budget.verifiedFactsTokens() + budget.summaryTokens()
                 + budget.recentHistoryTokens());
         ContextBudget historyBudget = new ContextBudget(0, 0, 0, 0, 0)
                 .with(ContextBudget.CallSite.CHAT, nonEvidenceBudget);
         List<ConversationMessage> assembled = new ArrayList<>(
-                ContextAssembler.chatHistory(window, historyBudget, facts));
+                ContextAssembler.chatHistory(window, historyBudget, facts, operational));
         // 证据位于近期会话之前，且检索器已经在独立配额内加上不可信数据边界。
         evidence.contextMessage().ifPresent(message -> assembled.add(0, message));
         return List.copyOf(assembled);
@@ -188,6 +229,11 @@ public class ChatContextService {
         return messages == null ? 0 : ContextTrimmer.estimateTokens(messages);
     }
 
+    private static int saturatedAdd(int left, int right) {
+        long sum = (long) Math.max(0, left) + Math.max(0, right);
+        return sum >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) sum;
+    }
+
     private int longContextMaxMessages() {
         return chatProperties == null || chatProperties.memory() == null
                 ? ChatProperties.Memory.DEFAULT_LONG_CONTEXT_MAX_MESSAGES
@@ -204,18 +250,25 @@ public class ChatContextService {
     }
 
     public record PreparationRequest(String sessionId, ContextMode contextMode,
-            ModelCapabilityProfile modelCapability, String systemPrompt, String userPrompt, AgentTool[] tools) {
+            ModelCapabilityProfile modelCapability, String systemPrompt, String userPrompt, AgentTool[] tools,
+            String taskId) {
         public PreparationRequest {
             contextMode = ContextMode.normalize(contextMode);
             modelCapability = modelCapability == null ? ModelCapabilityProfile.unknown("") : modelCapability;
             systemPrompt = systemPrompt == null ? "" : systemPrompt;
             userPrompt = userPrompt == null ? "" : userPrompt;
             tools = tools == null ? new AgentTool[0] : tools.clone();
+            taskId = taskId == null || taskId.isBlank() ? null : taskId.trim();
+        }
+
+        public PreparationRequest(String sessionId, ContextMode contextMode,
+                ModelCapabilityProfile modelCapability, String systemPrompt, String userPrompt, AgentTool[] tools) {
+            this(sessionId, contextMode, modelCapability, systemPrompt, userPrompt, tools, null);
         }
 
         public static PreparationRequest empty() {
             return new PreparationRequest("default", ContextMode.NORMAL, ModelCapabilityProfile.unknown(""),
-                    "", "", new AgentTool[0]);
+                    "", "", new AgentTool[0], null);
         }
 
         @Override
@@ -241,6 +294,16 @@ public class ChatContextService {
         private ReadWindow {
             window = window == null ? emptyWindow() : window;
             status = status == null || status.isBlank() ? "UNAVAILABLE" : status;
+        }
+    }
+
+    private record FactRead(List<ContextFactService.ContextFactSnippet> snippets, boolean failed) {
+        private FactRead {
+            snippets = snippets == null ? List.of() : List.copyOf(snippets);
+        }
+
+        private static FactRead empty() {
+            return new FactRead(List.of(), false);
         }
     }
 }

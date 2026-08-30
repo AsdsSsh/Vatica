@@ -626,6 +626,7 @@ export async function* streamChat(
   credential?: EphemeralCredential,
   deepThinking = false,
   contextMode: ContextMode = "NORMAL",
+  taskId?: string,
 ): AsyncGenerator<ChatStreamEvent> {
   const body = {
     message,
@@ -634,6 +635,7 @@ export async function* streamChat(
     deepThinking,
     contextMode,
     mailCredential: getEphemeralMailCredential(),
+    ...(taskId && taskId.trim() ? { taskId: taskId.trim() } : {}),
     ...(credential ? { credential } : { model }),
   };
   for await (const event of fetchSse<unknown>("/api/chat/stream", {

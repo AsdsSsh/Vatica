@@ -15,33 +15,42 @@ import com.example.vatica.mail.MailConnectionSettings;
  * @param credential 迭代 13：请求级自配模型凭据；与 model 同时出现视为冲突（400）
  * @param deepThinking 迭代 15：true=本轮开启深思（HIGH），false=默认快通道
  * @param contextMode 迭代 31D：NORMAL / LONG_TASK / DEEP_REVIEW，请求会按模型窗口保守降级
+ * @param taskId      迭代 33：可选关联任务 ID；服务端据此读取受控的工具、审批和交付物事实
  */
 public record ChatRequest(String message, String sessionId, String model,
         FilePermissionPolicy permission, EphemeralCredential credential,
-        MailConnectionSettings mailCredential, Boolean deepThinking, ContextMode contextMode) {
+        MailConnectionSettings mailCredential, Boolean deepThinking, ContextMode contextMode, String taskId) {
 
     public ChatRequest {
         contextMode = ContextMode.normalize(contextMode);
+        taskId = taskId == null || taskId.isBlank() ? null : taskId.trim();
+    }
+
+    /** 兼容迭代 31D 之前的完整请求构造器。 */
+    public ChatRequest(String message, String sessionId, String model,
+            FilePermissionPolicy permission, EphemeralCredential credential,
+            MailConnectionSettings mailCredential, Boolean deepThinking, ContextMode contextMode) {
+        this(message, sessionId, model, permission, credential, mailCredential, deepThinking, contextMode, null);
     }
 
     /** 兼容迭代 15～31C 的完整请求构造器。 */
     public ChatRequest(String message, String sessionId, String model,
             FilePermissionPolicy permission, EphemeralCredential credential,
             MailConnectionSettings mailCredential, Boolean deepThinking) {
-        this(message, sessionId, model, permission, credential, mailCredential, deepThinking, ContextMode.NORMAL);
+        this(message, sessionId, model, permission, credential, mailCredential, deepThinking, ContextMode.NORMAL, null);
     }
 
     public ChatRequest(String message, String sessionId, String model, FilePermissionPolicy permission) {
-        this(message, sessionId, model, permission, null, null, false, ContextMode.NORMAL);
+        this(message, sessionId, model, permission, null, null, false, ContextMode.NORMAL, null);
     }
 
     public ChatRequest(String message, String sessionId, String model, FilePermissionPolicy permission,
             EphemeralCredential credential) {
-        this(message, sessionId, model, permission, credential, null, false, ContextMode.NORMAL);
+        this(message, sessionId, model, permission, credential, null, false, ContextMode.NORMAL, null);
     }
 
     public ChatRequest(String message, String sessionId, String model, FilePermissionPolicy permission,
             EphemeralCredential credential, MailConnectionSettings mailCredential) {
-        this(message, sessionId, model, permission, credential, mailCredential, false, ContextMode.NORMAL);
+        this(message, sessionId, model, permission, credential, mailCredential, false, ContextMode.NORMAL, null);
     }
 }

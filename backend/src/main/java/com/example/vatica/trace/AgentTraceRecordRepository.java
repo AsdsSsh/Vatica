@@ -2,6 +2,7 @@ package com.example.vatica.trace;
 
 import java.util.List;
 
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -10,6 +11,10 @@ import org.springframework.data.repository.query.Param;
 public interface AgentTraceRecordRepository extends JpaRepository<AgentTraceRecord, String> {
 
     List<AgentTraceRecord> findByTaskIdOrderByCreatedAtAscIdAsc(String taskId);
+
+    /** 迭代 33：降级上下文只读取当前用户/组织、指定任务的最新脱敏工具轨迹。 */
+    List<AgentTraceRecord> findByUserIdAndOrgIdAndTaskIdOrderByCreatedAtDesc(Long userId, Long orgId, String taskId,
+            Pageable pageable);
 
     /** 迭代 18B：按租户读取任务工具 trace，供固定任务集的工具调用基线使用。 */
     @Query("select r from AgentTraceRecord r where r.userId = :userId and r.taskId is not null")

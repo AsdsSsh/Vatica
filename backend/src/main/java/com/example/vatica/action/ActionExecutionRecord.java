@@ -168,7 +168,9 @@ public class ActionExecutionRecord {
     public String getSubjectType() { return subjectType; }
     public String getSubjectId() { return subjectId; }
     public String getActionId() { return actionId; }
+    public String getActionType() { return actionType; }
     public String getIdempotencyKey() { return idempotencyKey; }
+    public String getRequiredPermission() { return requiredPermission; }
     public ActionExecutionStatus getStatus() { return status; }
     public int getAttemptCount() { return attemptCount; }
     public String getResult() { return result; }
