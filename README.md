@@ -284,7 +284,6 @@ npm run tauri build       # Windows 安装包 -> src-tauri/target/release/bundle
 backend/          Spring Boot API、AgentScope 运行时、业务状态机与测试
 frontend/         Tauri 2 + React 桌面客户端
 docker-compose.postgres.yml   本地 PostgreSQL 开发环境
-任务进度.md        迭代历史、验收记录与深坑归档
 任务总清单.md      任务范围与完成项
 ```
 
@@ -292,7 +291,6 @@ docker-compose.postgres.yml   本地 PostgreSQL 开发环境
 
 | 文档 | 内容 |
 | --- | --- |
-| [任务进度](./任务进度.md) | 当前进度、迭代记录、验收与风险 |
 | [任务总清单](./任务总清单.md) | 全部工作项 |
 
 ## 许可证
