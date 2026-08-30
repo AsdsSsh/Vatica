@@ -51,3 +51,6 @@ backend/data-迁移*/
 backend/*.docx
 backend/*.xlsx
 backend/本周工作记录.md
+
+# 迭代报告目录仅保留在本地，不入库
+docs/
