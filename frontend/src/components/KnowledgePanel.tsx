@@ -16,6 +16,7 @@ import {
   type KnowledgeSearchResult,
   type KnowledgeVisibility,
 } from "../api";
+import { isTauriEnv } from "../directoryPicker";
 
 interface Props { open: boolean; onClose: () => void }
 
@@ -55,11 +56,41 @@ export default function KnowledgePanel({ open, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  async function importDocument() {
-    if (!path.trim()) return;
+  // 迭代 35：拖放导入——Tauri 拖放事件给出本机绝对路径，填入并走现有导入链路；
+  // 后端 FileSandboxPolicy 仍是唯一裁决者，工作区外的路径会得到明确错误指引。
+  useEffect(() => {
+    if (!open || !isTauriEnv()) return;
+    let unsubscribe: (() => void) | undefined;
+    let disposed = false;
+    void import("@tauri-apps/api/event").then(({ listen }) =>
+      listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
+        const dropped = event.payload?.paths?.find((p) => typeof p === "string" && p.trim());
+        if (!dropped) return;
+        setPath(dropped.trim());
+        void importDocument(dropped.trim());
+      }),
+    ).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        unsubscribe = unlisten;
+      }
+    }).catch(() => {
+      // 非 Tauri 环境或事件不可用时保持手动输入路径
+    });
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  async function importDocument(targetPath?: string) {
+    const effective = (targetPath ?? path).trim();
+    if (!effective) return;
     setBusy(true);
     try {
-      const document = await importKnowledgeDocument(path.trim(), visibility);
+      const document = await importKnowledgeDocument(effective, visibility);
       if (document.status === "FAILED") {
         message.error(document.errorMessage ?? "索引失败");
       } else {

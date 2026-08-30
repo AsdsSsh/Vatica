@@ -9,6 +9,7 @@ import TitleBar from "./components/TitleBar";
 import { createSession, type ChatMessage, type ChatSession } from "./types";
 import { loadSessions, saveSessions } from "./sessions";
 import { readUiPref, useTheme, writeUiPref } from "./theme";
+import { setupDeepLinkFocus, startTodoReminders } from "./desktopShell";
 import ObservabilityPage from "./ObservabilityPage";
 import {
   deleteRemoteSession,
@@ -42,6 +43,12 @@ function WorkspaceApp() {
     sessionsRef.current = sessions;
     saveSessions(sessions);
   }, [sessions]);
+
+  // 迭代 35：桌面系统集成——待办到期通知轮询与深链接唤起（浏览器环境自动降级）
+  useEffect(() => {
+    startTodoReminders();
+    void setupDeepLinkFocus();
+  }, []);
 
   useEffect(() => {
     let disposed = false;
