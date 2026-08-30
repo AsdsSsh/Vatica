@@ -30,14 +30,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
         com.example.vatica.usage.UsageProperties.class })
 public class ChatConfig {
 
-    /** 会话短期记忆：内存滑窗热缓存 + PostgreSQL 落库（迭代 5 I5-4；迭代 15 增加中期摘要）。 */
+    /** 会话短期记忆：内存滑窗热缓存 + PostgreSQL 落库（迭代 5 I5-4；迭代 15 增加中期摘要；34 增加推断事实抽取触发）。 */
     @Bean
     SessionMemory sessionMemory(ChatMessageRecordRepository repository, ChatSessionRecordRepository sessions,
-            SessionSummaryService summaryService, ChatProperties props) {
+            SessionSummaryService summaryService,
+            com.example.vatica.context.ContextFactExtractionService factExtraction, ChatProperties props) {
         InMemorySessionMemory cache = new InMemorySessionMemory(
                 props.memory().maxMessages(), props.memory().maxSessions(), props.memory().maxChars());
         return new JpaSessionMemory(cache, repository, props.memory().maxMessages(), sessions, summaryService,
-                props.memory().longContextMaxMessages());
+                factExtraction, props.memory().longContextMaxMessages());
     }
 
     /** 迭代 15 I15-8：各调用点 token 预算（先使用已定稿默认值，后续可迁配置中心）。 */

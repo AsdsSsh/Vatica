@@ -38,6 +38,7 @@ import {
 } from "@ant-design/icons";
 import type { TextAreaRef } from "antd/es/input/TextArea";
 import type { ChatMessage, ChatSession } from "../types";
+import DerivedFactPanel from "./DerivedFactPanel";
 import {
   approvePermissionRequest,
   denyPermissionRequest,
@@ -993,6 +994,9 @@ export default function ChatPanel({
           </Button>
         )}
       </div>
+
+      {/* 迭代 34：待确认推断面板——异步抽取的 AGENT_DERIVED 结论，用户确认前不进上下文 */}
+      <DerivedFactPanel sessionId={session.id} refreshKey={session.messages.length} />
 
       {/* 输入区 */}
       <div style={{ padding: 12, borderTop: "1px solid var(--vatica-border)" }}>

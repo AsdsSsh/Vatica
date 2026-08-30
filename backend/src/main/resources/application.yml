@@ -109,6 +109,12 @@ vatica:
       max-batch-messages: 20
       max-auto-retries: 2
       retry-initial-backoff: 5s
+    # 迭代 34：Agent 推断事实的异步后置抽取；只产 AGENT_DERIVED 待确认记录，用户确认后才进上下文。
+    fact:
+      enabled: ${VATICA_FACT_EXTRACTION_ENABLED:true}
+      max-facts-per-turn: 3
+      min-assistant-chars: 120
+      min-interval: 30s
   # 迭代 31C：长任务/深度审阅按需找回近期窗口之前的当前会话原文；31D 接入模式路由。
   context:
     conversation-evidence:

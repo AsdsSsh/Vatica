@@ -10,6 +10,7 @@ import org.springframework.data.domain.PageRequest;
 
 import com.example.vatica.auth.RequestIdentity;
 import com.example.vatica.auth.RequestIdentityContext;
+import com.example.vatica.context.ContextFactExtractionService;
 import com.example.vatica.context.TokenEstimator;
 import com.example.vatica.model.ConversationMessage;
 
@@ -36,23 +37,31 @@ public final class JpaSessionMemory implements SessionMemory {
     private final ChatSessionRecordRepository sessions;
     private final SessionSummaryService summaryService;
     private final int longContextMaxMessages;
+    private final ContextFactExtractionService factExtraction;
 
     public JpaSessionMemory(InMemorySessionMemory cache, ChatMessageRecordRepository repository, int windowSize) {
-        this(cache, repository, windowSize, null, null, DEFAULT_LONG_CONTEXT_MAX_MESSAGES);
+        this(cache, repository, windowSize, null, null, null, DEFAULT_LONG_CONTEXT_MAX_MESSAGES);
     }
 
     public JpaSessionMemory(InMemorySessionMemory cache, ChatMessageRecordRepository repository, int windowSize,
             ChatSessionRecordRepository sessions, SessionSummaryService summaryService) {
-        this(cache, repository, windowSize, sessions, summaryService, DEFAULT_LONG_CONTEXT_MAX_MESSAGES);
+        this(cache, repository, windowSize, sessions, summaryService, null, DEFAULT_LONG_CONTEXT_MAX_MESSAGES);
     }
 
     public JpaSessionMemory(InMemorySessionMemory cache, ChatMessageRecordRepository repository, int windowSize,
             ChatSessionRecordRepository sessions, SessionSummaryService summaryService, int longContextMaxMessages) {
+        this(cache, repository, windowSize, sessions, summaryService, null, longContextMaxMessages);
+    }
+
+    public JpaSessionMemory(InMemorySessionMemory cache, ChatMessageRecordRepository repository, int windowSize,
+            ChatSessionRecordRepository sessions, SessionSummaryService summaryService,
+            ContextFactExtractionService factExtraction, int longContextMaxMessages) {
         this.cache = cache;
         this.repository = repository;
         this.windowSize = Math.max(1, windowSize);
         this.sessions = sessions;
         this.summaryService = summaryService;
+        this.factExtraction = factExtraction;
         this.longContextMaxMessages = Math.max(this.windowSize, longContextMaxMessages);
     }
 
@@ -96,6 +105,11 @@ public final class JpaSessionMemory implements SessionMemory {
             long targetSeq = Math.max(0, lastWrittenSeq - windowSize);
             summaryService.schedule(identity.userId(), identity.orgId(), session, targetSeq);
         }
+        // 迭代 34：轮次收尾后异步抽取 Agent 推断事实（AGENT_DERIVED，用户确认前不进上下文）
+        if (factExtraction != null && !rows.isEmpty()) {
+            factExtraction.scheduleTurn(identity.userId(), identity.orgId(), session,
+                    rows.getFirst().getSeq(), rows.getLast().getSeq());
+        }
     }
 
     @Override
@@ -122,6 +136,9 @@ public final class JpaSessionMemory implements SessionMemory {
         cache.evict(cacheKey(identity.orgId(), identity.userId(), session));
         if (summaryService != null) {
             summaryService.cancel(identity.userId(), identity.orgId(), session);
+        }
+        if (factExtraction != null) {
+            factExtraction.cancel(identity.userId(), identity.orgId(), session);
         }
     }
 

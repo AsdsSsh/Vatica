@@ -12,10 +12,13 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param sse    SSE 流式配置
  * @param memory  会话短期记忆（内存版）配置
  * @param summary 中期滚动摘要的有界补偿配置
+ * @param fact    迭代 34：Agent 推断事实的异步后置抽取配置
  */
 @ConfigurationProperties(prefix = "vatica.chat")
-public record ChatProperties(Sse sse, Memory memory, Summary summary) {
+public record ChatProperties(Sse sse, Memory memory, Summary summary, Fact fact) {
 
+    /** 存在兼容构造器时，绑定必须显式指向规范构造器。 */
+    @org.springframework.boot.context.properties.bind.ConstructorBinding
     public ChatProperties {
         if (sse == null) {
             sse = new Sse(null);
@@ -26,6 +29,14 @@ public record ChatProperties(Sse sse, Memory memory, Summary summary) {
         if (summary == null) {
             summary = new Summary(0, -1, null);
         }
+        if (fact == null) {
+            fact = new Fact(true, 0, 0, null);
+        }
+    }
+
+    /** 兼容迭代 33 及更早的程序化构造器（无事实抽取配置）。 */
+    public ChatProperties(Sse sse, Memory memory, Summary summary) {
+        this(sse, memory, summary, null);
     }
 
     /** SSE 流式：超时保护（0/负数回退默认值；"不自动超时"已废弃——挂起连接就是泄漏）。 */
@@ -68,6 +79,29 @@ public record ChatProperties(Sse sse, Memory memory, Summary summary) {
                 longContextMaxMessages = DEFAULT_LONG_CONTEXT_MAX_MESSAGES;
             }
             longContextMaxMessages = Math.max(maxMessages, longContextMaxMessages);
+        }
+    }
+
+    /**
+     * 迭代 34：Agent 推断事实的异步后置抽取。抽取尽力而为——失败不重试、不阻塞聊天，
+     * 且入库一律被强制压成 NEEDS_REFRESH，只有用户确认才进入模型上下文。
+     */
+    public record Fact(boolean enabled, int maxFactsPerTurn, int minAssistantChars, Duration minInterval) {
+
+        public static final int DEFAULT_MAX_FACTS_PER_TURN = 3;
+        public static final int DEFAULT_MIN_ASSISTANT_CHARS = 120;
+        public static final Duration DEFAULT_MIN_INTERVAL = Duration.ofSeconds(30);
+
+        public Fact {
+            if (maxFactsPerTurn <= 0) {
+                maxFactsPerTurn = DEFAULT_MAX_FACTS_PER_TURN;
+            }
+            if (minAssistantChars <= 0) {
+                minAssistantChars = DEFAULT_MIN_ASSISTANT_CHARS;
+            }
+            if (minInterval == null || minInterval.isNegative()) {
+                minInterval = DEFAULT_MIN_INTERVAL;
+            }
         }
     }
 

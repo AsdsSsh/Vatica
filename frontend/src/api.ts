@@ -782,6 +782,19 @@ export async function revokeContextFact(id: string, reason?: string): Promise<Co
   return (await post(`/api/context/facts/${encodeURIComponent(id)}/revoke`, { reason })).json();
 }
 
+/** 迭代 34：用户确认事实（Agent 推断的待确认记录）——以 USER_CONFIRMED 重新捕获，确认后才进上下文。 */
+export interface ContextFactConfirmRequest {
+  valueJson?: string;
+  displaySummary?: string;
+}
+
+export async function confirmContextFact(
+  id: string,
+  request?: ContextFactConfirmRequest,
+): Promise<ContextFactView> {
+  return (await post(`/api/context/facts/${encodeURIComponent(id)}/confirm`, request ?? {})).json();
+}
+
 export async function refreshContextFactsBySource(sourceType: ContextFactSourceType, sourceId: string,
   reason?: string): Promise<{ affected: number }> {
   return (await post("/api/context/facts/source/refresh", { sourceType, sourceId, reason })).json();

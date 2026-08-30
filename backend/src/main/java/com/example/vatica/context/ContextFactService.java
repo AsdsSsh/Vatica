@@ -184,6 +184,38 @@ public class ContextFactService {
         return record;
     }
 
+    /**
+     * 迭代 34：用户确认事实——以 {@code USER_CONFIRMED + CURRENT} 重新捕获同一 (scope, factKey)，
+     * 复用 capture 的 supersede/revision 链完成替代与审计；确认时可修正 valueJson/displaySummary。
+     */
+    @Transactional
+    public ContextFactRecord confirm(String id, ConfirmRequest request) {
+        return confirm(RequestIdentityContext.require(), id, request);
+    }
+
+    /** 异步/测试持有身份快照时的确认入口；租户校验与 capture 一致。 */
+    @Transactional
+    public ContextFactRecord confirm(RequestIdentity identity, String id, ConfirmRequest request) {
+        Tenant tenant = tenant(identity);
+        validateShortId(id, "事实 ID", 36);
+        ContextFactRecord record = repository.findByIdAndOrgIdAndUserId(id.trim(), tenant.orgId(), tenant.userId())
+                .orElseThrow(() -> new IllegalArgumentException("操作失败：事实不存在或无权访问。"));
+        String valueJson = request == null ? null : optionalJson(request.valueJson());
+        String displaySummary = request == null || request.displaySummary() == null
+                || request.displaySummary().isBlank() ? record.getDisplaySummary() : request.displaySummary();
+        return capture(identity, new CaptureRequest(record.getScopeType(), record.getScopeId(),
+                record.getSubjectType(), record.getSubjectId(), record.getFactKey(), record.getFactType(),
+                valueJson == null ? record.getValueJson() : valueJson, displaySummary,
+                ContextFactTrustLevel.USER_CONFIRMED, ContextFactVerificationState.CURRENT,
+                record.getSourceType(), record.getSourceId(), record.getSourceVersion(),
+                record.getSourceFingerprint(), record.getEvidenceRefsJson(),
+                record.getObservedAt(), Instant.now(), record.getValidUntil()));
+    }
+
+    private static String optionalJson(String raw) {
+        return raw == null || raw.isBlank() ? null : raw;
+    }
+
     /** 删除会话/任务时清理该范围事实；调用方已通过租户身份校验。 */
     @Transactional
     public long deleteScope(ContextFactScopeType scopeType, String scopeId) {
@@ -422,6 +454,10 @@ public class ContextFactService {
             ContextFactTrustLevel trustLevel, ContextFactVerificationState verificationState,
             ContextFactSourceType sourceType, String sourceId, String sourceVersion, String sourceFingerprint,
             String evidenceRefsJson, Instant observedAt, Instant verifiedAt, Instant validUntil) {
+    }
+
+    /** 迭代 34：确认时可修正事实值与摘要；其余字段继承原记录，不允许伪造来源与观测时间。 */
+    public record ConfirmRequest(String valueJson, String displaySummary) {
     }
 
     /** 只供 prompt 组装的短事实，不是对外 API 视图。 */

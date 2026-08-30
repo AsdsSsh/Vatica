@@ -47,6 +47,16 @@ public class ContextFactController {
         return ContextFactView.from(service.revoke(id, request == null ? null : request.reason()));
     }
 
+    /**
+     * 迭代 34：用户确认事实（典型为 Agent 推断的待确认记录）——以 USER_CONFIRMED 重新捕获，
+     * revision 链自动完成替代留档；确认后的记录才会进入模型上下文。
+     */
+    @PostMapping("/{id}/confirm")
+    public ContextFactView confirm(@PathVariable String id,
+            @RequestBody(required = false) ContextFactService.ConfirmRequest request) {
+        return ContextFactView.from(service.confirm(id, request));
+    }
+
     /** 来源记录变化后，批量阻止旧事实进入上下文；历史版本仍可审计。 */
     @PostMapping("/source/refresh")
     public RefreshResult markNeedsRefresh(@RequestBody SourceRefreshRequest request) {
