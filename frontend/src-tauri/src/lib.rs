@@ -37,10 +37,17 @@ fn toggle_main_window(app: &AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 必须最先注册：重复启动（含 vatica:// 深链接触发的二次启动）唤起现有实例，
+        // 不产生第二个窗口/进程。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_deep_link::init())
+        // 该插件无 init()，必须以 Builder 形式注册；快捷键与处理函数在 setup 中登记
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             // ── 系统托盘：左键唤起，菜单提供显示/退出 ──────────────────────
             let show = MenuItem::with_id(app, "tray-show", "显示主窗口", true, None::<&str>)?;
