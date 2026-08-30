@@ -294,7 +294,6 @@ docker-compose.postgres.yml   本地 PostgreSQL 开发环境
 | --- | --- |
 | [任务进度](./任务进度.md) | 当前进度、迭代记录、验收与风险 |
 | [任务总清单](./任务总清单.md) | 全部工作项 |
-| [项目规划](./AI办公Agent平台-项目规划.md) | 产品定位与总体规划 |
 | [产品化路线](./docs/20260820_iteration23_28_productization/plan.md) | 迭代 23–28 范围与边界 |
 | [迭代报告目录](./docs/) | 各迭代 plan / report 归档 |
 
